@@ -69,6 +69,9 @@ importers:
 
   packages/editor:
     dependencies:
+      '@paperhelp/figure':
+        specifier: workspace:*
+        version: link:../figure
       '@paperhelp/shared':
         specifier: workspace:*
         version: link:../shared

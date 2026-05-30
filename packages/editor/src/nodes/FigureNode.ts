@@ -2,6 +2,14 @@ import { Node, mergeAttributes } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { FigureBlockView } from "../components/FigureBlockView";
 
+declare module "@tiptap/core" {
+  interface Commands<ReturnType> {
+    figure: {
+      insertFigure: (figureId: string) => ReturnType;
+    };
+  }
+}
+
 export const FigureNode = Node.create({
   name: "figure",
   group: "block",
@@ -10,8 +18,15 @@ export const FigureNode = Node.create({
 
   addAttributes() {
     return {
-      id: {
+      figureId: {
         default: null,
+        parseHTML: (element) => element.getAttribute("data-figure-id"),
+        renderHTML: (attributes) => {
+          if (!attributes.figureId) {
+            return {};
+          }
+          return { "data-figure-id": attributes.figureId };
+        },
       },
     };
   },
@@ -29,5 +44,17 @@ export const FigureNode = Node.create({
 
   addNodeView() {
     return ReactNodeViewRenderer(FigureBlockView);
+  },
+
+  addCommands() {
+    return {
+      insertFigure:
+        (figureId: string) =>
+        ({ commands }) =>
+          commands.insertContent({
+            type: this.name,
+            attrs: { figureId },
+          }),
+    };
   },
 });

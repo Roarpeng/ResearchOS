@@ -141,6 +141,13 @@
   min-width: 0;
 }
 
+.editor-page__toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
 .doc-title-input {
   flex: 1;
   min-width: 0;

@@ -11,6 +11,7 @@ export interface OutlineItem {
 export interface EditorCommands {
   focus: () => void;
   toggleHeading: (level: 1 | 2 | 3) => void;
+  insertFigure: (figureId: string) => void;
 }
 
 export interface EditorState {
@@ -21,6 +22,7 @@ export interface EditorState {
   outline: OutlineItem[];
   sessionKey: number;
   editorCommands: EditorCommands | null;
+  selectedFigureId: string | null;
 }
 
 export interface EditorActions {
@@ -30,6 +32,7 @@ export interface EditorActions {
   setDirty: (isDirty: boolean) => void;
   setOutline: (outline: OutlineItem[]) => void;
   setEditorCommands: (commands: EditorCommands | null) => void;
+  setSelectedFigureId: (figureId: string | null) => void;
   reset: () => void;
 }
 
@@ -43,6 +46,7 @@ const initialEditorState: EditorState = {
   outline: [],
   sessionKey: 0,
   editorCommands: null,
+  selectedFigureId: null,
 };
 
 export const useEditorStore = create<EditorStore>((set) => ({
@@ -53,6 +57,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   setDirty: (isDirty) => set({ isDirty }),
   setOutline: (outline) => set({ outline }),
   setEditorCommands: (editorCommands) => set({ editorCommands }),
+  setSelectedFigureId: (selectedFigureId) => set({ selectedFigureId }),
   reset: () =>
     set((state) => ({
       ...initialEditorState,

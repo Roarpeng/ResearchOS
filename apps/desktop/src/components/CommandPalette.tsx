@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useEditorStore, useUiStore } from "@paperhelp/shared";
 import { cn } from "@paperhelp/ui";
+import { insertFigureIntoEditor } from "../utils/insertFigureIntoEditor";
 
 const COMMAND_PALETTE_ID = "command-palette";
 
@@ -76,6 +77,14 @@ export function CommandPalette() {
             editorCommands.focus();
             editorCommands.toggleHeading(3);
           }
+        },
+      },
+      {
+        id: "insert-figure",
+        label: "插入 Figure",
+        keywords: "figure insert image panel",
+        run: () => {
+          insertFigureIntoEditor(editorCommands);
         },
       },
       {
@@ -212,6 +221,9 @@ export function CommandPalette() {
                 >
                   <span>{command.label}</span>
                   {command.id.startsWith("heading-") && editorUnavailable ? (
+                    <span className="command-palette__hint">需打开编辑器</span>
+                  ) : null}
+                  {command.id === "insert-figure" && editorUnavailable ? (
                     <span className="command-palette__hint">需打开编辑器</span>
                   ) : null}
                   {command.id.startsWith("view-") ? (

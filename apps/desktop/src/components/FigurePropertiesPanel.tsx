@@ -11,9 +11,14 @@ import { Button, cn } from "@paperhelp/ui";
 interface FigurePropertiesPanelProps {
   figureId: string;
   className?: string;
+  onFigureChange?: () => void;
 }
 
-export function FigurePropertiesPanel({ figureId, className }: FigurePropertiesPanelProps) {
+export function FigurePropertiesPanel({
+  figureId,
+  className,
+  onFigureChange,
+}: FigurePropertiesPanelProps) {
   const figure = useFigureStore((s) => s.figures[figureId]);
   const selectedElementId = useFigureStore((s) => s.selectedElementId);
   const updateFigure = useFigureStore((s) => s.updateFigure);
@@ -29,8 +34,10 @@ export function FigurePropertiesPanel({ figureId, className }: FigurePropertiesP
     );
   }
 
-  const patch = (partial: Parameters<typeof updateFigure>[1]) =>
+  const patch = (partial: Parameters<typeof updateFigure>[1]) => {
     updateFigure(figureId, partial);
+    onFigureChange?.();
+  };
 
   const resolveAssets = () =>
     resolveFigureAssets(figure, (assetId) => useAssetStore.getState().assets[assetId]);
@@ -48,6 +55,7 @@ export function FigurePropertiesPanel({ figureId, className }: FigurePropertiesP
       : applyAutoLayout(figure, assets);
     updateFigure(figureId, nextPatch);
     clearLayoutPreview(figureId);
+    onFigureChange?.();
   };
 
   const handleClearPreview = () => {

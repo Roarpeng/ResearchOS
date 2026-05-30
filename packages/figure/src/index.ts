@@ -13,3 +13,8 @@ export {
   MAX_CELL_SIZE,
 } from "./layout/suggestLayout";
 export { buildFigureFromAssets } from "./utils/buildFigure";
+export { FigureThumbnailPreview, type FigureThumbnailPreviewProps } from "./components/FigureThumbnailPreview";
+export {
+  renderFigureThumbnailToDataUrl,
+  type RenderFigureThumbnailOptions,
+} from "./utils/renderFigureThumbnail";
