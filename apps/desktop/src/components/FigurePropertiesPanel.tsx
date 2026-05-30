@@ -1,5 +1,12 @@
-import { useFigureStore } from "@paperhelp/shared";
-import { cn } from "@paperhelp/ui";
+import {
+  applyAutoLayout,
+  applyLayout,
+  detectCount,
+  resolveFigureAssets,
+  suggestAutoLayout,
+} from "@paperhelp/figure";
+import { useAssetStore, useFigureStore } from "@paperhelp/shared";
+import { Button, cn } from "@paperhelp/ui";
 
 interface FigurePropertiesPanelProps {
   figureId: string;
@@ -10,6 +17,9 @@ export function FigurePropertiesPanel({ figureId, className }: FigurePropertiesP
   const figure = useFigureStore((s) => s.figures[figureId]);
   const selectedElementId = useFigureStore((s) => s.selectedElementId);
   const updateFigure = useFigureStore((s) => s.updateFigure);
+  const layoutPreview = useFigureStore((s) => s.layoutPreviews[figureId] ?? null);
+  const setLayoutPreview = useFigureStore((s) => s.setLayoutPreview);
+  const clearLayoutPreview = useFigureStore((s) => s.clearLayoutPreview);
 
   if (!figure) {
     return (
@@ -21,6 +31,30 @@ export function FigurePropertiesPanel({ figureId, className }: FigurePropertiesP
 
   const patch = (partial: Parameters<typeof updateFigure>[1]) =>
     updateFigure(figureId, partial);
+
+  const resolveAssets = () =>
+    resolveFigureAssets(figure, (assetId) => useAssetStore.getState().assets[assetId]);
+
+  const handleAutoLayout = () => {
+    const assets = resolveAssets();
+    const preview = suggestAutoLayout(figure, assets);
+    setLayoutPreview(figureId, preview);
+  };
+
+  const handleApplyLayout = () => {
+    const assets = resolveAssets();
+    const nextPatch = layoutPreview
+      ? applyLayout(figure, layoutPreview)
+      : applyAutoLayout(figure, assets);
+    updateFigure(figureId, nextPatch);
+    clearLayoutPreview(figureId);
+  };
+
+  const handleClearPreview = () => {
+    clearLayoutPreview(figureId);
+  };
+
+  const preset = detectCount(figure.assetIds.length);
 
   const renderSelectionFields = () => {
     if (!selectedElementId) {
@@ -185,6 +219,27 @@ export function FigurePropertiesPanel({ figureId, className }: FigurePropertiesP
               }
             />
           </label>
+        </div>
+
+        <div className="figure-properties__section">
+          <h3 className="figure-properties__section-title">自动排版</h3>
+          <p className="figure-properties__hint">
+            建议布局：{preset.label}
+            {layoutPreview ? "（预览中）" : ""}
+          </p>
+          <div className="figure-properties__actions">
+            <Button type="button" variant="outline" size="sm" onClick={handleAutoLayout}>
+              自动排版
+            </Button>
+            <Button type="button" size="sm" onClick={handleApplyLayout}>
+              应用{layoutPreview ? "预览" : ""}
+            </Button>
+            {layoutPreview ? (
+              <Button type="button" variant="ghost" size="sm" onClick={handleClearPreview}>
+                取消预览
+              </Button>
+            ) : null}
+          </div>
         </div>
 
         {renderSelectionFields()}

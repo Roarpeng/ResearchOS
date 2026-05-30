@@ -1,9 +1,8 @@
 import { nanoid } from "nanoid";
-import type { Asset, Figure, FigureLabel, Layout, LayoutItem, ScaleBar } from "@paperhelp/shared";
+import type { Asset, Figure, FigureLabel, Layout, ScaleBar } from "@paperhelp/shared";
+import { applyAutoLayout } from "../layout/applyLayout";
+import { detectCount } from "../layout/detectCount";
 import { snapToGrid } from "./grid";
-
-const PADDING = 40;
-const MAX_DISPLAY = 280;
 
 const defaultStyle: Figure["style"] = {
   labelFontSize: 16,
@@ -19,28 +18,6 @@ function labelTextForIndex(index: number): string {
   return `a${index - 25}`;
 }
 
-function buildLayoutItems(assets: Asset[]): LayoutItem[] {
-  let cursorX = PADDING;
-  const y = PADDING;
-  const items: LayoutItem[] = [];
-
-  for (const asset of assets) {
-    const scale = Math.min(MAX_DISPLAY / asset.width, MAX_DISPLAY / asset.height, 1);
-    const width = Math.round(asset.width * scale);
-    const height = Math.round(asset.height * scale);
-    items.push({
-      assetId: asset.id,
-      x: snapToGrid(cursorX),
-      y: snapToGrid(y),
-      width,
-      height,
-    });
-    cursorX += width + PADDING;
-  }
-
-  return items;
-}
-
 function buildLabels(assets: Asset[]): FigureLabel[] {
   return assets.map((asset, index) => ({
     id: nanoid(),
@@ -49,18 +26,6 @@ function buildLabels(assets: Asset[]): FigureLabel[] {
     x: 8,
     y: 8,
   }));
-}
-
-function buildLayout(items: LayoutItem[]): Layout {
-  const maxRight = Math.max(...items.map((item) => item.x + item.width), 0);
-  const maxBottom = Math.max(...items.map((item) => item.y + item.height), 0);
-
-  return {
-    stageWidth: Math.max(800, maxRight + PADDING),
-    stageHeight: Math.max(600, maxBottom + PADDING),
-    gridSize: 20,
-    items,
-  };
 }
 
 function defaultScaleBar(layout: Layout): ScaleBar {
@@ -76,17 +41,32 @@ function defaultScaleBar(layout: Layout): ScaleBar {
 
 export function buildFigureFromAssets(assets: Asset[], title = "Untitled Figure"): Figure {
   const assetIds = assets.map((a) => a.id);
-  const items = buildLayoutItems(assets);
-  const layout = buildLayout(items);
+  const figureId = nanoid();
 
-  return {
-    id: nanoid(),
+  const base: Figure = {
+    id: figureId,
     title,
     assetIds,
-    layout,
+    layout: {
+      stageWidth: 800,
+      stageHeight: 600,
+      gridSize: 20,
+      items: [],
+    },
     labels: buildLabels(assets),
     annotations: [],
-    scaleBar: defaultScaleBar(layout),
+    scaleBar: undefined,
     style: { ...defaultStyle },
+  };
+
+  const layoutPatch = applyAutoLayout(base, assets, {
+    preset: detectCount(assets.length),
+  });
+  const layout = layoutPatch.layout ?? base.layout;
+
+  return {
+    ...base,
+    ...layoutPatch,
+    scaleBar: defaultScaleBar(layout),
   };
 }

@@ -5,6 +5,7 @@ import { useFigureStore } from "@paperhelp/shared";
 import { AnnotationLayer } from "./layers/AnnotationLayer";
 import { ImageLayer } from "./layers/ImageLayer";
 import { LabelLayer } from "./layers/LabelLayer";
+import { PreviewLayer } from "./layers/PreviewLayer";
 import { ScaleBarLayer } from "./layers/ScaleBarLayer";
 
 export interface FigureStudioProps {
@@ -14,6 +15,7 @@ export interface FigureStudioProps {
 
 export function FigureStudio({ figureId, className }: FigureStudioProps) {
   const figure = useFigureStore((s) => s.figures[figureId]);
+  const previewLayout = useFigureStore((s) => s.layoutPreviews[figureId] ?? null);
   const selectElement = useFigureStore((s) => s.selectElement);
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
@@ -31,6 +33,7 @@ export function FigureStudio({ figureId, className }: FigureStudioProps) {
   }
 
   const { layout, style } = figure;
+  const stageLayout = previewLayout ?? layout;
 
   return (
     <div
@@ -50,8 +53,8 @@ export function FigureStudio({ figureId, className }: FigureStudioProps) {
     >
       <Stage
         ref={stageRef}
-        width={layout.stageWidth}
-        height={layout.stageHeight}
+        width={stageLayout.stageWidth}
+        height={stageLayout.stageHeight}
         onMouseDown={(e) => {
           if (e.target === e.target.getStage()) {
             clearSelection();
@@ -62,11 +65,12 @@ export function FigureStudio({ figureId, className }: FigureStudioProps) {
           <Rect
             x={0}
             y={0}
-            width={layout.stageWidth}
-            height={layout.stageHeight}
+            width={stageLayout.stageWidth}
+            height={stageLayout.stageHeight}
             fill={style.backgroundColor}
           />
           <ImageLayer figure={figure} />
+          {previewLayout ? <PreviewLayer preview={previewLayout} /> : null}
           <LabelLayer figure={figure} />
           <AnnotationLayer figure={figure} />
           <ScaleBarLayer figure={figure} />
