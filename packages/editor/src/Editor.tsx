@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useEditor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import { useEditorStore } from "@paperhelp/shared";
@@ -5,6 +6,7 @@ import { Button } from "@paperhelp/ui";
 import { getExtensions } from "./extensions";
 import { InfiniteScrollView } from "./views/InfiniteScrollView";
 import { A4PaginationView } from "./views/A4PaginationView";
+import { extractHeadings } from "./utils/extractHeadings";
 import "./editor.css";
 
 const INITIAL_CONTENT = `
@@ -13,17 +15,54 @@ const INITIAL_CONTENT = `
 <p>You can use <strong>bold</strong>, <em>italic</em>, headings, and tables.</p>
 `;
 
+function syncDocumentState(
+  getJSON: () => ReturnType<NonNullable<ReturnType<typeof useEditor>>["getJSON"]>,
+  setDirty: (isDirty: boolean) => void,
+  setOutline: ReturnType<typeof useEditorStore.getState>["setOutline"],
+) {
+  setDirty(true);
+  setOutline(extractHeadings(getJSON()));
+}
+
 export function Editor() {
   const setDirty = useEditorStore((s) => s.setDirty);
+  const setOutline = useEditorStore((s) => s.setOutline);
+  const setEditorCommands = useEditorStore((s) => s.setEditorCommands);
   const viewMode = useEditorStore((s) => s.viewMode);
 
   const editor = useEditor({
     extensions: getExtensions(),
     content: INITIAL_CONTENT,
-    onUpdate: () => {
-      setDirty(true);
+    onCreate: ({ editor: createdEditor }) => {
+      setOutline(extractHeadings(createdEditor.getJSON()));
+    },
+    onUpdate: ({ editor: updatedEditor }) => {
+      syncDocumentState(
+        () => updatedEditor.getJSON(),
+        setDirty,
+        setOutline,
+      );
     },
   });
+
+  useEffect(() => {
+    if (!editor) {
+      return;
+    }
+
+    setEditorCommands({
+      focus: () => {
+        editor.chain().focus().run();
+      },
+      toggleHeading: (level) => {
+        editor.chain().focus().toggleHeading({ level }).run();
+      },
+    });
+
+    return () => {
+      setEditorCommands(null);
+    };
+  }, [editor, setEditorCommands]);
 
   if (!editor) {
     return null;

@@ -1,8 +1,10 @@
 export {
   useEditorStore,
   type EditorActions,
+  type EditorCommands,
   type EditorState,
   type EditorStore,
+  type OutlineItem,
   type ViewMode,
 } from "./editorStore";
 
