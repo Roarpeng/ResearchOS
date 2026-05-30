@@ -1,0 +1,44 @@
+@page {
+  size: A4;
+  margin: 25mm;
+}
+
+.paperhelp-a4-view {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding: 2rem 1rem 3rem;
+  background: var(--muted);
+  min-height: 100%;
+}
+
+.paperhelp-a4-page {
+  width: 210mm;
+  min-height: 297mm;
+  padding: 25mm;
+  box-sizing: border-box;
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  box-shadow:
+    0 1px 3px rgb(0 0 0 / 0.06),
+    0 8px 24px rgb(0 0 0 / 0.08);
+}
+
+@media print {
+  .paperhelp-a4-view {
+    padding: 0;
+    background: transparent;
+  }
+
+  .paperhelp-a4-page {
+    width: auto;
+    min-height: auto;
+    margin: 0;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+}

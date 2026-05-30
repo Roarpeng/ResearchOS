@@ -54,6 +54,12 @@
   gap: 0.5rem;
 }
 
+.view-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 .theme-select {
   border-radius: 0.375rem;
   border: 1px solid var(--input);

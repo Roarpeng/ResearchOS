@@ -1,8 +1,10 @@
-import { useEditor, EditorContent } from "@tiptap/react";
+import { useEditor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import { useEditorStore } from "@paperhelp/shared";
 import { Button } from "@paperhelp/ui";
 import { getExtensions } from "./extensions";
+import { InfiniteScrollView } from "./views/InfiniteScrollView";
+import { A4PaginationView } from "./views/A4PaginationView";
 import "./editor.css";
 
 const INITIAL_CONTENT = `
@@ -13,6 +15,7 @@ const INITIAL_CONTENT = `
 
 export function Editor() {
   const setDirty = useEditorStore((s) => s.setDirty);
+  const viewMode = useEditorStore((s) => s.viewMode);
 
   const editor = useEditor({
     extensions: getExtensions(),
@@ -79,7 +82,17 @@ export function Editor() {
         </Button>
       </BubbleMenu>
 
-      <EditorContent editor={editor} className="paperhelp-editor__content" />
+      <div
+        key={viewMode}
+        className="paperhelp-editor__viewport"
+        data-view-mode={viewMode}
+      >
+        {viewMode === "scroll" ? (
+          <InfiniteScrollView editor={editor} />
+        ) : (
+          <A4PaginationView editor={editor} />
+        )}
+      </div>
     </div>
   );
 }
