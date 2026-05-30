@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type ExportFormat = "pdf" | "docx" | "markdown";
+export type ExportFormat = "pdf" | "zip" | "docx" | "markdown";
 
 /** Export workflow state */
 export interface ExportState {

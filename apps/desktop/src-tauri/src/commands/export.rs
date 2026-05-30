@@ -30,6 +30,28 @@ pub async fn pick_export_pdf_path(
 }
 
 #[tauri::command]
+pub async fn pick_export_zip_path(
+    app: tauri::AppHandle,
+    default_name: Option<String>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let file_name = default_name.unwrap_or_else(|| "Untitled.zip".to_string());
+    let path = app
+        .dialog()
+        .file()
+        .add_filter("ZIP Archive", &["zip"])
+        .set_file_name(&file_name)
+        .blocking_save_file();
+
+    Ok(path.and_then(|file| {
+        file.into_path()
+            .ok()
+            .map(|selected| selected.to_string_lossy().into_owned())
+    }))
+}
+
+#[tauri::command]
 pub async fn export_pdf(html: String, output_path: String) -> Result<(), String> {
     let output = Path::new(&output_path);
     if let Some(parent) = output.parent() {

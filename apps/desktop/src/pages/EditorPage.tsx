@@ -41,9 +41,11 @@ export function EditorPage() {
 
   const {
     handleExportPdf,
+    handleExportSubmissionPack,
     isExporting,
     progress: exportProgress,
     lastExportPath,
+    exportFormat,
     error: exportError,
   } = useExportPdf();
 
@@ -193,7 +195,21 @@ export function EditorPage() {
               disabled={!editorCommands || isExporting || paperBusy}
               onClick={() => void handleExportPdf()}
             >
-              {isExporting ? `导出 PDF ${exportProgress}%` : "导出 PDF"}
+              {isExporting && exportFormat === "pdf"
+                ? `导出 PDF ${exportProgress}%`
+                : "导出 PDF"}
+            </Button>
+
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!editorCommands || isExporting || paperBusy}
+              onClick={() => void handleExportSubmissionPack()}
+            >
+              {isExporting && exportFormat === "zip"
+                ? `导出投稿包 ${exportProgress}%`
+                : "导出投稿包"}
             </Button>
 
             <div
@@ -236,7 +252,9 @@ export function EditorPage() {
 
         {lastExportPath && !isExporting && !exportError ? (
           <p className="editor-page__status editor-page__status--success" role="status">
-            已导出 PDF 到 {lastExportPath}
+            {exportFormat === "zip"
+              ? `已导出投稿包到 ${lastExportPath}`
+              : `已导出 PDF 到 ${lastExportPath}`}
           </p>
         ) : null}
 

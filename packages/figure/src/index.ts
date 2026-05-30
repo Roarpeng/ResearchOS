@@ -18,3 +18,8 @@ export {
   renderFigureThumbnailToDataUrl,
   type RenderFigureThumbnailOptions,
 } from "./utils/renderFigureThumbnail";
+
+export {
+  exportFigureToPng,
+  type ExportFigureToPngOptions,
+} from "./utils/exportFigureToPng";

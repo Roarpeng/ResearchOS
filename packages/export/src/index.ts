@@ -9,4 +9,10 @@ export {
   type HtmlRenderContext,
 } from "./ExportEngine";
 
+export {
+  buildSubmissionPackZip,
+  type SubmissionFigureEntry,
+  type SubmissionPackMetadata,
+} from "./zip/submissionPack";
+
 export { PRINT_CSS } from "./render/printCss";
