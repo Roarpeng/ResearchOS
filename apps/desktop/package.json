@@ -12,6 +12,7 @@
   "dependencies": {
     "@paperhelp/db": "workspace:*",
     "@paperhelp/editor": "workspace:*",
+    "@paperhelp/export": "workspace:*",
     "@paperhelp/figure": "workspace:*",
     "@paperhelp/shared": "workspace:*",
     "@paperhelp/ui": "workspace:*",

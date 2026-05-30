@@ -1,0 +1,23 @@
+{
+  "name": "@paperhelp/export",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./dist/pdf/generatePdf.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@paperhelp/shared": "workspace:*",
+    "jszip": "^3.10.1",
+    "puppeteer": "^24.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "typescript": "~5.8.3"
+  }
+}

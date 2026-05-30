@@ -14,6 +14,7 @@ import {
   usePaperDocument,
   usePaperKeyboardShortcuts,
 } from "../hooks/usePaperDocument";
+import { useExportPdf } from "../hooks/useExportPdf";
 import { insertFigureIntoEditor } from "../utils/insertFigureIntoEditor";
 
 export function EditorPage() {
@@ -37,6 +38,14 @@ export function EditorPage() {
     handleSaveAs,
     handleOpen,
   } = usePaperDocument();
+
+  const {
+    handleExportPdf,
+    isExporting,
+    progress: exportProgress,
+    lastExportPath,
+    error: exportError,
+  } = useExportPdf();
 
   usePaperKeyboardShortcuts(() => {
     void handleSave();
@@ -177,6 +186,16 @@ export function EditorPage() {
               插入 Figure
             </Button>
 
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!editorCommands || isExporting || paperBusy}
+              onClick={() => void handleExportPdf()}
+            >
+              {isExporting ? `导出 PDF ${exportProgress}%` : "导出 PDF"}
+            </Button>
+
             <div
               className="view-mode-toggle"
               role="group"
@@ -206,6 +225,18 @@ export function EditorPage() {
         {paperMessage ? (
           <p className="editor-page__status" role="status">
             {paperMessage}
+          </p>
+        ) : null}
+
+        {exportError ? (
+          <p className="editor-page__status editor-page__status--error" role="alert">
+            导出失败：{exportError}
+          </p>
+        ) : null}
+
+        {lastExportPath && !isExporting && !exportError ? (
+          <p className="editor-page__status editor-page__status--success" role="status">
+            已导出 PDF 到 {lastExportPath}
           </p>
         ) : null}
 

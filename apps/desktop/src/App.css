@@ -158,6 +158,22 @@
   color: #16a34a;
 }
 
+.editor-page__status {
+  margin: 0;
+  padding: 0.375rem 1rem;
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-page__status--error {
+  color: #dc2626;
+}
+
+.editor-page__status--success {
+  color: #16a34a;
+}
+
 .home-page {
   display: flex;
   flex-direction: column;
