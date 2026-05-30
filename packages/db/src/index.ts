@@ -16,4 +16,5 @@ export type { MigrationDefinition } from "./migrate";
 
 export * from "./schema";
 export * from "./paper";
+export * from "./autosave";
 export { persistHistoryEntry } from "./history/persist";

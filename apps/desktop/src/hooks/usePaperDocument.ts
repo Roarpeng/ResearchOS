@@ -4,7 +4,6 @@ import {
   initDatabase,
   loadPaper,
   persistHistoryEntry,
-  registerSyncContext,
   savePaper,
   type SyncContext,
 } from "@paperhelp/db";
@@ -46,10 +45,6 @@ export function usePaperDocument() {
     }),
     [],
   );
-
-  useEffect(() => {
-    registerSyncContext(syncContext);
-  }, [syncContext]);
 
   useEffect(() => {
     void initDatabase();

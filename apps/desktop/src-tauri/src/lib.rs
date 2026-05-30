@@ -2,8 +2,8 @@ mod commands;
 
 use commands::asset::{pick_image_files, read_image_asset};
 use commands::paper::{
-    copy_file, create_temp_dir, list_files, pick_open_paper_path, pick_save_paper_path,
-    read_binary_file, remove_path, write_binary_file,
+    copy_file, create_temp_dir, get_app_data_dir, list_files, pick_open_paper_path,
+    pick_save_paper_path, read_binary_file, remove_path, write_binary_file,
 };
 
 #[tauri::command]
@@ -27,6 +27,7 @@ pub fn run() {
             read_binary_file,
             copy_file,
             create_temp_dir,
+            get_app_data_dir,
             remove_path,
             list_files
         ])

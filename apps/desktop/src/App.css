@@ -73,6 +73,91 @@
   overflow: hidden;
 }
 
+.app-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 1.25rem;
+  border-top: 1px solid var(--border);
+  background: var(--background);
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.app-status-bar__indicator {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: var(--muted-foreground);
+}
+
+.app-status-bar__indicator--saved {
+  background: #16a34a;
+}
+
+.app-status-bar__indicator--saving {
+  background: #ca8a04;
+}
+
+.app-status-bar__indicator--unsaved {
+  background: #dc2626;
+}
+
+.recovery-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 45%);
+}
+
+.recovery-dialog {
+  width: min(28rem, calc(100vw - 2rem));
+  padding: 1.25rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--background);
+  box-shadow: 0 10px 40px rgb(0 0 0 / 15%);
+}
+
+.recovery-dialog__title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.recovery-dialog__body {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+  line-height: 1.5;
+}
+
+.recovery-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.editor-page__save-status {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.editor-page__save-status--unsaved {
+  color: #dc2626;
+}
+
+.editor-page__save-status--saving {
+  color: #ca8a04;
+}
+
+.editor-page__save-status--saved {
+  color: #16a34a;
+}
+
 .home-page {
   display: flex;
   flex-direction: column;

@@ -226,6 +226,7 @@ export async function hydrateStoresFromDb(
     documentId: document.id,
     title: document.title,
     isDirty: false,
+    saveStatus: "saved",
     sessionKey: state.sessionKey + 1,
   }));
 

@@ -2,6 +2,8 @@ import { create } from "zustand";
 
 export type ViewMode = "scroll" | "a4";
 
+export type SaveStatus = "saved" | "saving" | "unsaved";
+
 export interface OutlineItem {
   id: string;
   level: 1 | 2 | 3;
@@ -21,6 +23,9 @@ export interface EditorState {
   title: string;
   viewMode: ViewMode;
   isDirty: boolean;
+  saveStatus: SaveStatus;
+  /** Increments on each edit for autosave debounce scheduling. */
+  editRevision: number;
   outline: OutlineItem[];
   sessionKey: number;
   editorCommands: EditorCommands | null;
@@ -38,6 +43,7 @@ export interface EditorActions {
   setTitle: (title: string) => void;
   setViewMode: (viewMode: ViewMode) => void;
   setDirty: (isDirty: boolean) => void;
+  setSaveStatus: (saveStatus: SaveStatus) => void;
   setOutline: (outline: OutlineItem[]) => void;
   setEditorCommands: (commands: EditorCommands | null) => void;
   setSelectedFigureId: (figureId: string | null) => void;
@@ -54,6 +60,8 @@ const initialEditorState: EditorState = {
   title: "",
   viewMode: "scroll",
   isDirty: false,
+  saveStatus: "saved",
+  editRevision: 0,
   outline: [],
   sessionKey: 0,
   editorCommands: null,
@@ -68,7 +76,17 @@ export const useEditorStore = create<EditorStore>((set) => ({
   setDocumentId: (documentId) => set({ documentId }),
   setTitle: (title) => set({ title }),
   setViewMode: (viewMode) => set({ viewMode }),
-  setDirty: (isDirty) => set({ isDirty }),
+  setDirty: (isDirty) =>
+    set((state) => ({
+      isDirty,
+      ...(isDirty
+        ? {
+            editRevision: state.editRevision + 1,
+            saveStatus: "unsaved" as SaveStatus,
+          }
+        : {}),
+    })),
+  setSaveStatus: (saveStatus) => set({ saveStatus }),
   setOutline: (outline) => set({ outline }),
   setEditorCommands: (editorCommands) => set({ editorCommands }),
   setSelectedFigureId: (selectedFigureId) => set({ selectedFigureId }),

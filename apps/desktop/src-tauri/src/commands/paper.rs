@@ -69,6 +69,19 @@ pub async fn copy_file(src: String, dest: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn get_app_data_dir(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Manager;
+
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data dir: {error}"))?;
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("Failed to create app data dir: {error}"))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 pub async fn create_temp_dir(prefix: Option<String>) -> Result<String, String> {
     let base = std::env::temp_dir();
     let nanos = SystemTime::now()

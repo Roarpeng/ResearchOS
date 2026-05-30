@@ -5,6 +5,7 @@ export {
   type EditorState,
   type EditorStore,
   type OutlineItem,
+  type SaveStatus,
   type ViewMode,
 } from "./editorStore";
 

@@ -19,7 +19,7 @@ import { insertFigureIntoEditor } from "../utils/insertFigureIntoEditor";
 export function EditorPage() {
   const navigate = useNavigate();
   const title = useEditorStore((s) => s.title);
-  const isDirty = useEditorStore((s) => s.isDirty);
+  const saveStatus = useEditorStore((s) => s.saveStatus);
   const canUndo = useCommandHistoryStore((s) => s.canUndo);
   const canRedo = useCommandHistoryStore((s) => s.canRedo);
   const executeCommand = useCommandHistoryStore((s) => s.execute);
@@ -105,7 +105,16 @@ export function EditorPage() {
               placeholder="Untitled"
               aria-label="Document title"
             />
-            {isDirty ? <span className="dirty-indicator">Unsaved</span> : null}
+            <span
+              className={`editor-page__save-status editor-page__save-status--${saveStatus}`}
+              role="status"
+            >
+              {saveStatus === "saved"
+                ? "已保存"
+                : saveStatus === "saving"
+                  ? "保存中…"
+                  : "未保存"}
+            </span>
           </div>
 
           <div className="editor-page__toolbar-actions">

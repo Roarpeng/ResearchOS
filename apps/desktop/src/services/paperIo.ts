@@ -5,6 +5,10 @@ function toUint8Array(data: number[] | Uint8Array): Uint8Array {
   return data instanceof Uint8Array ? data : Uint8Array.from(data);
 }
 
+export async function getAppDataDir(): Promise<string> {
+  return invoke<string>("get_app_data_dir");
+}
+
 export const paperFileIO: PaperFileIO = {
   pickSavePath: (defaultName) =>
     invoke<string | null>("pick_save_paper_path", { defaultName }),

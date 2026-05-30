@@ -31,6 +31,8 @@ export interface PaperFileIO {
 export interface SavePaperOptions {
   fileIO: PaperFileIO;
   savePath?: string;
+  /** When false, keeps isDirty/filePath unchanged (used by autosave). */
+  updateDocumentState?: boolean;
   renderFigurePreview?: (
     figureId: string,
   ) => Promise<Uint8Array | null | undefined>;
@@ -174,8 +176,11 @@ export async function savePaper(options: SavePaperOptions): Promise<string | nul
     const zipBytes = await zipStagingDirectory(stagingDir, fileIO);
     await fileIO.writeBinaryFile(targetPath, zipBytes);
 
-    useEditorStore.getState().setDirty(false);
-    useEditorStore.getState().setFilePath(targetPath);
+    if (options.updateDocumentState !== false) {
+      useEditorStore.getState().setDirty(false);
+      useEditorStore.getState().setFilePath(targetPath);
+      useEditorStore.getState().setSaveStatus("saved");
+    }
 
     return targetPath;
   } finally {
