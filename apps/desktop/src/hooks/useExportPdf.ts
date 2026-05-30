@@ -8,6 +8,7 @@ import {
   ExportEngine,
 } from "@paperhelp/export";
 import {
+  resolveFontFamilyCss,
   useAssetStore,
   useEditorStore,
   useExportStore,
@@ -39,6 +40,8 @@ function buildDocumentExportState() {
 
   return {
     title: useEditorStore.getState().title,
+    fontFamilyCss: resolveFontFamilyCss(useEditorStore.getState().fontFamily),
+    fontSizePt: useEditorStore.getState().fontSize,
     figures: useFigureStore.getState().figures,
     documentJson: editorCommands.getJSON(),
     getFigureImageDataUrl: async (figureId: string) => {

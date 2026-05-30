@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { DocumentFontFamily, DocumentFontSize } from "../types/typography";
 
 export type ViewMode = "scroll" | "a4";
 
@@ -21,6 +22,8 @@ export interface EditorCommands {
 export interface EditorState {
   documentId: string | null;
   title: string;
+  fontFamily: DocumentFontFamily;
+  fontSize: DocumentFontSize;
   viewMode: ViewMode;
   isDirty: boolean;
   saveStatus: SaveStatus;
@@ -41,6 +44,8 @@ export interface EditorState {
 export interface EditorActions {
   setDocumentId: (documentId: string | null) => void;
   setTitle: (title: string) => void;
+  setFontFamily: (fontFamily: DocumentFontFamily) => void;
+  setFontSize: (fontSize: DocumentFontSize) => void;
   setViewMode: (viewMode: ViewMode) => void;
   setDirty: (isDirty: boolean) => void;
   setSaveStatus: (saveStatus: SaveStatus) => void;
@@ -58,6 +63,8 @@ export type EditorStore = EditorState & EditorActions;
 const initialEditorState: EditorState = {
   documentId: null,
   title: "",
+  fontFamily: "times",
+  fontSize: 12,
   viewMode: "scroll",
   isDirty: false,
   saveStatus: "saved",
@@ -75,6 +82,8 @@ export const useEditorStore = create<EditorStore>((set) => ({
   ...initialEditorState,
   setDocumentId: (documentId) => set({ documentId }),
   setTitle: (title) => set({ title }),
+  setFontFamily: (fontFamily) => set({ fontFamily }),
+  setFontSize: (fontSize) => set({ fontSize }),
   setViewMode: (viewMode) => set({ viewMode }),
   setDirty: (isDirty) =>
     set((state) => ({

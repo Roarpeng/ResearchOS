@@ -1,5 +1,5 @@
 import type { Figure } from "@paperhelp/shared";
-import { PRINT_CSS } from "./printCss";
+import { buildPrintCss, PRINT_CSS } from "./printCss";
 
 interface TiptapMark {
   type: string;
@@ -19,6 +19,8 @@ export interface HtmlRenderContext {
   documentJson: unknown;
   figures: Record<string, Figure>;
   figureImages: Record<string, string>;
+  fontFamilyCss: string;
+  fontSizePt: number;
 }
 
 function escapeHtml(text: string): string {
@@ -161,13 +163,17 @@ export function renderDocumentHtml(ctx: HtmlRenderContext): string {
   const titleBlock = ctx.title
     ? `<h1 class="document-title">${title}</h1>`
     : "";
+  const printCss = buildPrintCss({
+    fontFamilyCss: ctx.fontFamilyCss,
+    fontSizePt: ctx.fontSizePt,
+  });
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>${title}</title>
-  <style>${PRINT_CSS}</style>
+  <style>${printCss}</style>
 </head>
 <body>
   ${titleBlock}

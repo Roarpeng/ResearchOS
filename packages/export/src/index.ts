@@ -15,4 +15,4 @@ export {
   type SubmissionPackMetadata,
 } from "./zip/submissionPack";
 
-export { PRINT_CSS } from "./render/printCss";
+export { PRINT_CSS, buildPrintCss, type PrintTypography } from "./render/printCss";

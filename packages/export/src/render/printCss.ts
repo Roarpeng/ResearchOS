@@ -1,52 +1,9 @@
-/** Bundled print stylesheet (mirrors print.css for browser-safe import). */
-export const PRINT_CSS = `@page {
-  size: A4;
-  margin: 25mm;
+export interface PrintTypography {
+  fontFamilyCss: string;
+  fontSizePt: number;
 }
 
-html,
-body {
-  font-family: "Times New Roman", Times, serif;
-  font-size: 12pt;
-  line-height: 1.5;
-  color: #000;
-  margin: 0;
-  padding: 0;
-  background: #fff;
-}
-
-.document-title {
-  font-size: 18pt;
-  font-weight: bold;
-  text-align: center;
-  margin: 0 0 1.5em;
-  page-break-after: avoid;
-}
-
-h1,
-h2,
-h3 {
-  page-break-after: avoid;
-  font-weight: bold;
-}
-
-h1 {
-  font-size: 16pt;
-}
-
-h2 {
-  font-size: 14pt;
-}
-
-h3 {
-  font-size: 12pt;
-}
-
-p {
-  margin: 0 0 0.75em;
-  text-align: justify;
-}
-
+const PRINT_CSS_BODY = `
 figure,
 table,
 img {
@@ -71,7 +28,7 @@ figure.figure-block--missing {
 }
 
 figcaption {
-  font-size: 10pt;
+  font-size: 0.833em;
   margin-top: 0.5em;
   text-align: center;
 }
@@ -103,7 +60,7 @@ blockquote {
 
 pre {
   font-family: "Courier New", Courier, monospace;
-  font-size: 10pt;
+  font-size: 0.833em;
   background: #f8f8f8;
   padding: 0.75em;
   overflow-x: auto;
@@ -112,7 +69,7 @@ pre {
 
 code {
   font-family: "Courier New", Courier, monospace;
-  font-size: 10pt;
+  font-size: 0.833em;
 }
 
 ul,
@@ -137,3 +94,61 @@ hr {
   margin: 1.5em 0;
 }
 `;
+
+/** Build print stylesheet matching editor A4 typography (25mm margins). */
+export function buildPrintCss({ fontFamilyCss, fontSizePt }: PrintTypography): string {
+  return `@page {
+  size: A4;
+  margin: 25mm;
+}
+
+html,
+body {
+  font-family: ${fontFamilyCss};
+  font-size: ${fontSizePt}pt;
+  line-height: 1.7;
+  color: #000;
+  margin: 0;
+  padding: 0;
+  background: #fff;
+}
+
+.document-title {
+  font-size: 1.5em;
+  font-weight: bold;
+  text-align: center;
+  margin: 0 0 1.5em;
+  page-break-after: avoid;
+}
+
+h1,
+h2,
+h3 {
+  page-break-after: avoid;
+  font-weight: bold;
+}
+
+h1 {
+  font-size: 1.875em;
+}
+
+h2 {
+  font-size: 1.5em;
+}
+
+h3 {
+  font-size: 1.25em;
+}
+
+p {
+  margin: 0 0 0.75em;
+  text-align: justify;
+}
+${PRINT_CSS_BODY}`;
+}
+
+/** Default print CSS (Times New Roman 12pt) for backwards compatibility. */
+export const PRINT_CSS = buildPrintCss({
+  fontFamilyCss: '"Times New Roman", Times, serif',
+  fontSizePt: 12,
+});

@@ -7,9 +7,9 @@
   display: flex;
   justify-content: center;
   width: 100%;
+  min-height: min-content;
   padding: 2rem 1rem 3rem;
   background: var(--muted);
-  min-height: 100%;
 }
 
 .paperhelp-a4-page {
@@ -24,6 +24,8 @@
   box-shadow:
     0 1px 3px rgb(0 0 0 / 0.06),
     0 8px 24px rgb(0 0 0 / 0.08);
+  font-family: var(--paperhelp-font-family, "Times New Roman", Times, serif);
+  font-size: var(--paperhelp-font-size, 12pt);
 }
 
 @media print {

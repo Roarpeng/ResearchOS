@@ -7,7 +7,7 @@ html,
 body {
   font-family: "Times New Roman", Times, serif;
   font-size: 12pt;
-  line-height: 1.5;
+  line-height: 1.7;
   color: #000;
   margin: 0;
   padding: 0;
@@ -15,7 +15,7 @@ body {
 }
 
 .document-title {
-  font-size: 18pt;
+  font-size: 1.5em;
   font-weight: bold;
   text-align: center;
   margin: 0 0 1.5em;
@@ -30,15 +30,15 @@ h3 {
 }
 
 h1 {
-  font-size: 16pt;
+  font-size: 1.875em;
 }
 
 h2 {
-  font-size: 14pt;
+  font-size: 1.5em;
 }
 
 h3 {
-  font-size: 12pt;
+  font-size: 1.25em;
 }
 
 p {
@@ -70,7 +70,7 @@ figure.figure-block--missing {
 }
 
 figcaption {
-  font-size: 10pt;
+  font-size: 0.833em;
   margin-top: 0.5em;
   text-align: center;
 }
@@ -102,7 +102,7 @@ blockquote {
 
 pre {
   font-family: "Courier New", Courier, monospace;
-  font-size: 10pt;
+  font-size: 0.833em;
   background: #f8f8f8;
   padding: 0.75em;
   overflow-x: auto;
@@ -111,7 +111,7 @@ pre {
 
 code {
   font-family: "Courier New", Courier, monospace;
-  font-size: 10pt;
+  font-size: 0.833em;
 }
 
 ul,

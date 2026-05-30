@@ -1,4 +1,4 @@
-import type { Figure } from "@paperhelp/shared";
+import type { DocumentFontSize, Figure } from "@paperhelp/shared";
 import {
   collectFigureIds,
   renderDocumentHtml,
@@ -13,6 +13,8 @@ export interface DocumentExportState {
   title: string;
   documentJson: unknown;
   figures: Record<string, Figure>;
+  fontFamilyCss: string;
+  fontSizePt: DocumentFontSize;
   getFigureImageDataUrl: (figureId: string) => Promise<string | null>;
 }
 
@@ -34,12 +36,7 @@ export class ExportEngine {
   /** Build HTML from document state without writing a PDF. */
   async buildHtml(state: DocumentExportState): Promise<string> {
     const figureImages = await this.resolveFigureImages(state);
-    return renderDocumentHtml({
-      title: state.title,
-      documentJson: state.documentJson,
-      figures: state.figures,
-      figureImages,
-    });
+    return renderDocumentHtml(this.buildRenderContext(state, figureImages));
   }
 
   /**
@@ -63,12 +60,7 @@ export class ExportEngine {
     const figureImages = await this.resolveFigureImages(state);
     onProgress?.(45);
 
-    const html = renderDocumentHtml({
-      title: state.title,
-      documentJson: state.documentJson,
-      figures: state.figures,
-      figureImages,
-    });
+    const html = renderDocumentHtml(this.buildRenderContext(state, figureImages));
     onProgress?.(60);
 
     await this.backend.exportPdf(html, outputPath);
@@ -100,12 +92,7 @@ export class ExportEngine {
       const figureImages = await this.resolveFigureImages(state);
       onProgress?.(25);
 
-      const html = renderDocumentHtml({
-        title: state.title,
-        documentJson: state.documentJson,
-        figures: state.figures,
-        figureImages,
-      });
+      const html = renderDocumentHtml(this.buildRenderContext(state, figureImages));
 
       const pdfPath = joinPath(tempDir, "manuscript.pdf");
       await this.backend.exportPdf(html, pdfPath);
@@ -152,6 +139,20 @@ export class ExportEngine {
     } finally {
       await this.backend.removePath(tempDir);
     }
+  }
+
+  private buildRenderContext(
+    state: DocumentExportState,
+    figureImages: Record<string, string>,
+  ): HtmlRenderContext {
+    return {
+      title: state.title,
+      documentJson: state.documentJson,
+      figures: state.figures,
+      figureImages,
+      fontFamilyCss: state.fontFamilyCss,
+      fontSizePt: state.fontSizePt,
+    };
   }
 
   private async resolveFigureImages(

@@ -1,7 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, type CSSProperties } from "react";
 import { useEditor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
-import { useEditorStore } from "@paperhelp/shared";
+import { resolveFontFamilyCss, useEditorStore } from "@paperhelp/shared";
 import { Button } from "@paperhelp/ui";
 import { EditorProvider } from "./context/EditorContext";
 import { getExtensions } from "./extensions";
@@ -37,6 +37,12 @@ export function Editor({ onOpenFigure }: EditorProps) {
   const setSelectedFigureId = useEditorStore((s) => s.setSelectedFigureId);
   const viewMode = useEditorStore((s) => s.viewMode);
   const documentContent = useEditorStore((s) => s.documentContent);
+  const fontFamily = useEditorStore((s) => s.fontFamily);
+  const fontSize = useEditorStore((s) => s.fontSize);
+  const typographyStyle = {
+    "--paperhelp-font-family": resolveFontFamilyCss(fontFamily),
+    "--paperhelp-font-size": `${fontSize}pt`,
+  } as CSSProperties;
 
   const editor = useEditor({
     extensions: getExtensions(),
@@ -93,7 +99,7 @@ export function Editor({ onOpenFigure }: EditorProps) {
 
   return (
     <EditorProvider onOpenFigure={onOpenFigure}>
-      <div className="paperhelp-editor">
+      <div className="paperhelp-editor" style={typographyStyle}>
         <BubbleMenu editor={editor} className="paperhelp-bubble-menu">
           <Button
             type="button"
