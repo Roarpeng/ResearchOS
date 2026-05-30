@@ -1,0 +1,32 @@
+{
+  "name": "@paperhelp/editor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@paperhelp/shared": "workspace:*",
+    "@paperhelp/ui": "workspace:*",
+    "@tiptap/core": "^3.0.7",
+    "@tiptap/extension-table": "^3.0.7",
+    "@tiptap/extension-table-cell": "^3.0.7",
+    "@tiptap/extension-table-header": "^3.0.7",
+    "@tiptap/extension-table-row": "^3.0.7",
+    "@tiptap/react": "^3.0.7",
+    "@tiptap/starter-kit": "^3.0.7"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "typescript": "~5.8.3"
+  }
+}

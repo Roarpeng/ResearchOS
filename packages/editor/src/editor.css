@@ -1,0 +1,106 @@
+.paperhelp-editor {
+  width: 100%;
+  max-width: 48rem;
+  margin: 0 auto;
+}
+
+.paperhelp-bubble-menu {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--popover);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.08);
+}
+
+.paperhelp-editor__content .tiptap {
+  outline: none;
+  min-height: 20rem;
+  padding: 1rem 0;
+}
+
+.paperhelp-editor__content .tiptap :first-child {
+  margin-top: 0;
+}
+
+.paperhelp-editor__content .tiptap h1 {
+  font-size: 1.875rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 1.5rem 0 0.75rem;
+}
+
+.paperhelp-editor__content .tiptap h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.25rem 0 0.5rem;
+}
+
+.paperhelp-editor__content .tiptap h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 1rem 0 0.5rem;
+}
+
+.paperhelp-editor__content .tiptap p {
+  margin: 0.75rem 0;
+  line-height: 1.7;
+}
+
+.paperhelp-editor__content .tiptap table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+}
+
+.paperhelp-editor__content .tiptap th,
+.paperhelp-editor__content .tiptap td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.paperhelp-editor__content .tiptap th {
+  background: var(--muted);
+  font-weight: 600;
+}
+
+.figure-block,
+.citation-block {
+  margin: 1rem 0;
+}
+
+.figure-block__placeholder,
+.citation-block__placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 2rem 1rem;
+  border: 2px dashed var(--border);
+  border-radius: 0.5rem;
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+
+.figure-block.is-selected .figure-block__placeholder,
+.citation-block.is-selected .citation-block__placeholder {
+  border-color: var(--primary);
+}
+
+.figure-block__label,
+.citation-block__label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.figure-block__hint,
+.citation-block__hint {
+  font-size: 0.75rem;
+}

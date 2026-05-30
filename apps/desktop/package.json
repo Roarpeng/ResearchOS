@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@paperhelp/editor": "workspace:*",
     "@paperhelp/shared": "workspace:*",
     "@paperhelp/ui": "workspace:*",
     "@tauri-apps/api": "^2",

@@ -2,3 +2,4 @@
 
 @source "../**/*.{ts,tsx}";
 @source "../../../../packages/ui/src/**/*.{ts,tsx}";
+@source "../../../../packages/editor/src/**/*.{ts,tsx}";
