@@ -1,5 +1,7 @@
 # PaperHelp
 
+**仓库**: [Roarpeng/PaperHelp](https://github.com/Roarpeng/PaperHelp)
+
 Figure-first 本地离线科研写作桌面应用（Alpha MVP）。
 
 ## 项目概述
