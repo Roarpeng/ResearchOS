@@ -25,6 +25,24 @@ pub async fn pick_save_paper_path(
 }
 
 #[tauri::command]
+pub async fn pick_docx_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let path = app
+        .dialog()
+        .file()
+        .add_filter("Word Document", &["docx"])
+        .set_title("导入 Word 文档")
+        .blocking_pick_file();
+
+    Ok(path.and_then(|file| {
+        file.into_path()
+            .ok()
+            .map(|selected| selected.to_string_lossy().into_owned())
+    }))
+}
+
+#[tauri::command]
 pub async fn pick_open_paper_path(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 

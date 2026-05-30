@@ -86,6 +86,56 @@ pub async fn pick_image_files(app: tauri::AppHandle) -> Result<Vec<String>, Stri
 }
 
 #[tauri::command]
+pub async fn read_image_from_bytes(
+    app: tauri::AppHandle,
+    data: Vec<u8>,
+    extension: Option<String>,
+) -> Result<ReadImageAssetResult, String> {
+    use tauri::Manager;
+
+    let hash = compute_sha256(&data);
+    let img = image::load_from_memory(&data).map_err(|error| format!("Invalid image: {error}"))?;
+    let (width, height) = img.dimensions();
+
+    let ext = extension.unwrap_or_else(|| "png".to_string());
+    let mime = match ext.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "tiff" | "tif" => "image/tiff",
+        _ => "image/png",
+    }
+    .to_string();
+
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data dir: {error}"))?;
+    let import_dir = app_dir.join("imported");
+    fs::create_dir_all(&import_dir)
+        .map_err(|error| format!("Failed to create import dir: {error}"))?;
+
+    let file_path = import_dir.join(format!("{hash}.{ext}"));
+    if !file_path.exists() {
+        fs::write(&file_path, &data)
+            .map_err(|error| format!("Failed to write image: {error}"))?;
+    }
+
+    let path = file_path.to_string_lossy().into_owned();
+    let thumbnail = generate_thumbnail(&data)?;
+
+    Ok(ReadImageAssetResult {
+        path,
+        hash,
+        width,
+        height,
+        mime,
+        thumbnail,
+    })
+}
+
+#[tauri::command]
 pub async fn read_image_asset(path: String) -> Result<ReadImageAssetResult, String> {
     let path_buf = Path::new(&path);
     let data = fs::read(path_buf).map_err(|error| format!("Failed to read file: {error}"))?;

@@ -14,13 +14,17 @@
     "@paperhelp/figure": "workspace:*",
     "@paperhelp/shared": "workspace:*",
     "@paperhelp/ui": "workspace:*",
+    "@tauri-apps/api": "^2",
     "@tiptap/core": "^3.0.7",
     "@tiptap/extension-table": "^3.0.7",
     "@tiptap/extension-table-cell": "^3.0.7",
     "@tiptap/extension-table-header": "^3.0.7",
     "@tiptap/extension-table-row": "^3.0.7",
+    "@tiptap/html": "^3.0.7",
     "@tiptap/react": "^3.0.7",
-    "@tiptap/starter-kit": "^3.0.7"
+    "@tiptap/starter-kit": "^3.0.7",
+    "mammoth": "^1.9.1",
+    "nanoid": "^3.3.12"
   },
   "peerDependencies": {
     "react": "^19.0.0",

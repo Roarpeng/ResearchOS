@@ -5,8 +5,8 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "lint": "turbo lint",
-    "dev:desktop": "pnpm --filter desktop tauri dev",
-    "build:desktop": "pnpm --filter desktop tauri build"
+    "dev:desktop": "node scripts/with-cargo-path.mjs pnpm --filter desktop tauri dev",
+    "build:desktop": "node scripts/with-cargo-path.mjs pnpm --filter desktop tauri build"
   },
   "devDependencies": {
     "turbo": "^2.5.4"
