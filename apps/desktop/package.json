@@ -10,12 +10,14 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@paperhelp/db": "workspace:*",
     "@paperhelp/editor": "workspace:*",
     "@paperhelp/figure": "workspace:*",
     "@paperhelp/shared": "workspace:*",
     "@paperhelp/ui": "workspace:*",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-sql": "^2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.16.0"
