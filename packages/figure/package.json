@@ -13,9 +13,16 @@
   "dependencies": {
     "@paperhelp/shared": "workspace:*",
     "@tauri-apps/api": "^2",
-    "nanoid": "^3.3.12"
+    "konva": "^9.3.20",
+    "nanoid": "^3.3.12",
+    "react-konva": "^19.0.5"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@types/react": "^19.1.8",
     "typescript": "~5.8.3"
   }
 }

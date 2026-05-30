@@ -1,26 +1,67 @@
 import { create } from "zustand";
-
-/** Figure entity — full model deferred to Sprint 2 */
-export interface Figure {
-  id: string;
-  caption: string;
-}
+import type { Figure, FigureElementId } from "../types/figure";
 
 export interface FigureState {
-  figures: Figure[];
+  figures: Record<string, Figure>;
+  currentFigureId: string | null;
+  selectedElementId: FigureElementId | null;
 }
 
 export interface FigureActions {
+  addFigure: (figure: Figure) => void;
+  updateFigure: (id: string, patch: Partial<Figure> | ((figure: Figure) => Partial<Figure>)) => void;
+  selectFigure: (id: string | null) => void;
+  selectElement: (elementId: FigureElementId | null) => void;
   reset: () => void;
 }
 
 export type FigureStore = FigureState & FigureActions;
 
 const initialFigureState: FigureState = {
-  figures: [],
+  figures: {},
+  currentFigureId: null,
+  selectedElementId: null,
 };
+
+function applyFigurePatch(
+  figure: Figure,
+  patch: Partial<Figure> | ((figure: Figure) => Partial<Figure>),
+): Figure {
+  const next = typeof patch === "function" ? patch(figure) : patch;
+  return { ...figure, ...next };
+}
 
 export const useFigureStore = create<FigureStore>((set) => ({
   ...initialFigureState,
+
+  addFigure: (figure) =>
+    set((state) => ({
+      figures: { ...state.figures, [figure.id]: figure },
+      currentFigureId: figure.id,
+      selectedElementId: null,
+    })),
+
+  updateFigure: (id, patch) =>
+    set((state) => {
+      const figure = state.figures[id];
+      if (!figure) return state;
+      return {
+        figures: {
+          ...state.figures,
+          [id]: applyFigurePatch(figure, patch),
+        },
+      };
+    }),
+
+  selectFigure: (id) =>
+    set({
+      currentFigureId: id,
+      selectedElementId: null,
+    }),
+
+  selectElement: (elementId) => set({ selectedElementId: elementId }),
+
   reset: () => set(initialFigureState),
 }));
+
+export type { Figure, FigureElementId } from "../types/figure";

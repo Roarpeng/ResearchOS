@@ -10,6 +10,8 @@ export function AppLayout() {
   const theme = useUiStore((s) => s.theme);
   const setTheme = useUiStore((s) => s.setTheme);
   const isEditorRoute = location.pathname.startsWith("/editor");
+  const isFigureRoute = location.pathname.startsWith("/figure");
+  const isFullBleedRoute = isEditorRoute || isFigureRoute;
 
   return (
     <div className="app-shell">
@@ -20,6 +22,9 @@ export function AppLayout() {
           </Link>
           {isEditorRoute ? (
             <span className="app-header__route-label">编辑器</span>
+          ) : null}
+          {isFigureRoute ? (
+            <span className="app-header__route-label">Figure Studio</span>
           ) : null}
         </div>
 
@@ -43,7 +48,7 @@ export function AppLayout() {
         </div>
       </header>
 
-      <main className={isEditorRoute ? "app-main app-main--editor" : "app-main"}>
+      <main className={isFullBleedRoute ? "app-main app-main--editor" : "app-main"}>
         <Outlet />
       </main>
 

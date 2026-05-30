@@ -18,11 +18,11 @@ export {
 
 export {
   useFigureStore,
-  type Figure,
   type FigureActions,
   type FigureState,
   type FigureStore,
 } from "./figureStore";
+export type { Figure, FigureElementId } from "../types/figure";
 
 export {
   useAssetStore,

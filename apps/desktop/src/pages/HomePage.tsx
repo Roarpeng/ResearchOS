@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { importImages } from "@paperhelp/figure";
-import { useAssetStore, useEditorStore } from "@paperhelp/shared";
+import { buildFigureFromAssets, importImages } from "@paperhelp/figure";
+import { useAssetStore, useEditorStore, useFigureStore } from "@paperhelp/shared";
 import { Button } from "@paperhelp/ui";
 
 export function HomePage() {
   const navigate = useNavigate();
   const reset = useEditorStore((s) => s.reset);
+  const addFigure = useFigureStore((s) => s.addFigure);
   const assetCount = useAssetStore((s) => Object.keys(s.assets).length);
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState<string | null>(null);
@@ -26,7 +27,10 @@ export function HomePage() {
       if (assets.length === 0) {
         setImportMessage("未选择图片");
       } else {
-        setImportMessage(`本次处理 ${assets.length} 个文件，资源库共 ${total} 个`);
+        const figure = buildFigureFromAssets(assets);
+        addFigure(figure);
+        navigate(`/figure/${figure.id}`);
+        setImportMessage(`已创建 Figure（${assets.length} 张图），资源库共 ${total} 个`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "导入失败";
