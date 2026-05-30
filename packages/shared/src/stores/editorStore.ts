@@ -12,6 +12,8 @@ export interface EditorCommands {
   focus: () => void;
   toggleHeading: (level: 1 | 2 | 3) => void;
   insertFigure: (figureId: string) => void;
+  getJSON: () => unknown;
+  setContent: (json: unknown) => void;
 }
 
 export interface EditorState {
@@ -23,6 +25,12 @@ export interface EditorState {
   sessionKey: number;
   editorCommands: EditorCommands | null;
   selectedFigureId: string | null;
+  /** Loaded Tiptap JSON applied on the next editor mount. */
+  documentContent: unknown | null;
+  /** Current .paper file path on disk, when saved or opened. */
+  filePath: string | null;
+  /** Extracted container directory for opened .paper assets. */
+  containerRoot: string | null;
 }
 
 export interface EditorActions {
@@ -33,6 +41,9 @@ export interface EditorActions {
   setOutline: (outline: OutlineItem[]) => void;
   setEditorCommands: (commands: EditorCommands | null) => void;
   setSelectedFigureId: (figureId: string | null) => void;
+  setDocumentContent: (documentContent: unknown | null) => void;
+  setFilePath: (filePath: string | null) => void;
+  setContainerRoot: (containerRoot: string | null) => void;
   reset: () => void;
 }
 
@@ -47,6 +58,9 @@ const initialEditorState: EditorState = {
   sessionKey: 0,
   editorCommands: null,
   selectedFigureId: null,
+  documentContent: null,
+  filePath: null,
+  containerRoot: null,
 };
 
 export const useEditorStore = create<EditorStore>((set) => ({
@@ -58,6 +72,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
   setOutline: (outline) => set({ outline }),
   setEditorCommands: (editorCommands) => set({ editorCommands }),
   setSelectedFigureId: (selectedFigureId) => set({ selectedFigureId }),
+  setDocumentContent: (documentContent) => set({ documentContent }),
+  setFilePath: (filePath) => set({ filePath }),
+  setContainerRoot: (containerRoot) => set({ containerRoot }),
   reset: () =>
     set((state) => ({
       ...initialEditorState,

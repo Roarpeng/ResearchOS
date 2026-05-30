@@ -36,10 +36,11 @@ export function Editor({ onOpenFigure }: EditorProps) {
   const setEditorCommands = useEditorStore((s) => s.setEditorCommands);
   const setSelectedFigureId = useEditorStore((s) => s.setSelectedFigureId);
   const viewMode = useEditorStore((s) => s.viewMode);
+  const documentContent = useEditorStore((s) => s.documentContent);
 
   const editor = useEditor({
     extensions: getExtensions(),
-    content: INITIAL_CONTENT,
+    content: documentContent ?? INITIAL_CONTENT,
     onCreate: ({ editor: createdEditor }) => {
       setOutline(extractHeadings(createdEditor.getJSON()));
       setSelectedFigureId(getSelectedFigureId(createdEditor));
@@ -71,13 +72,20 @@ export function Editor({ onOpenFigure }: EditorProps) {
       insertFigure: (figureId) => {
         editor.chain().focus().insertFigure(figureId).run();
       },
+      getJSON: () => editor.getJSON(),
+      setContent: (json) => {
+        editor.commands.setContent(json as Parameters<typeof editor.commands.setContent>[0]);
+        setOutline(extractHeadings(editor.getJSON()));
+        setSelectedFigureId(getSelectedFigureId(editor));
+        setDirty(false);
+      },
     });
 
     return () => {
       setEditorCommands(null);
       setSelectedFigureId(null);
     };
-  }, [editor, setEditorCommands, setSelectedFigureId]);
+  }, [editor, setDirty, setEditorCommands, setOutline, setSelectedFigureId]);
 
   if (!editor) {
     return null;

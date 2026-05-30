@@ -1,6 +1,8 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { APP_NAME, useUiStore } from "@paperhelp/shared";
+import { Button } from "@paperhelp/ui";
 import { CommandPalette } from "../components/CommandPalette";
+import { usePaperDocument } from "../hooks/usePaperDocument";
 import { useThemeEffect } from "../hooks/useThemeEffect";
 
 export function AppLayout() {
@@ -12,6 +14,7 @@ export function AppLayout() {
   const isEditorRoute = location.pathname.startsWith("/editor");
   const isFigureRoute = location.pathname.startsWith("/figure");
   const isFullBleedRoute = isEditorRoute || isFigureRoute;
+  const { busy: paperBusy, handleSave, handleOpen } = usePaperDocument();
 
   return (
     <div className="app-shell">
@@ -29,6 +32,28 @@ export function AppLayout() {
         </div>
 
         <div className="app-header__controls">
+          {isEditorRoute ? (
+            <div className="app-header__file-menu" role="group" aria-label="File">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={paperBusy}
+                onClick={() => void handleOpen()}
+              >
+                打开
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={paperBusy}
+                onClick={() => void handleSave()}
+              >
+                保存
+              </Button>
+            </div>
+          ) : null}
           <span className="app-header__shortcut-hint">⌘K</span>
           <label htmlFor="theme-select" className="sr-only">
             Theme

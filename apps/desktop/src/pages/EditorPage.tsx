@@ -5,6 +5,10 @@ import { useEditorStore, type ViewMode } from "@paperhelp/shared";
 import { Button, Sidebar } from "@paperhelp/ui";
 import { FigurePropertiesPanel } from "../components/FigurePropertiesPanel";
 import { Outline } from "../components/Outline";
+import {
+  usePaperDocument,
+  usePaperKeyboardShortcuts,
+} from "../hooks/usePaperDocument";
 import { insertFigureIntoEditor } from "../utils/insertFigureIntoEditor";
 
 export function EditorPage() {
@@ -18,6 +22,17 @@ export function EditorPage() {
   const selectedFigureId = useEditorStore((s) => s.selectedFigureId);
   const setDirty = useEditorStore((s) => s.setDirty);
   const editorCommands = useEditorStore((s) => s.editorCommands);
+  const {
+    busy: paperBusy,
+    message: paperMessage,
+    handleSave,
+    handleSaveAs,
+    handleOpen,
+  } = usePaperDocument();
+
+  usePaperKeyboardShortcuts(() => {
+    void handleSave();
+  });
 
   const handleOpenFigure = useCallback(
     (figureId: string) => {
@@ -47,7 +62,10 @@ export function EditorPage() {
               id="doc-title"
               className="doc-title-input"
               value={title}
-              onChange={(e) => setTitle(e.currentTarget.value)}
+              onChange={(e) => {
+                setTitle(e.currentTarget.value);
+                setDirty(true);
+              }}
               placeholder="Untitled"
               aria-label="Document title"
             />
@@ -55,6 +73,34 @@ export function EditorPage() {
           </div>
 
           <div className="editor-page__toolbar-actions">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={paperBusy || !editorCommands}
+              onClick={() => void handleSave()}
+            >
+              保存
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={paperBusy || !editorCommands}
+              onClick={() => void handleSaveAs()}
+            >
+              另存为
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={paperBusy}
+              onClick={() => void handleOpen()}
+            >
+              打开
+            </Button>
+
             <Button
               type="button"
               size="sm"
@@ -90,6 +136,12 @@ export function EditorPage() {
             </div>
           </div>
         </header>
+
+        {paperMessage ? (
+          <p className="editor-page__status" role="status">
+            {paperMessage}
+          </p>
+        ) : null}
 
         <div className="editor-page__editor">
           <Editor key={sessionKey} onOpenFigure={handleOpenFigure} />

@@ -5,7 +5,7 @@ import { schema } from "./schema";
 
 export const DEFAULT_DB_PATH = "sqlite:paperhelp.db";
 
-type SqliteDatabase = Awaited<ReturnType<typeof Database.load>>;
+export type SqliteDatabase = Awaited<ReturnType<typeof Database.load>>;
 
 export type PaperHelpDatabase = SqliteRemoteDatabase<typeof schema>;
 
@@ -86,11 +86,22 @@ export async function runMigrations(sqlite: SqliteDatabase): Promise<void> {
   }
 }
 
+export interface InitDatabaseOptions {
+  force?: boolean;
+}
+
 export async function initDatabase(
   connectionString: string = DEFAULT_DB_PATH,
+  options: InitDatabaseOptions = {},
 ): Promise<InitDatabaseResult> {
-  if (sqliteInstance && drizzleInstance) {
+  if (!options.force && sqliteInstance && drizzleInstance) {
     return { db: drizzleInstance, sqlite: sqliteInstance };
+  }
+
+  if (sqliteInstance) {
+    await sqliteInstance.close();
+    sqliteInstance = null;
+    drizzleInstance = null;
   }
 
   const sqlite = await Database.load(connectionString);

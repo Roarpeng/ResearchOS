@@ -15,3 +15,4 @@ export { getMigrationStatements, MIGRATIONS, MIGRATION_0000_NAME } from "./migra
 export type { MigrationDefinition } from "./migrate";
 
 export * from "./schema";
+export * from "./paper";

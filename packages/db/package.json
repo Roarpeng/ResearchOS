@@ -12,8 +12,10 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@paperhelp/shared": "workspace:*",
     "@tauri-apps/plugin-sql": "^2",
-    "drizzle-orm": "^0.44.2"
+    "drizzle-orm": "^0.44.2",
+    "jszip": "^3.10.1"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.1",

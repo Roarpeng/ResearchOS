@@ -1,6 +1,10 @@
 mod commands;
 
 use commands::asset::{pick_image_files, read_image_asset};
+use commands::paper::{
+    copy_file, create_temp_dir, list_files, pick_open_paper_path, pick_save_paper_path,
+    read_binary_file, remove_path, write_binary_file,
+};
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -16,7 +20,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             pick_image_files,
-            read_image_asset
+            read_image_asset,
+            pick_save_paper_path,
+            pick_open_paper_path,
+            write_binary_file,
+            read_binary_file,
+            copy_file,
+            create_temp_dir,
+            remove_path,
+            list_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
