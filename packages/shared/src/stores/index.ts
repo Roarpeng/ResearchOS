@@ -38,3 +38,5 @@ export {
   type ExportState,
   type ExportStore,
 } from "./exportStore";
+
+export { useCommandHistoryStore } from "./commandHistoryStore";

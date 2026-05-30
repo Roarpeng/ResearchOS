@@ -1,7 +1,8 @@
 import { buildFigureFromAssets } from "@paperhelp/figure";
 import {
+  InsertBlockCommand,
   useAssetStore,
-  useEditorStore,
+  useCommandHistoryStore,
   useFigureStore,
   type EditorCommands,
 } from "@paperhelp/shared";
@@ -23,7 +24,9 @@ export function insertFigureIntoEditor(
 
   const assets = Object.values(useAssetStore.getState().assets);
   const addFigure = useFigureStore.getState().addFigure;
-  const setDirty = useEditorStore.getState().setDirty;
+  const recordCommand = useCommandHistoryStore.getState().record;
+
+  const prevJSON = editorCommands.getJSON();
 
   const figure =
     assets.length > 0
@@ -33,7 +36,13 @@ export function insertFigureIntoEditor(
   addFigure(figure);
   editorCommands.focus();
   editorCommands.insertFigure(figure.id);
-  setDirty(true);
+
+  const nextJSON = editorCommands.getJSON();
+  recordCommand(
+    new InsertBlockCommand(prevJSON, nextJSON, (json) => {
+      editorCommands.setContent(json);
+    }),
+  );
 
   return { figureId: figure.id, inserted: true };
 }

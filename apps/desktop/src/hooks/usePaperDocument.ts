@@ -3,12 +3,18 @@ import { useNavigate } from "react-router-dom";
 import {
   initDatabase,
   loadPaper,
+  persistHistoryEntry,
   registerSyncContext,
   savePaper,
   type SyncContext,
 } from "@paperhelp/db";
 import { renderFigureThumbnailToDataUrl } from "@paperhelp/figure";
-import { useAssetStore, useEditorStore, useFigureStore } from "@paperhelp/shared";
+import {
+  useAssetStore,
+  useCommandHistoryStore,
+  useEditorStore,
+  useFigureStore,
+} from "@paperhelp/shared";
 import {
   dataUrlToUint8Array,
   paperFileIO,
@@ -47,6 +53,18 @@ export function usePaperDocument() {
 
   useEffect(() => {
     void initDatabase();
+  }, []);
+
+  useEffect(() => {
+    useCommandHistoryStore.getState().setPersist((action, payload) => {
+      void persistHistoryEntry(action, payload).catch((error) => {
+        console.error("Failed to persist command history", error);
+      });
+    });
+
+    return () => {
+      useCommandHistoryStore.getState().setPersist(undefined);
+    };
   }, []);
 
   const renderFigurePreview = useCallback(async (figureId: string) => {

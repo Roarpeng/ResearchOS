@@ -5,23 +5,20 @@ import {
   resolveFigureAssets,
   suggestAutoLayout,
 } from "@paperhelp/figure";
-import { useAssetStore, useFigureStore } from "@paperhelp/shared";
+import { executeFigureUpdate, useAssetStore, useFigureStore } from "@paperhelp/shared";
 import { Button, cn } from "@paperhelp/ui";
 
 interface FigurePropertiesPanelProps {
   figureId: string;
   className?: string;
-  onFigureChange?: () => void;
 }
 
 export function FigurePropertiesPanel({
   figureId,
   className,
-  onFigureChange,
 }: FigurePropertiesPanelProps) {
   const figure = useFigureStore((s) => s.figures[figureId]);
   const selectedElementId = useFigureStore((s) => s.selectedElementId);
-  const updateFigure = useFigureStore((s) => s.updateFigure);
   const layoutPreview = useFigureStore((s) => s.layoutPreviews[figureId] ?? null);
   const setLayoutPreview = useFigureStore((s) => s.setLayoutPreview);
   const clearLayoutPreview = useFigureStore((s) => s.clearLayoutPreview);
@@ -34,9 +31,8 @@ export function FigurePropertiesPanel({
     );
   }
 
-  const patch = (partial: Parameters<typeof updateFigure>[1]) => {
-    updateFigure(figureId, partial);
-    onFigureChange?.();
+  const patch = (partial: Parameters<typeof executeFigureUpdate>[1]) => {
+    executeFigureUpdate(figureId, partial);
   };
 
   const resolveAssets = () =>
@@ -53,9 +49,8 @@ export function FigurePropertiesPanel({
     const nextPatch = layoutPreview
       ? applyLayout(figure, layoutPreview)
       : applyAutoLayout(figure, assets);
-    updateFigure(figureId, nextPatch);
+    executeFigureUpdate(figureId, nextPatch);
     clearLayoutPreview(figureId);
-    onFigureChange?.();
   };
 
   const handleClearPreview = () => {

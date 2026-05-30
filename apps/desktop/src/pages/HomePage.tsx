@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { buildFigureFromAssets, importImages } from "@paperhelp/figure";
-import { useAssetStore, useEditorStore, useFigureStore } from "@paperhelp/shared";
+import { useAssetStore, useCommandHistoryStore, useEditorStore, useFigureStore } from "@paperhelp/shared";
 import { Button } from "@paperhelp/ui";
 
 export function HomePage() {
@@ -14,6 +14,7 @@ export function HomePage() {
 
   const handleNewPaper = () => {
     reset();
+    useCommandHistoryStore.getState().clear();
     navigate("/editor");
   };
 

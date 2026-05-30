@@ -1,5 +1,6 @@
 import {
   useAssetStore,
+  useCommandHistoryStore,
   useEditorStore,
   useFigureStore,
   type Asset,
@@ -157,6 +158,7 @@ export async function hydrateStoresFromDb(
   useEditorStore.getState().reset();
   useFigureStore.getState().reset();
   useAssetStore.getState().reset();
+  useCommandHistoryStore.getState().clear();
 
   const documents = await selectRows<DocumentRow>(
     sqlite,
