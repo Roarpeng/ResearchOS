@@ -1,0 +1,51 @@
+.logo.vite:hover {
+  filter: drop-shadow(0 0 2em #747bff);
+}
+
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafb);
+}
+
+.logo.tauri:hover {
+  filter: drop-shadow(0 0 2em #24c8db);
+}
+
+.container {
+  margin: 0;
+  padding-top: 10vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: 0.75s;
+}
+
+.row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.subtitle {
+  color: var(--muted-foreground);
+}
+
+input {
+  border-radius: 8px;
+  border: 1px solid var(--input);
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+#greet-input {
+  margin-right: 5px;
+}
