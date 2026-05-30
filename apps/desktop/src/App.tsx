@@ -1,10 +1,19 @@
 import { useState } from "react";
+import { useEditorStore, useUiStore } from "@paperhelp/shared";
 import { Button } from "@paperhelp/ui";
 import reactLogo from "./assets/react.svg";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
+import { useThemeEffect } from "./hooks/useThemeEffect";
 
 function App() {
+  useThemeEffect();
+
+  const theme = useUiStore((s) => s.theme);
+  const setTheme = useUiStore((s) => s.setTheme);
+  const title = useEditorStore((s) => s.title);
+  const setTitle = useEditorStore((s) => s.setTitle);
+
   const [greetMsg, setGreetMsg] = useState("");
   const [name, setName] = useState("");
 
@@ -15,7 +24,34 @@ function App() {
   return (
     <main className="container">
       <h1>Welcome to PaperHelp</h1>
-      <p className="subtitle">Tauri + React + TypeScript</p>
+      <p className="subtitle">
+        {title.trim() || "Untitled"} · Tauri + React + TypeScript
+      </p>
+
+      <div className="row">
+        <label htmlFor="doc-title">Document title</label>
+        <input
+          id="doc-title"
+          value={title}
+          onChange={(e) => setTitle(e.currentTarget.value)}
+          placeholder="Untitled"
+        />
+      </div>
+
+      <div className="row">
+        <label htmlFor="theme-select">Theme</label>
+        <select
+          id="theme-select"
+          value={theme}
+          onChange={(e) =>
+            setTheme(e.currentTarget.value as "light" | "dark" | "system")
+          }
+        >
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+          <option value="system">System</option>
+        </select>
+      </div>
 
       <div className="row">
         <a href="https://vite.dev" target="_blank" rel="noreferrer">
