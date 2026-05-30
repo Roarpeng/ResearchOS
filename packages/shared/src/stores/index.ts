@@ -26,7 +26,6 @@ export {
 
 export {
   useAssetStore,
-  type Asset,
   type AssetActions,
   type AssetState,
   type AssetStore,

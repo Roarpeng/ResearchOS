@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@paperhelp/editor": "workspace:*",
+    "@paperhelp/figure": "workspace:*",
     "@paperhelp/shared": "workspace:*",
     "@paperhelp/ui": "workspace:*",
     "@tauri-apps/api": "^2",

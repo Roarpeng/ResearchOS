@@ -1,0 +1,21 @@
+{
+  "name": "@paperhelp/figure",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@paperhelp/shared": "workspace:*",
+    "@tauri-apps/api": "^2",
+    "nanoid": "^3.3.12"
+  },
+  "devDependencies": {
+    "typescript": "~5.8.3"
+  }
+}

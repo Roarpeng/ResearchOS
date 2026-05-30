@@ -17,6 +17,9 @@ importers:
       '@paperhelp/editor':
         specifier: workspace:*
         version: link:../../packages/editor
+      '@paperhelp/figure':
+        specifier: workspace:*
+        version: link:../../packages/figure
       '@paperhelp/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -103,6 +106,22 @@ importers:
       '@types/react':
         specifier: ^19.1.8
         version: 19.2.15
+      typescript:
+        specifier: ~5.8.3
+        version: 5.8.3
+
+  packages/figure:
+    dependencies:
+      '@paperhelp/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@tauri-apps/api':
+        specifier: ^2
+        version: 2.11.0
+      nanoid:
+        specifier: ^3.3.12
+        version: 3.3.12
+    devDependencies:
       typescript:
         specifier: ~5.8.3
         version: 5.8.3
