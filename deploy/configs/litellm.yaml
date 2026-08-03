@@ -1,0 +1,29 @@
+# Minimal LiteLLM routing for ResearchOS Phase 1.
+# Logical model names map to providers; agents must call LiteLLM, not vendor SDKs.
+
+model_list:
+  - model_name: default
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: strong
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: local
+    litellm_params:
+      model: ollama/qwen2.5:14b
+      api_base: http://ollama:11434
+
+  - model_name: embed
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+router_settings:
+  routing_strategy: simple-shuffle
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

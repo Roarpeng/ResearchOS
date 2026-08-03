@@ -24,7 +24,7 @@ Planner → Research → ETL → Knowledge Graph + Vector → Analysis Agents �
 
 ---
 
-## Phase 0 — Architecture & Docs（当前）
+## Phase 0 — Architecture & Docs（Done）
 
 **目标：** 建立单一事实来源，冻结关键边界。
 
@@ -34,7 +34,7 @@ Planner → Research → ETL → Knowledge Graph + Vector → Analysis Agents �
 | ADR-0001 … 0007 | Done（`docs/adr/`） |
 | 愿景 / 架构 / 系统设计 / 布局 / 选型 | Done（`docs/00`–`04`） |
 | 文档索引与根 README | Done |
-| 目标仓库目录骨架约定 | Done（文档级） |
+| 目标仓库目录骨架约定 | Done（已落地代码目录） |
 
 **退出标准：**
 
@@ -43,7 +43,7 @@ Planner → Research → ETL → Knowledge Graph + Vector → Analysis Agents �
 
 ---
 
-## Phase 1 — Infrastructure
+## Phase 1 — Infrastructure（MVP Done）
 
 **目标：** Compose 一键拉起数据面与网关依赖。
 
@@ -74,7 +74,7 @@ Planner → Research → ETL → Knowledge Graph + Vector → Analysis Agents �
 
 ---
 
-## Phase 2 — Agent Runtime
+## Phase 2 — Agent Runtime（MVP Done）
 
 **目标：** LangGraph Runtime + Supervisor 最小闭环。
 
@@ -102,7 +102,7 @@ Planner → Research → ETL → Knowledge Graph + Vector → Analysis Agents �
 
 ---
 
-## Phase 3 — Knowledge Engine
+## Phase 3 — Knowledge Engine（MVP Done）
 
 **目标：** ETL + Hybrid 检索可用。
 
@@ -131,7 +131,7 @@ Planner → Research → ETL → Knowledge Graph + Vector → Analysis Agents �
 
 ---
 
-## Phase 4 — Research Agent & Reports
+## Phase 4 — Research Agent & Reports（MVP Done）
 
 **目标：** 端到端深度研究 + 可发布报告。
 
@@ -155,7 +155,7 @@ Planner → Research → ETL → Knowledge Graph + Vector → Analysis Agents �
 
 ---
 
-## Phase 5 — Engineering / Industrial Intelligence
+## Phase 5 — Engineering / Industrial Intelligence（Stub Done）
 
 **目标：** 工程副驾驶与工业知识域扩展。
 

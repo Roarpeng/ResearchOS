@@ -1,0 +1,246 @@
+# ResearchOS Phase 1 — data plane + LiteLLM + Gateway skeleton
+# Usage (from this directory):
+#   docker compose --env-file ../env/.env up -d
+# Optional profiles: search | export | automation | gpu
+
+name: researchos
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: researchos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: researchos
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks: [ros_internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U researchos -d researchos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    <<: *restart
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks: [ros_internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    <<: *restart
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    networks: [ros_internal]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    <<: *restart
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    networks: [ros_internal]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    <<: *restart
+
+  neo4j:
+    image: neo4j:5
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    networks: [ros_internal]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    <<: *restart
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    volumes:
+      - ../configs/litellm.yaml:/app/config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    networks: [ros_internal]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')\" || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 8
+      start_period: 30s
+    <<: *restart
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: gateway/Dockerfile
+    environment:
+      ENV: ${ENV:-dev}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://researchos:${POSTGRES_PASSWORD}@postgres:5432/researchos
+      REDIS_URL: redis://redis:6379/0
+      RUNTIME_BASE_URL: ${RUNTIME_BASE_URL:-}
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_DEFAULT_MODEL: ${LITELLM_DEFAULT_MODEL:-default}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_TTL_SECONDS: ${JWT_TTL_SECONDS:-1800}
+      REFRESH_TTL_SECONDS: ${REFRESH_TTL_SECONDS:-604800}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      AUTH_API_KEYS_ENABLED: ${AUTH_API_KEYS_ENABLED:-true}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      QDRANT_URL: http://qdrant:6333
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET_DOCUMENTS: ${MINIO_BUCKET_DOCUMENTS:-ros-documents}
+      MINIO_BUCKET_REPORTS: ${MINIO_BUCKET_REPORTS:-ros-reports}
+      OPENSEARCH_URL: ${OPENSEARCH_URL:-}
+      GOTENBERG_URL: ${GOTENBERG_URL:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      ENABLE_OPENSEARCH: ${ENABLE_OPENSEARCH:-false}
+      ENABLE_PDF_EXPORT: ${ENABLE_PDF_EXPORT:-false}
+      ENABLE_N8N_HOOKS: ${ENABLE_N8N_HOOKS:-false}
+      DEV_API_KEY: ${DEV_API_KEY:-ros_ak_dev_change_me}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+    networks: [ros_public, ros_internal]
+    <<: *restart
+
+  # ---- profile: search ----
+  opensearch:
+    profiles: ["search"]
+    image: opensearchproject/opensearch:2
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms1g -Xmx1g
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    ports:
+      - "${OPENSEARCH_PORT:-9200}:9200"
+    networks: [ros_internal]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    <<: *restart
+
+  # ---- profile: export ----
+  gotenberg:
+    profiles: ["export"]
+    image: gotenberg/gotenberg:8
+    ports:
+      - "${GOTENBERG_PORT:-3001}:3000"
+    networks: [ros_internal]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    <<: *restart
+
+  # ---- profile: automation (PERIPHERAL ONLY — see deploy/optional/n8n/README.md) ----
+  n8n:
+    profiles: ["automation"]
+    image: n8nio/n8n:latest
+    environment:
+      N8N_HOST: ${N8N_HOST:-localhost}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678/}
+      GENERIC_TIMEZONE: Asia/Shanghai
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ../optional/n8n:/optional:ro
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    networks: [ros_public, ros_internal]
+    <<: *restart
+
+  # ---- profile: gpu ----
+  ollama:
+    profiles: ["gpu"]
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    networks: [ros_internal]
+    # For NVIDIA: compose override with deploy.resources.reservations.devices
+    <<: *restart
+
+volumes:
+  pg_data:
+  redis_data:
+  minio_data:
+  qdrant_data:
+  neo4j_data:
+  neo4j_logs:
+  opensearch_data:
+  n8n_data:
+  ollama_models:
+
+networks:
+  ros_public:
+  ros_internal:

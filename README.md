@@ -141,7 +141,7 @@ ResearchOS/
 └── ROADMAP.md
 ```
 
-> 当前仓库处于 **Architecture / Docs** 阶段，代码目录将按上述布局逐步落地。
+> 代码目录已按上述布局落地（Phase 1–5 MVP / Stub）。
 
 ---
 
@@ -149,12 +149,12 @@ ResearchOS/
 
 | 阶段 | 状态 |
 |------|------|
-| Phase 0 — Architecture & Docs | **文档体系已补齐（本阶段）** |
-| Phase 1 — Infrastructure | 计划中 |
-| Phase 2 — Agent Runtime | 计划中 |
-| Phase 3 — Knowledge Engine | 计划中 |
-| Phase 4 — Research Agent & Reports | 计划中 |
-| Phase 5 — Engineering / Industrial Copilot | 计划中 |
+| Phase 0 — Architecture & Docs | **Done** |
+| Phase 1 — Infrastructure | **MVP Done**（Compose + Gateway） |
+| Phase 2 — Agent Runtime | **MVP Done**（LangGraph + HITL） |
+| Phase 3 — Knowledge Engine | **MVP Done**（Hybrid/RRF + 内存后端） |
+| Phase 4 — Research Agent & Reports | **MVP Done**（全链路 Agent + Report MCP） |
+| Phase 5 — Engineering / Industrial Copilot | **Stub Done**（连接器 + Decision Memo） |
 
 详见 [`ROADMAP.md`](./ROADMAP.md)。
 
@@ -162,14 +162,28 @@ ResearchOS/
 
 ## Quick Start
 
-文档阶段：
-
 ```bash
-# 阅读文档索引
-open docs/README.md   # 或使用编辑器打开
+# 安装
+uv venv .venv --python 3.13 && uv pip install -e ".[dev]"
+
+# Gateway（无依赖也可 degraded ready）
+DEV_AUTO_APPROVE=true .venv/bin/uvicorn gateway.app.main:app --port 8000
+
+# Runtime（另开终端）
+DEV_AUTO_APPROVE=true .venv/bin/researchos-runtime
+
+# 前端
+cd frontend && npm install && npm run dev
+
+# Compose 数据面
+cp deploy/env/.env.example deploy/env/.env
+cd deploy/compose && docker compose --env-file ../env/.env up -d
+
+# 测试
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest -p pytest_asyncio tests/ -q
 ```
 
-基础设施与运行时启动指南将在 Phase 1–2 随 `deploy/` 提供。
+更多见 [`deploy/README.md`](./deploy/README.md)。
 
 ---
 
