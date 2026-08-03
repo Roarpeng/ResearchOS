@@ -30,7 +30,11 @@ class DocumentUploadResponse(BaseModel):
     knowledge_space_id: str
     title: str | None = None
     status: str = "queued"
-    message: str = "stub: ingestion not yet wired"
+    message: str = ""
+    chunk_count: int = 0
+    entity_count: int = 0
+    channels: dict[str, bool] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SearchRequest(BaseModel):
@@ -52,4 +56,6 @@ class SearchHit(BaseModel):
 class SearchResponse(BaseModel):
     query: str
     hits: list[SearchHit]
-    message: str = "stub: retrieval not yet wired"
+    passages: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    message: str = ""

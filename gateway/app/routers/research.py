@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from gateway.app.deps import PrincipalDep, RequestIdDep
 from gateway.app.schemas.common import ApiResponse
-from gateway.app.schemas.research import ResearchTask, ResearchTaskCreate
+from gateway.app.schemas.research import ResearchTask, ResearchTaskCreate, ResumeRequest
 from gateway.app.services import store as mem
 from gateway.app.services.runtime_client import RuntimeClient
 from gateway.app.services.store import new_task
@@ -112,3 +112,66 @@ async def task_events_stub(task_id: str, principal: PrincipalDep) -> dict:
             "message": "stub: use WebSocket /api/v1/ws/research/{task_id} for streaming",
         },
     }
+
+
+@router.post("/tasks/{task_id}/resume", response_model=ApiResponse[ResearchTask])
+async def resume_task(
+    task_id: str,
+    body: ResumeRequest,
+    request: Request,
+    principal: PrincipalDep,
+    request_id: RequestIdDep,
+) -> ApiResponse[ResearchTask]:
+    """Resume a task waiting for human approval (HITL)."""
+    task = mem.store.tasks.get(task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND_TASK", "message": "Task not found"},
+        )
+
+    runtime: RuntimeClient = request.app.state.runtime_client
+    upstream = await runtime.resume_task(
+        task_id,
+        resolution=body.resolution,
+        interrupt_id=body.interrupt_id,
+    )
+    if upstream:
+        task["status"] = upstream.get("status", task["status"])
+        task["result"] = upstream
+        task["updated_at"] = datetime.now(timezone.utc)
+
+    return ApiResponse(
+        ok=True,
+        data=ResearchTask.model_validate(task),
+        request_id=request_id,
+    )
+
+
+@router.post("/tasks/{task_id}/cancel", response_model=ApiResponse[ResearchTask])
+async def cancel_task(
+    task_id: str,
+    request: Request,
+    principal: PrincipalDep,
+    request_id: RequestIdDep,
+) -> ApiResponse[ResearchTask]:
+    """Cancel a running or waiting research task."""
+    task = mem.store.tasks.get(task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND_TASK", "message": "Task not found"},
+        )
+
+    runtime: RuntimeClient = request.app.state.runtime_client
+    upstream = await runtime.cancel_task(task_id)
+    task["status"] = "cancelled"
+    task["updated_at"] = datetime.now(timezone.utc)
+    if upstream:
+        task["result"] = upstream
+
+    return ApiResponse(
+        ok=True,
+        data=ResearchTask.model_validate(task),
+        request_id=request_id,
+    )

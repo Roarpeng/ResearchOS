@@ -51,3 +51,13 @@ class ResearchTask(BaseModel):
     stream: StreamLinks | None = None
     result: dict[str, Any] | None = None
     error: str | None = None
+    plan: Any = None
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    interrupts: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ResumeRequest(BaseModel):
+    resolution: str | dict[str, Any] = "approve"
+    interrupt_id: str | None = None

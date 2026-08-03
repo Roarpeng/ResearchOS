@@ -1,7 +1,8 @@
-"""Knowledge upload/search stubs."""
+"""Knowledge upload/search — wired to KnowledgePipeline."""
 
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
@@ -18,6 +19,8 @@ from gateway.app.schemas.knowledge import (
 )
 from gateway.app.services import store as mem
 from gateway.app.services.store import new_space
+
+logger = logging.getLogger("researchos.gateway.knowledge")
 
 router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
 
@@ -84,16 +87,62 @@ async def upload_document(
         )
     doc_id = f"doc_{uuid4().hex[:16]}"
     space = mem.store.spaces[kb_id]
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "EMPTY_FILE", "message": "Uploaded file is empty"},
+        )
+
+    # Wire to real KnowledgePipeline (graceful fallback if unavailable)
+    chunk_count = 0
+    entity_count = 0
+    channels: dict[str, bool] = {}
+    warnings: list[str] = []
+    ingest_status = "queued"
+    try:
+        from knowledge.pipeline import KnowledgePipeline
+
+        pipeline = KnowledgePipeline()
+        result = pipeline.ingest_bytes(
+            data,
+            filename=file.filename,
+            mime_type=file.content_type,
+            workspace_id=space.get("workspace_id"),
+            title=title or file.filename,
+            doc_id=doc_id,
+        )
+        chunk_count = result.chunk_count
+        entity_count = result.entity_count
+        channels = result.channels
+        warnings = result.warnings
+        ingest_status = result.status
+        logger.info(
+            "ingested doc_id=%s chunks=%d entities=%d status=%s",
+            doc_id, chunk_count, entity_count, ingest_status,
+        )
+    except ImportError:
+        warnings.append("knowledge_pipeline_not_available")
+        logger.warning("knowledge pipeline not importable; returning stub")
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"ingest_failed:{exc}")
+        logger.exception("document ingest failed")
+        ingest_status = "failed"
+
     space["document_count"] = int(space.get("document_count", 0)) + 1
-    await file.read(1024)  # drain a bit; full ingest arrives in Phase 3
     return ApiResponse(
         ok=True,
         data=DocumentUploadResponse(
             id=doc_id,
             knowledge_space_id=kb_id,
             title=title or file.filename,
-            status="queued",
-            message="stub: ingestion not yet wired",
+            status=ingest_status,
+            message="ingested" if ingest_status != "failed" else "ingestion failed",
+            chunk_count=chunk_count,
+            entity_count=entity_count,
+            channels=channels,
+            warnings=warnings,
         ),
         request_id=request_id,
     )
@@ -105,16 +154,50 @@ async def search(
     principal: PrincipalDep,
     request_id: RequestIdDep,
 ) -> ApiResponse[SearchResponse]:
-    placeholder = SearchHit(
-        citation_id=f"cit_{uuid4().hex[:10]}",
-        score=0.0,
-        text="stub hit — wire Hybrid GraphRAG in Phase 3",
-        source_id="src_stub",
-        locator=None,
-        metadata={"query": body.query, "mode": body.mode},
-    )
+    hits: list[SearchHit] = []
+    passages: list[dict] = []
+    diagnostics: dict = {}
+    message = ""
+
+    try:
+        from knowledge.pipeline import KnowledgePipeline
+
+        pipeline = KnowledgePipeline()
+        pack = pipeline.search(body.query, top_k=body.top_k)
+        passages = pack.get("passages") or []
+        diagnostics = pack.get("diagnostics") or {}
+        for p in passages:
+            cit = p.get("citation") or {}
+            hits.append(
+                SearchHit(
+                    citation_id=cit.get("source_id") or p.get("chunk_id", ""),
+                    score=float(p.get("score", 0.0)),
+                    text=p.get("text", "")[:500],
+                    source_id=cit.get("source_id") or p.get("source_id", ""),
+                    locator=cit.get("locator"),
+                    metadata={
+                        "channels": p.get("channels", []),
+                        "chunk_id": p.get("chunk_id", ""),
+                    },
+                )
+            )
+        message = f"retrieved {len(hits)} passages via hybrid RRF"
+        logger.info("search query=%r hits=%d", body.query[:80], len(hits))
+    except ImportError:
+        message = "knowledge_pipeline_not_available"
+        logger.warning("knowledge pipeline not importable for search")
+    except Exception as exc:  # noqa: BLE001
+        message = f"search_failed:{exc}"
+        logger.exception("hybrid search failed")
+
     return ApiResponse(
         ok=True,
-        data=SearchResponse(query=body.query, hits=[placeholder]),
+        data=SearchResponse(
+            query=body.query,
+            hits=hits,
+            passages=passages[:body.top_k],
+            diagnostics=diagnostics,
+            message=message,
+        ),
         request_id=request_id,
     )

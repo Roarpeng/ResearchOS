@@ -185,6 +185,26 @@ def resume_run(task_id: str, body: ResumeRequest) -> dict[str, Any]:
     return summary
 
 
+@app.post("/runs/{task_id}/cancel")
+def cancel_run(task_id: str) -> dict[str, Any]:
+    graph = get_compiled_graph()
+    config = _thread_config(task_id)
+    snap = graph.get_state(config)
+    if snap is None or (not snap.values and task_id not in _RUNS):
+        raise HTTPException(status_code=404, detail="run not found")
+
+    values = dict(snap.values or {}) if snap.values else dict(_RUNS.get(task_id) or {})
+    values["status"] = TaskStatus.CANCELLED.value
+    values["route"] = "end"
+    _RUNS[task_id] = {
+        "task_id": task_id,
+        "status": TaskStatus.CANCELLED.value,
+        "result": values.get("result"),
+        "events": values.get("events") or [],
+    }
+    return {"task_id": task_id, "status": "cancelled"}
+
+
 def run() -> None:
     import uvicorn
 
