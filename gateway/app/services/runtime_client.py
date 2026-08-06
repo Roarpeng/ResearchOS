@@ -43,6 +43,12 @@ class RuntimeClient:
                 "workflow": payload.get("mode") or "deep_research",
                 "task_id": payload.get("task_id"),
             }
+            export_dir = (payload.get("tia_export_dir") or "").strip()
+            if export_dir:
+                body["tia_export_dir"] = export_dir
+            # Map UI modes to runtime workflow names used by the planner.
+            if body["workflow"] in {"deep", "quick"}:
+                body["workflow"] = "deep_research"
             resp = await self._client.post("/runs", json=body)
             resp.raise_for_status()
             return resp.json()

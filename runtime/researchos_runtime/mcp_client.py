@@ -36,6 +36,8 @@ class MCPClient:
         try:
             if name in ("hello.echo", "hello_echo", "echo"):
                 result = self._call_hello_echo(args)
+            elif name.startswith("plc."):
+                result = self._call_plc(name, args)
             else:
                 raise ValueError(f"Unsupported MCP tool: {name}")
             duration_ms = int((time.perf_counter() - started) * 1000)
@@ -62,6 +64,25 @@ class MCPClient:
         if mode == "stdio":
             return self._call_hello_stdio(message=message, task_id=task_id)
         return hello_echo(message, task_id=task_id)
+
+    def _call_plc(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Dispatch plc.* tools to the in-process mcp-plc implementation."""
+        from tools.plc import server as plc_server
+
+        args = {k: v for k, v in args.items() if k != "task_id"}
+        dispatch = {
+            "plc.vendors.list": plc_server.plc_vendors_list,
+            "plc.manual.search": plc_server.plc_manual_search,
+            "plc.manual.get": plc_server.plc_manual_get,
+            "plc.alarm.explain": plc_server.plc_alarm_explain,
+            "plc.tia.analyze": plc_server.plc_tia_analyze,
+            "plc.program.download": plc_server.plc_program_download,
+            "plc.program.upload_suggest": plc_server.plc_program_upload_suggest,
+        }
+        fn = dispatch.get(name)
+        if fn is None:
+            raise ValueError(f"Unsupported PLC tool: {name}")
+        return fn(**args)
 
     def _call_hello_stdio(self, *, message: str, task_id: str | None) -> dict[str, Any]:
         """Invoke tools/hello MCP server over stdio (sync helper)."""

@@ -14,6 +14,7 @@ def get_agent_registry() -> dict[str, AgentFn]:
     from agents.analysis.node import run as analysis_run
     from agents.citation.node import run as citation_run
     from agents.memory.node import run as memory_run
+    from agents.plc.node import run as plc_run
     from agents.research.node import run as research_run
     from agents.reviewer.node import run as reviewer_run
     from agents.writer.node import run as writer_run
@@ -25,6 +26,7 @@ def get_agent_registry() -> dict[str, AgentFn]:
         "reviewer": reviewer_run,
         "writer": writer_run,
         "memory": memory_run,
+        "plc": plc_run,
     }
 
 

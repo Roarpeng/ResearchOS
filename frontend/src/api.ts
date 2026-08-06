@@ -32,13 +32,20 @@ export type TaskCreateResponse = {
   detail?: string;
 };
 
-export async function createResearchTask(query: string, mode: string) {
+export async function createResearchTask(
+  query: string,
+  mode: string,
+  options?: { tiaExportDir?: string },
+) {
   const res = await fetch(`${GATEWAY_BASE}/api/v1/research/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({
       query,
       mode,
+      ...(options?.tiaExportDir?.trim()
+        ? { tia_export_dir: options.tiaExportDir.trim() }
+        : {}),
       options: {
         language: "zh-CN",
         enable_web: true,

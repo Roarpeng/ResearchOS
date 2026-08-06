@@ -30,6 +30,11 @@ class ResearchTaskCreate(BaseModel):
     workspace_id: str | None = None
     session_id: str | None = None
     mode: Literal["quick", "deep", "industrial"] = "deep"
+    tia_export_dir: str | None = Field(
+        default=None,
+        max_length=1024,
+        description="Optional TIA Openness export directory for PLC agent analysis",
+    )
     options: ResearchOptions = Field(default_factory=ResearchOptions)
     context: ResearchContext = Field(default_factory=ResearchContext)
 

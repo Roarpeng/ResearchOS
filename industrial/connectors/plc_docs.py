@@ -61,16 +61,29 @@ class FakePlcDocsConnector:
         return sorted({e.vendor for e in FAKE_CATALOG})
 
     def search(self, query: str, *, limit: int = 10) -> list[PlcDocEntry]:
-        q = query.lower()
-        hits = [
-            e
-            for e in FAKE_CATALOG
-            if q in e.title.lower()
-            or q in e.summary.lower()
-            or q in e.vendor.lower()
-            or q in e.family.lower()
-        ]
-        return hits[:limit]
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+
+        def _haystack(e: PlcDocEntry) -> str:
+            return " ".join(
+                [e.title, e.summary, e.vendor, e.family, *e.tags]
+            ).lower()
+
+        # Exact phrase match first, then token-level scoring for compound queries.
+        phrase_hits = [e for e in FAKE_CATALOG if q in _haystack(e)]
+        if phrase_hits:
+            return phrase_hits[:limit]
+
+        tokens = [t for t in q.replace("-", " ").split() if len(t) >= 3]
+        scored: list[tuple[int, int, PlcDocEntry]] = []
+        for order, e in enumerate(FAKE_CATALOG):
+            hay = _haystack(e)
+            score = sum(1 for t in tokens if t in hay)
+            if score:
+                scored.append((score, order, e))
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        return [e for _, _, e in scored[:limit]]
 
     def get(self, doc_id: str) -> PlcDocEntry | None:
         for e in FAKE_CATALOG:

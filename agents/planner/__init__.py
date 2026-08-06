@@ -24,13 +24,33 @@ DEFAULT_STEPS: list[tuple[str, str, str]] = [
     ("S6", "Persist memory", "memory"),
 ]
 
+# Industrial mode (Phase 5): insert the read-only PLC agent after evidence
+# gathering so manual cross-reference precedes analysis.
+INDUSTRIAL_STEPS: list[tuple[str, str, str]] = [
+    ("S1", "Gather evidence", "research"),
+    ("S2", "PLC manual cross-reference", "plc"),
+    ("S3", "Domain analysis", "analysis"),
+    ("S4", "Normalize citations", "citation"),
+    ("S5", "Quality review", "reviewer"),
+    ("S6", "Write report", "writer"),
+    ("S7", "Persist memory", "memory"),
+]
 
-def build_rule_based_plan(raw_query: str, *, version: int = 1) -> Plan:
+
+def _steps_for_workflow(workflow: str) -> list[tuple[str, str, str]]:
+    if str(workflow or "").strip().lower() in {"industrial", "engineering"}:
+        return INDUSTRIAL_STEPS
+    return DEFAULT_STEPS
+
+
+def build_rule_based_plan(
+    raw_query: str, *, version: int = 1, workflow: str = "deep_research"
+) -> Plan:
     """Produce a simple research → analysis → reviewer → writer plan."""
     query = (raw_query or "").strip() or "Untitled research goal"
     steps: list[PlanStep] = []
     prev_id: str | None = None
-    for step_id, title, agent in DEFAULT_STEPS:
+    for step_id, title, agent in _steps_for_workflow(workflow):
         step: PlanStep = {
             "id": step_id,
             "title": title,
@@ -63,7 +83,7 @@ def _try_llm_plan(raw_query: str, *, version: int) -> Plan | None:
     prompt = (
         "Return ONLY JSON with keys summary (str) and steps "
         "(list of {id,title,agent,depends_on}). "
-        "Agents must be among: research, analysis, citation, reviewer, writer, memory. "
+        "Agents must be among: research, analysis, citation, reviewer, writer, memory, plc. "
         f"Goal: {raw_query}"
     )
     try:
@@ -119,12 +139,13 @@ def _try_llm_plan(raw_query: str, *, version: int) -> Plan | None:
 def plan_from_goal(state: TaskState) -> Plan:
     goal = state.get("goal") or {}
     raw_query = str(goal.get("raw_query") or "")
+    workflow = str(goal.get("workflow") or "deep_research")
     current = state.get("plan") or {}
     version = int(current.get("version") or 0) + 1
     llm_plan = _try_llm_plan(raw_query, version=version)
     if llm_plan is not None:
         return llm_plan
-    return build_rule_based_plan(raw_query, version=version)
+    return build_rule_based_plan(raw_query, version=version, workflow=workflow)
 
 
 def planner_node(state: TaskState) -> dict[str, Any]:

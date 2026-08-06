@@ -18,6 +18,7 @@ KNOWN_WORKER_ROUTES = {
     "reviewer",
     "writer",
     "memory",
+    "plc",
     "human_interrupt",
     "end",
 }
@@ -32,6 +33,7 @@ AGENT_TO_NODE = {
     "reviewer": "reviewer",
     "writer": "writer",
     "memory": "memory",
+    "plc": "plc",
     "human_interrupt": "human_interrupt",
     "end": "end",
 }

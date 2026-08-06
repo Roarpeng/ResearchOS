@@ -28,6 +28,10 @@ class StartRunRequest(BaseModel):
     workflow: str = "deep_research"
     task_id: str | None = None
     auto_approve: bool | None = None
+    tia_export_dir: str | None = Field(
+        default=None,
+        description="Optional path to TIA Openness SimaticML export folder for PLC agent",
+    )
 
 
 class ResumeRequest(BaseModel):
@@ -100,7 +104,12 @@ def start_run(body: StartRunRequest) -> dict[str, Any]:
 
         os.environ["DEV_AUTO_APPROVE"] = "true" if body.auto_approve else "false"
 
-    state = initial_state(task_id, body.goal, workflow=body.workflow)
+    state = initial_state(
+        task_id,
+        body.goal,
+        workflow=body.workflow,
+        tia_export_dir=body.tia_export_dir,
+    )
     state["status"] = TaskStatus.RUNNING.value
     state["events"] = [
         make_event("task_started", task_id, {"workflow": body.workflow})

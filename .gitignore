@@ -23,6 +23,7 @@ graphflow-out/
 Cursor/
 data/
 *.log
+PLC_Openness_data/
 
 # IDE / OS
 .idea/

@@ -20,18 +20,28 @@ Agent
 
 现场协议（Modbus、OPC UA、厂商 SDK）若启用，必须运行在 **工控 DMZ 侧车**，由 MCP 暴露最小只读面。
 
-## MCP：`mcp-plc`（目标能力）
+## MCP：`mcp-plc`（已实现 vs 目标）
 
-| 工具 | 默认 | 说明 |
-|------|------|------|
-| `plc.manual.search` | 开 | 在已入库手册中检索 |
-| `plc.alarm.explain` | 开 | 报警码 → 候选原因（必须带引用） |
-| `plc.st.parse` | 开 | 解析 Structured Text 片段为符号表/粗 AST |
-| `plc.ld.summarize` | 开 | 梯形图导出格式的摘要（依赖可解析表示） |
-| `plc.diff.routines` | 开 | 两版本逻辑差异摘要 |
-| `plc.opcua.read` | 关 | 读节点值；需网络策略白名单 |
-| `plc.program.download` | 关 | **高危**；默认不实现或永拒 |
-| `plc.program.upload_suggest` | 关 | 生成可下载产物供工程师人工导入 |
+| 工具 | 默认 | 状态 | 说明 |
+|------|------|------|------|
+| `plc.manual.search` / `get` / `vendors.list` | 开 | **已实现** | 手册目录检索（当前为 fake catalog stub） |
+| `plc.alarm.explain` | 开 | **已实现** | 报警码 → 候选原因（必须带手册引用） |
+| `plc.tia.analyze` | 开 | **已实现** | Openness SimaticML 导出 → IR / KG / SCL（只读） |
+| `plc.st.parse` | 开 | 目标 | 解析 Structured Text 片段 |
+| `plc.ld.summarize` | 开 | 目标 | 梯形图摘要 |
+| `plc.diff.routines` | 开 | 目标 | 两版本逻辑差异 |
+| `plc.opcua.read` | 关 | 目标 | 读节点值 |
+| `plc.program.download` | 关 | **已实现为永拒** | 高危；默认禁用且无写设备实现 |
+| `plc.program.upload_suggest` | 关 | stub | 需显式 flag；当前未生成产物 |
+
+### 自测：用你自己的 TIA 工程
+
+1. 导出：`industrial/tia_adapter/ExportProject.ps1 -ProjectPath <项目.apxx> -ExportDir <导出目录> -TiaVersion V19`
+2. 离线分析：`researchos-tia-cli --exports <导出目录> --out .\scl_out --kg kg.json`
+3. Agent：`mode=industrial` + `tia_export_dir=<导出目录>`（Gateway/前端/环境变量 `RESEARCHOS_TIA_EXPORTS` 均可）
+
+详见 `industrial/tia_adapter/README.md` 与 `industrial/README.md`。
+
 
 ## 安全与责任边界
 

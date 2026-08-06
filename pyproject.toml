@@ -54,6 +54,8 @@ researchos-mcp-hello = "tools.hello.server:main"
 researchos-mcp-documents = "tools.documents.server:main"
 researchos-mcp-vector = "tools.vector_store.server:main"
 researchos-mcp-kg = "tools.knowledge_graph.server:main"
+researchos-mcp-plc = "tools.plc.server:main"
+researchos-tia-cli = "agents.plc.tia_cli:main"
 
 [build-system]
 requires = ["hatchling"]

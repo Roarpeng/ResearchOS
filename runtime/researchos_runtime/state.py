@@ -158,15 +158,29 @@ def default_budgets() -> Budgets:
     }
 
 
-def initial_state(task_id: str, raw_query: str, workflow: str = "deep_research") -> TaskState:
+def initial_state(
+    task_id: str,
+    raw_query: str,
+    workflow: str = "deep_research",
+    *,
+    tia_export_dir: str | None = None,
+    meta: dict[str, Any] | None = None,
+) -> TaskState:
+    export_dir = (tia_export_dir or "").strip()
+    goal: dict[str, Any] = {
+        "raw_query": raw_query,
+        "workflow": workflow,
+        "locale": "zh-CN",
+    }
+    if export_dir:
+        goal["tia_export_dir"] = export_dir
+    state_meta: dict[str, Any] = dict(meta or {})
+    if export_dir:
+        state_meta["plc_tia_export_dir"] = export_dir
     return {
         "task_id": task_id,
         "thread_id": task_id,
-        "goal": {
-            "raw_query": raw_query,
-            "workflow": workflow,
-            "locale": "zh-CN",
-        },
+        "goal": goal,
         "plan": {"version": 1, "approved": False, "steps": []},
         "evidence": [],
         "citations": [],
@@ -180,7 +194,7 @@ def initial_state(task_id: str, raw_query: str, workflow: str = "deep_research")
         "events": [],
         "tool_traces": [],
         "review": None,
-        "meta": {},
+        "meta": state_meta,
     }
 
 

@@ -30,6 +30,7 @@ WORKER_AGENTS = (
     "reviewer",
     "writer",
     "memory",
+    "plc",
 )
 
 RouteName = Literal[
@@ -41,6 +42,7 @@ RouteName = Literal[
     "reviewer",
     "writer",
     "memory",
+    "plc",
     "human_interrupt",
     "end",
 ]
@@ -102,7 +104,7 @@ def _wrap_agent(agent_name: str):
                 meta["writer_draft_mode"] = True
             else:
                 # Reset research chain for one more pass
-                reset_agents = {"research", "analysis", "citation", "reviewer"}
+                reset_agents = {"research", "analysis", "citation", "reviewer", "plc"}
                 plan = {
                     **plan,
                     "steps": [

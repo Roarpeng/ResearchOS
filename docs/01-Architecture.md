@@ -65,6 +65,7 @@ flowchart TD
 | Reviewer | 覆盖度、矛盾、引用、幻觉风险 |
 | Writer | Markdown 报告与结构 |
 | Memory | 短/长期记忆写入与去重策略 |
+| PLC（工业扩展） | PLC 手册对照、变更建议、安全核查；默认只读（Phase 5） |
 
 Supervisor **不**亲自做深度检索与长文写作。
 

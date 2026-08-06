@@ -49,6 +49,7 @@ export default function App() {
     "对比协作机器人在力控与安全认证上的差异，并给出选型建议",
   );
   const [mode, setMode] = useState("deep");
+  const [tiaExportDir, setTiaExportDir] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("就绪 — 连接到 Gateway 后创建任务");
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -98,7 +99,9 @@ export default function App() {
     setCitations([]);
     setInterrupts([]);
     try {
-      const created = await createResearchTask(query.trim(), mode);
+      const created = await createResearchTask(query.trim(), mode, {
+        tiaExportDir: mode === "industrial" ? tiaExportDir : undefined,
+      });
       const task = unwrapTask(created);
       const id = task.id;
       if (!id) throw new Error("响应缺少 task id");
@@ -246,6 +249,18 @@ export default function App() {
               <option value="industrial">industrial</option>
             </select>
           </div>
+          {mode === "industrial" ? (
+            <div className="field">
+              <label htmlFor="tia-export-dir">TIA 导出目录（可选）</label>
+              <input
+                id="tia-export-dir"
+                type="text"
+                value={tiaExportDir}
+                onChange={(e) => setTiaExportDir(e.target.value)}
+                placeholder="例如 C:\Export\MyLine（Openness SimaticML 导出）"
+              />
+            </div>
+          ) : null}
           <div className="actions">
             <button className="btn btn-primary" type="submit" disabled={busy}>
               {busy ? "处理中…" : "创建任务"}
