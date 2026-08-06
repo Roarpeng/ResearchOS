@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from agents.plc.tia import analyze_tia_exports
+from agents.plc.tia import analyze_plc_project
 from industrial.connectors.plc_docs import (
     FakePlcDocsConnector,
     PlcDocEntry,
@@ -177,11 +177,14 @@ def _safety_block(query: str, hits: list[PlcDocEntry], task_id: str) -> dict[str
 
 
 def _tia_export_dir(state: TaskState, goal: dict[str, Any]) -> str:
-    """Locate an Openness export dir from state meta / goal / env."""
+    """Locate a .apxx project or Openness export dir from state / goal / env."""
     meta = state.get("meta") or {}
     for candidate in (
+        meta.get("plc_tia_project"),
         meta.get("plc_tia_export_dir"),
+        goal.get("tia_project"),
         goal.get("tia_export_dir"),
+        os.getenv("RESEARCHOS_TIA_PROJECT", ""),
         os.getenv("RESEARCHOS_TIA_EXPORTS", ""),
     ):
         text = str(candidate or "").strip()
@@ -191,25 +194,30 @@ def _tia_export_dir(state: TaskState, goal: dict[str, Any]) -> str:
 
 
 def _tia_analysis_block(
-    state: TaskState, export_dir: str
+    state: TaskState, project_or_export: str
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Run the offline TIA pipeline; returns (analysis block, tool trace)."""
+    """Run Offline Analyzer (.apxx or export dir); returns (block, tool trace)."""
     started = time.monotonic()
+    result_dir = str((state.get("meta") or {}).get("plc_result_dir") or "").strip()
     try:
-        result = analyze_tia_exports(export_dir)
+        result = analyze_plc_project(
+            project_or_export,
+            result_dir=result_dir,
+            auto_export=True,
+        )
     except Exception as exc:  # advisory agent must not crash the graph
         duration_ms = int((time.monotonic() - started) * 1000)
         trace = {
-            "tool": "plc.tia.analyze",
-            "args": {"export_dir": export_dir},
+            "tool": "plc.project.analyze",
+            "args": {"path": project_or_export, "result_dir": result_dir},
             "result_summary": f"error={exc}",
             "ok": False,
             "duration_ms": duration_ms,
         }
         block = {
             "specialty": "plc_tia_analysis",
-            "content": f"## TIA Project Analysis\nFailed to analyze exports at "
-            f"`{export_dir}`: {exc}",
+            "content": f"## TIA Project Analysis\nFailed to analyze "
+            f"`{project_or_export}`: {exc}",
             "gaps": ["tia_analysis_failed"],
             "citation_ids": [],
         }
@@ -217,11 +225,13 @@ def _tia_analysis_block(
 
     project = result["project"]
     duration_ms = int((time.monotonic() - started) * 1000)
+    conversion = result.get("conversion_report") or {}
     trace = {
-        "tool": "plc.tia.analyze",
-        "args": {"export_dir": export_dir},
+        "tool": "plc.project.analyze",
+        "args": {"path": project_or_export, "result_dir": result_dir},
         "result_summary": (
             f"ok=True blocks={len(project.blocks)} "
+            f"converted={conversion.get('converted', 0)} "
             f"tag_tables={len(project.tag_tables)}"
         ),
         "ok": True,
@@ -235,6 +245,8 @@ def _tia_analysis_block(
         "citation_ids": [],
         "scl_sources": result["scl_sources"],
         "knowledge_graph": result["knowledge_graph"].to_json(),
+        "conversion_report": conversion,
+        "result_dir": result.get("result_dir") or "",
     }
     return block, trace
 

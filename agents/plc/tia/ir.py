@@ -154,6 +154,7 @@ class Block:
     networks: list[Network] = field(default_factory=list)
     source_text: str = ""  # original SCL/STL body when language is textual
     attributes: dict[str, str] = field(default_factory=dict)
+    source_file: str = ""  # path to original SimaticML XML export
 
     def interface_section(self, section: InterfaceSection) -> list[Variable]:
         return [v for v in self.interface if v.section == section]
@@ -163,6 +164,18 @@ class Block:
             if v.name == name:
                 return v
         return None
+
+    def is_protected(self) -> bool:
+        """True when know-how / password protection should block SCL conversion."""
+        truthy = {"true", "1", "yes", "on", "protected", "enabled"}
+        for key, raw in self.attributes.items():
+            k = key.lower().replace("-", "").replace("_", "")
+            v = (raw or "").strip().lower()
+            if "knowhow" in k or "protect" in k:
+                if v in truthy or v == "":
+                    return True
+        blob = f"{self.header_comment} {self.source_text}".lower()
+        return "know-how" in blob or "knowhow protect" in blob
 
 
 @dataclass

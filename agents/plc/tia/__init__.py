@@ -1,15 +1,18 @@
-"""TIA Portal Openness bridge for the PLC Agent.
+"""TIA Portal / Offline Analyzer bridge for the PLC Agent.
 
-- `simaticml`: SimaticML XML -> PLC-IR (offline, no TIA Portal needed)
-- `kg`: PLC-IR -> typed knowledge graph
-- `scl`: PLC-IR -> SCL translation
-- `pipeline`: end-to-end analysis entry point
+Pipeline (docs/agents/PLC Offline Analyzer Architecture.md):
 
-Live TIA extraction (requires TIA Portal + Siemens.Engineering.dll) is
-provided by `industrial/tia_adapter/ExportProject.ps1`, which produces
-the SimaticML export folder consumed by this package.
+    .apxx | export dir -> importer -> SimaticML -> PLC-IR -> KG + SCL + report package
 """
 
-from agents.plc.tia.pipeline import analyze_tia_exports, interpretation_report
+from agents.plc.tia.pipeline import (
+    analyze_plc_project,
+    analyze_tia_exports,
+    interpretation_report,
+)
 
-__all__ = ["analyze_tia_exports", "interpretation_report"]
+__all__ = [
+    "analyze_plc_project",
+    "analyze_tia_exports",
+    "interpretation_report",
+]

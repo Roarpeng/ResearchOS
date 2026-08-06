@@ -36,11 +36,15 @@ Agent
 
 ### 自测：用你自己的 TIA 工程
 
-1. 导出：`industrial/tia_adapter/ExportProject.ps1 -ProjectPath <项目.apxx> -ExportDir <导出目录> -TiaVersion V19`
-2. 离线分析：`researchos-tia-cli --exports <导出目录> --out .\scl_out --kg kg.json`
-3. Agent：`mode=industrial` + `tia_export_dir=<导出目录>`（Gateway/前端/环境变量 `RESEARCHOS_TIA_EXPORTS` 均可）
+**一键（推荐）**：你提供 `.apxx`，系统自动 Openness 导出 → 解析 → 逻辑理解 → SCL 结果包：
 
-详见 `industrial/tia_adapter/README.md` 与 `industrial/README.md`。
+```powershell
+researchos-tia-cli --project <项目.ap19> --result-dir .\ResearchOS_PLC_Result --json-summary
+```
+
+说明：`.apxx` 内部库不能纯离线拆包（见 Offline Analyzer 文档 Level 3）；本机需安装 TIA + Openness。若已有 SimaticML 导出目录，用 `--exports` 即可完全离线。
+
+详见 `docs/agents/PLC Offline Analyzer Architecture.md`、`industrial/tia_adapter/README.md`。
 
 
 ## 安全与责任边界

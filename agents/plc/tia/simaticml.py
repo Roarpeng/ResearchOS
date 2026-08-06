@@ -277,15 +277,25 @@ def parse_block_xml(path: Path) -> Block | None:
     name = _attr(sw_obj, "Name") or path.stem
     attrs: dict[str, str] = {}
     for node in sw_obj.iter():
-        if _strip_ns(node.tag) == "AttributeList":
+        tag = _strip_ns(node.tag)
+        if tag == "AttributeList":
             for attr_el in node:
-                tag = _strip_ns(attr_el.tag)
-                if tag == "Attribute":
+                child = _strip_ns(attr_el.tag)
+                if child == "Attribute":
                     attrs[_attr(attr_el, "Name")] = (attr_el.text or "").strip()
-                elif (attr_el.text or "").strip():
-                    # SimaticML stores Name/Number as direct child elements
-                    attrs.setdefault(tag, (attr_el.text or "").strip())
-            break
+                elif (attr_el.text or "").strip() or child:
+                    # Direct children (Name, Number, KnowHowProtection, …)
+                    attrs.setdefault(child, (attr_el.text or "").strip())
+        elif tag in {
+            "KnowHowProtection",
+            "WriteProtection",
+            "IsKnowHowProtected",
+            "SetKnowHowProtection",
+        }:
+            attrs.setdefault(tag, (node.text or "").strip() or "true")
+        elif tag == "BooleanAttribute" and "protect" in _attr(node, "Name").lower():
+            attrs[_attr(node, "Name")] = _attr(node, "Value") or (node.text or "").strip() or "true"
+
     name = _attr(sw_obj, "Name") or attrs.get("Name") or path.stem
 
     block_type = BlockType.DB
@@ -353,6 +363,7 @@ def parse_block_xml(path: Path) -> Block | None:
         networks=networks,
         source_text=_extract_source_text(sw_obj),
         attributes=attrs,
+        source_file=str(path),
     )
 
 

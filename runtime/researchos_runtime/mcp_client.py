@@ -76,6 +76,7 @@ class MCPClient:
             "plc.manual.get": plc_server.plc_manual_get,
             "plc.alarm.explain": plc_server.plc_alarm_explain,
             "plc.tia.analyze": plc_server.plc_tia_analyze,
+            "plc.project.analyze": plc_server.plc_project_analyze,
             "plc.program.download": plc_server.plc_program_download,
             "plc.program.upload_suggest": plc_server.plc_program_upload_suggest,
         }

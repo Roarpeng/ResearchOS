@@ -158,19 +158,43 @@ def test_cli_runs_end_to_end(tmp_path, capsys):
             str(FIXTURES),
             "--project-name",
             "MotorDemo",
-            "--out",
-            str(tmp_path / "scl"),
-            "--kg",
-            str(tmp_path / "kg.json"),
+            "--result-dir",
+            str(tmp_path / "ResearchOS_PLC_Result"),
             "--json-summary",
         ]
     )
     assert code == 0
     captured = capsys.readouterr()
     assert "#Running := ((#Start OR #Running)" in captured.out
-    assert (tmp_path / "scl" / "FB_Motor.scl").exists()
-    assert (tmp_path / "scl" / "Main.scl").exists()
-    assert (tmp_path / "kg.json").exists()
+    result_root = tmp_path / "ResearchOS_PLC_Result"
+    assert (result_root / "converted_scl" / "FB_Motor.scl").exists()
+    assert (result_root / "converted_scl" / "Main.scl").exists()
+    assert (result_root / "plc_ir" / "project.json").exists()
+    assert (result_root / "knowledge_graph" / "graph.json").exists()
+    assert (result_root / "reports" / "analysis.md").exists()
+    assert (result_root / "reports" / "conversion_report.json").exists()
+    assert (result_root / "manifest.json").exists()
+
+
+def test_analyze_plc_project_from_export_dir(tmp_path):
+    from agents.plc.tia import analyze_plc_project
+
+    result = analyze_plc_project(
+        str(FIXTURES),
+        project_name="MotorDemo",
+        result_dir=str(tmp_path / "out"),
+    )
+    assert result["import"]["source_kind"] == "export_dir"
+    assert result["conversion_report"]["total_blocks"] >= 3
+    assert result["conversion_report"]["converted"] >= 1
+    assert (tmp_path / "out" / "converted_scl" / "FB_Motor.scl").exists()
+
+
+def test_classify_input_apxx():
+    from agents.plc.tia.importer import classify_input
+
+    assert classify_input(Path("C:/x/Machine.ap19")) == "apxx"
+    assert classify_input(FIXTURES) == "export_dir"
 
 
 def test_cli_missing_dir_exits_nonzero():
@@ -201,3 +225,64 @@ def test_missing_export_dir_reports_note():
     result = analyze_tia_exports(str(FIXTURES.parent / "does_not_exist"))
     assert result["project"].extraction_notes
     assert result["scl_sources"] == {}
+
+
+def test_protected_block_skipped_from_scl(tmp_path):
+    """Know-how protected blocks are kept original and never emitted as SCL."""
+    from agents.plc.tia.ir import Block, BlockType, PlcProject
+    from agents.plc.tia.package import write_result_package
+    from agents.plc.tia.scl import convert_project_to_scl
+    from agents.plc.tia.kg import build_knowledge_graph
+    from agents.plc.tia.pipeline import interpretation_report
+
+    xml = tmp_path / "FB_Secret.xml"
+    xml.write_text(
+        """<?xml version="1.0"?>
+        <Document>
+          <DocumentInfo><DocumentType>SimaticML.SW.Blocks.FB</DocumentType></DocumentInfo>
+          <SW.Blocks.ObjectSW Name="FB_Secret">
+            <AttributeList>
+              <Name>FB_Secret</Name>
+              <Number>100</Number>
+              <ProgrammingLanguage>LAD</ProgrammingLanguage>
+              <KnowHowProtection>true</KnowHowProtection>
+            </AttributeList>
+          </SW.Blocks.ObjectSW>
+        </Document>
+        """,
+        encoding="utf-8",
+    )
+    from agents.plc.tia.simaticml import parse_block_xml
+
+    secret = parse_block_xml(xml)
+    assert secret is not None
+    assert secret.is_protected() is True
+
+    open_block = Block(
+        name="FB_Open",
+        block_type=BlockType.FB,
+        programming_language="SCL",
+        source_text="A := B;",
+        attributes={},
+    )
+    project = PlcProject(name="ProtDemo")
+    project.add_block(secret)
+    project.add_block(open_block)
+    scl = convert_project_to_scl(project)
+    assert "FB_Secret" not in scl
+    assert "FB_Open" in scl
+
+    kg = build_knowledge_graph(project)
+    report = interpretation_report(project, kg)
+    out = tmp_path / "ResearchOS_PLC_Result"
+    conversion = write_result_package(
+        out,
+        project=project,
+        knowledge_graph=kg,
+        scl_sources=scl,
+        report_md=report,
+    )
+    assert conversion["protected"] == 1
+    assert not (out / "converted_scl" / "FB_Secret.scl").exists()
+    assert (out / "original" / "protected_blocks" / "FB_Secret.xml").exists()
+    assert (out / "converted_scl" / "FB_Open.scl").exists()

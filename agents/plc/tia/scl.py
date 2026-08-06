@@ -317,8 +317,16 @@ def translate_block_to_scl(block: Block) -> str:
 
 
 def convert_project_to_scl(project: PlcProject) -> dict[str, str]:
-    """Map block name -> SCL source for every translatable block."""
-    return {name: translate_block_to_scl(block) for name, block in project.blocks.items()}
+    """Map block name -> SCL for every *non-protected* translatable block.
+
+    Know-how / password protected blocks are skipped (kept as original only).
+    """
+    out: dict[str, str] = {}
+    for name, block in project.blocks.items():
+        if block.is_protected():
+            continue
+        out[name] = translate_block_to_scl(block)
+    return out
 
 
 def llm_prompt_for_network(block: Block, network: Network) -> str:

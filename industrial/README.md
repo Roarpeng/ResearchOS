@@ -28,33 +28,32 @@ Related components outside this package:
 
 ## Self-test with your own PLC project
 
-1. Export (requires TIA Portal + Openness):
+**Preferred (you provide `.apxx`, ResearchOS does the rest):**
 
 ```powershell
-.\industrial\tia_adapter\ExportProject.ps1 `
-  -ProjectPath "C:\Projects\MyLine.ap19" `
-  -ExportDir "C:\Export\MyLine" `
-  -TiaVersion V19
+researchos-tia-cli --project "C:\Projects\MyLine.ap19" --result-dir .\ResearchOS_PLC_Result --json-summary
 ```
 
-2. Offline analyze (no TIA needed after export):
+Requires TIA Portal + Openness on this machine (auto-runs `industrial/tia_adapter/ExportProject.ps1`).
+
+Output package:
+
+```
+ResearchOS_PLC_Result/
+  converted_scl/          # generated .scl
+  plc_ir/project.json
+  knowledge_graph/graph.json
+  reports/analysis.md
+  reports/conversion_report.json
+```
+
+**Offline-only (already exported SimaticML):**
 
 ```powershell
-researchos-tia-cli --exports "C:\Export\MyLine" --out .\scl_out --kg kg.json --json-summary
+researchos-tia-cli --exports "C:\Export\MyLine" --result-dir .\ResearchOS_PLC_Result
 ```
 
-3. Run industrial agent with the export folder:
-
-```powershell
-# Option A — environment
-$env:RESEARCHOS_TIA_EXPORTS = "C:\Export\MyLine"
-# then create a Gateway task with mode=industrial
-
-# Option B — API field
-# POST /api/v1/research/tasks  { "query": "...", "mode": "industrial", "tia_export_dir": "C:\\Export\\MyLine" }
-
-# Option C — Frontend: mode=industrial + “TIA 导出目录”
-```
+**Agent / UI:** `mode=industrial` + `tia_export_dir` / `RESEARCHOS_TIA_PROJECT` pointing at `.apxx` or export folder.
 
 ## Connector contract
 

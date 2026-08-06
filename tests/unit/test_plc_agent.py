@@ -166,6 +166,17 @@ def test_mcp_plc_tia_analyze():
     assert missing["ok"] is False and missing["error"] == "export_dir_not_found"
 
 
+def test_mcp_plc_project_analyze_export_dir(tmp_path):
+    res = plc_server.plc_project_analyze(
+        str(TIA_FIXTURES),
+        result_dir=str(tmp_path / "pkg"),
+        project_name="MotorDemo",
+    )
+    assert res["ok"] and res["readonly"]
+    assert res["conversion_report"]["total_blocks"] >= 3
+    assert (tmp_path / "pkg" / "converted_scl" / "FB_Motor.scl").exists()
+
+
 def test_mcp_client_dispatches_tia_analyze():
     client = MCPClient(RuntimeSettings())
     result = client.call_tool(
@@ -188,7 +199,8 @@ def test_plc_node_with_tia_exports():
     assert "plc_tia_analysis" in out["analysis_results"]
     block = out["analysis_results"]["plc_tia_analysis"]
     assert "#Running := ((#Start OR #Running)" in block["scl_sources"]["FB_Motor"]
-    assert any(t["tool"] == "plc.tia.analyze" for t in out["tool_traces"])
+    assert block["conversion_report"]["converted"] >= 1
+    assert any(t["tool"] == "plc.project.analyze" for t in out["tool_traces"])
     assert out["budgets"]["used_tool_calls"] == 2
     assert out["meta"]["plc_tia_analyzed"] is True
 

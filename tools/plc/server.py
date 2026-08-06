@@ -130,6 +130,57 @@ def plc_tia_analyze(export_dir: str, project_name: str = "") -> dict[str, Any]:
         "report": result["report"],
         "scl_sources": result["scl_sources"],
         "knowledge_graph": result["knowledge_graph"].to_json(),
+        "conversion_report": result.get("conversion_report"),
+    }
+
+
+@mcp.tool(name="plc.project.analyze")
+def plc_project_analyze(
+    path: str,
+    result_dir: str = "",
+    project_name: str = "",
+    tia_version: str = "",
+    plc_name: str = "",
+    export_dir: str = "",
+) -> dict[str, Any]:
+    """One-shot Offline Analyzer: .apxx or export folder -> SCL result package.
+
+    For `.ap17`/`.ap18`/`.ap19`/`.ap20`, runs Openness export then offline
+    parse/understand/convert. For an export directory, skips Openness.
+    Optionally writes `ResearchOS_PLC_Result` layout under `result_dir`.
+    """
+    target = Path(path).expanduser()
+    if not target.exists():
+        return {"ok": False, "error": "path_not_found", "path": str(path)}
+    from agents.plc.tia import analyze_plc_project
+
+    try:
+        result = analyze_plc_project(
+            str(target),
+            project_name=project_name,
+            result_dir=result_dir,
+            export_dir=export_dir,
+            tia_version=tia_version,
+            plc_name=plc_name,
+        )
+    except FileNotFoundError as exc:
+        return {"ok": False, "error": "not_found", "message": str(exc)}
+    except (RuntimeError, ValueError) as exc:
+        return {"ok": False, "error": "analyze_failed", "message": str(exc)}
+
+    project = result["project"]
+    return {
+        "ok": True,
+        "readonly": True,
+        "project_name": project.name,
+        "import": result.get("import"),
+        "result_dir": result.get("result_dir") or "",
+        "summary": project.summary(),
+        "conversion_report": result.get("conversion_report"),
+        "report": result["report"],
+        "scl_sources": result["scl_sources"],
+        "knowledge_graph": result["knowledge_graph"].to_json(),
+        "extraction_notes": project.extraction_notes,
     }
 
 
