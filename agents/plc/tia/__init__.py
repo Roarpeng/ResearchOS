@@ -10,9 +10,12 @@ from agents.plc.tia.pipeline import (
     analyze_tia_exports,
     interpretation_report,
 )
+from agents.plc.tia.flgnet_fold import attach_folded, fold_project
 
 __all__ = [
     "analyze_plc_project",
     "analyze_tia_exports",
     "interpretation_report",
+    "attach_folded",
+    "fold_project",
 ]

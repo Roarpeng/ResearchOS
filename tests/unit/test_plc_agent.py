@@ -200,7 +200,7 @@ def test_plc_node_with_tia_exports():
     block = out["analysis_results"]["plc_tia_analysis"]
     assert "#Running := ((#Start OR #Running)" in block["scl_sources"]["FB_Motor"]
     assert block["conversion_report"]["converted"] >= 1
-    assert any(t["tool"] == "plc.project.analyze" for t in out["tool_traces"])
+    assert any(t["tool"] == "plc.tia.ingest" for t in out["tool_traces"])
     assert out["budgets"]["used_tool_calls"] == 2
     assert out["meta"]["plc_tia_analyzed"] is True
 

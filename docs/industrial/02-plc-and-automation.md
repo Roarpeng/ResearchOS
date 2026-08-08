@@ -20,6 +20,28 @@ Agent
 
 现场协议（Modbus、OPC UA、厂商 SDK）若启用，必须运行在 **工控 DMZ 侧车**，由 MCP 暴露最小只读面。
 
+## MCP：`tia-openness`（Milestone 1 Foundation — 已落地）
+
+路径：`tools/industrial-mcp/tia-openness/`（C# stdio MCP → TIA Portal V19 Openness）
+
+| 工具 | 状态 | 说明 |
+|------|------|------|
+| `tia.get_status` | **已实现** | 检测 TIA Portal 进程 + Openness PublicAPI |
+| `tia.open_project` | **已实现** | 打开 `.ap19`（亦支持 `.ap17`+） |
+| `tia.list_blocks` | **已实现** | 列出 OB / FB / FC / DB |
+| `tia.export_block` | **已实现** | 单块导出 SimaticML XML |
+| `tia.export_project` | **已实现** | 整工程块导出到目录 |
+| `plc.tia.ingest` | **已实现** | XML/.apxx/目录 → Parser → PLC-IR → KG → Neo4j(可选) |
+
+契约见 [`docs/mcp/08-tia-openness-mcp.md`](../mcp/08-tia-openness-mcp.md)。下游已接：`XML → plc.tia.ingest (PLC Parser / PLC-IR / KG / Neo4j) → PLC Agent`。
+
+## ResearchOS 子功能：PLC Workspace（Gateway + Frontend）
+
+- 前端：主控制台旁 **PLC** 页（与 Research 并列）
+- API：`/api/v1/plc/jobs`（path / upload）→ chat → **changes / writeback** → export ZIP
+- 写回：HITL 确认后 Openness `Import(Override)` + `Save`（见 [`docs/deployment/06-plc-feature.md`](../deployment/06-plc-feature.md)）
+- 部署：混合拓扑（Docker 数据面 + Windows Openness 侧车）
+
 ## MCP：`mcp-plc`（已实现 vs 目标）
 
 | 工具 | 默认 | 状态 | 说明 |

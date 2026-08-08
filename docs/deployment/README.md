@@ -11,6 +11,7 @@ ResearchOS 采用 **容器优先** 部署：开发与中小规模生产以 Docke
 | [03-gpu-and-ollama.md](./03-gpu-and-ollama.md) | GPU、本地模型与 Ollama 可选集成 |
 | [04-private-deployment.md](./04-private-deployment.md) | 私有化、网络隔离与合规要点 |
 | [05-observability.md](./05-observability.md) | 日志、指标、追踪与告警 |
+| [06-plc-feature.md](./06-plc-feature.md) | PLC Intelligence 子功能：混合部署与 Openness 侧车 |
 
 ## 部署目标
 

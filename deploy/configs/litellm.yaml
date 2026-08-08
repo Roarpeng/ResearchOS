@@ -1,8 +1,29 @@
-# Minimal LiteLLM routing for ResearchOS Phase 1.
-# Logical model names map to providers; agents must call LiteLLM, not vendor SDKs.
+# ResearchOS LiteLLM routing — logical names for agents; keys from env only.
+# Agents call LiteLLM by model_name, never vendor SDKs directly.
 
 model_list:
+  # ---- Agent logical aliases (overridable via Gateway settings → model_profile) ----
   - model_name: default
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: planner
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: researcher
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: writer
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: plc
     litellm_params:
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
@@ -12,15 +33,81 @@ model_list:
       model: anthropic/claude-sonnet-4-20250514
       api_key: os.environ/ANTHROPIC_API_KEY
 
-  - model_name: local
-    litellm_params:
-      model: ollama/qwen2.5:14b
-      api_base: http://ollama:11434
-
   - model_name: embed
     litellm_params:
       model: openai/text-embedding-3-small
       api_key: os.environ/OPENAI_API_KEY
+
+  # ---- OpenAI ----
+  - model_name: openai-gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: openai-gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: openai-o4-mini
+    litellm_params:
+      model: openai/o4-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # ---- Anthropic ----
+  - model_name: anthropic-claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: anthropic-claude-haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ---- Google Gemini ----
+  - model_name: gemini-2.0-flash
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ---- DeepSeek ----
+  - model_name: deepseek-chat
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  - model_name: deepseek-reasoner
+    litellm_params:
+      model: deepseek/deepseek-reasoner
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  # ---- Alibaba DashScope / Qwen ----
+  - model_name: qwen-plus
+    litellm_params:
+      model: dashscope/qwen-plus
+      api_key: os.environ/DASHSCOPE_API_KEY
+
+  - model_name: qwen-max
+    litellm_params:
+      model: dashscope/qwen-max
+      api_key: os.environ/DASHSCOPE_API_KEY
+
+  # ---- Local Ollama (enable compose profile gpu) ----
+  - model_name: local
+    litellm_params:
+      model: ollama/qwen2.5:14b
+      api_base: http://host.docker.internal:11434
+
+  - model_name: ollama-qwen
+    litellm_params:
+      model: ollama/qwen2.5:14b
+      api_base: http://host.docker.internal:11434
 
 router_settings:
   routing_strategy: simple-shuffle

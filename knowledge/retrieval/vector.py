@@ -131,6 +131,14 @@ def _payload_matches(payload: dict[str, Any], filters: dict[str, Any]) -> bool:
             )
             if not any(m in blob for m in models):
                 return False
+    workspace_id = filters.get("workspace_id")
+    if workspace_id is not None and str(payload.get("workspace_id") or "") != str(workspace_id):
+        return False
+    knowledge_space_ids = filters.get("knowledge_space_ids")
+    if knowledge_space_ids:
+        ws = str(payload.get("workspace_id") or "")
+        if ws not in {str(x) for x in knowledge_space_ids}:
+            return False
     source_files = filters.get("source_files")
     if source_files and payload.get("source_file") not in source_files:
         return False

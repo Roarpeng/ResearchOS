@@ -45,10 +45,13 @@ class Access:
     data_type: str = ""
     negated: bool = False
     raw: str = ""
+    absolute: str = ""  # e.g. %M0.5 when AbsoluteAddress is present
 
     @property
     def name(self) -> str:
-        base = self.root or self.raw
+        if self.absolute and not self.root:
+            return self.absolute
+        base = self.root or self.raw or self.absolute
         if self.path:
             return ".".join([base, *self.path]) if self.scope != AccessScope.LOCAL else (
                 base + "." + ".".join(self.path)
@@ -58,14 +61,71 @@ class Access:
     def as_scl(self) -> str:
         """Render the access as an SCL operand."""
         if self.scope == AccessScope.LITERAL:
-            return self.raw
-        if self.scope == AccessScope.LOCAL:
+            return self.raw or self.absolute
+        if self.absolute and not self.root:
+            core = self.absolute
+        elif self.scope == AccessScope.LOCAL:
             core = "#" + self.root
         else:
-            core = f'"{self.root}"' if self.root else self.raw
-        if self.path:
+            core = f'"{self.root}"' if self.root else (self.absolute or self.raw)
+        if self.path and self.root:
             core = core + "." + ".".join(self.path)
         return f"NOT ({core})" if self.negated else core
+
+
+@dataclass(frozen=True)
+class Expr:
+    """Boolean / value expression node (PLC-IR logic layer)."""
+
+
+@dataclass(frozen=True)
+class Lit(Expr):
+    value: bool | str  # True/False or raw literal string
+
+
+@dataclass(frozen=True)
+class Ref(Expr):
+    access: Access
+
+
+@dataclass(frozen=True)
+class Not(Expr):
+    operand: Expr
+
+
+@dataclass(frozen=True)
+class And(Expr):
+    operands: tuple[Expr, ...]
+
+
+@dataclass(frozen=True)
+class Or(Expr):
+    operands: tuple[Expr, ...]
+
+
+@dataclass(frozen=True)
+class Compare(Expr):
+    op: str  # = <> > >= < <=
+    lhs: Expr
+    rhs: Expr
+
+
+@dataclass(frozen=True)
+class AssignStmt:
+    target: Access | None
+    value: Expr
+    kind: str = "coil"  # coil | neg_coil | set | reset | move | call
+    target_scl: str = ""  # fallback when Access missing; full SCL for kind=call
+    enable: Expr | None = None  # Move EN / conditional assignment
+
+
+@dataclass
+class FoldedNetwork:
+    network_id: str = ""
+    title: str = ""
+    statements: list[AssignStmt] = field(default_factory=list)
+    unresolved_parts: list[str] = field(default_factory=list)  # part uuids or names
+    evidence: str = "flgnet_fold"
 
 
 @dataclass
@@ -134,6 +194,7 @@ class Network:
     rails: dict[str, Part] = field(default_factory=dict)
     wires: list[Wire] = field(default_factory=list)
     source_text: str = ""  # SCL/STL body when the unit is textual
+    folded: FoldedNetwork | None = None
 
     def accesses(self) -> list[Access]:
         out: list[Access] = list(self.access_parts.values())

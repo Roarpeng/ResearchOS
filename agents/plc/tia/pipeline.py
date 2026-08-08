@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from agents.plc.tia.importer import resolve_project_input
+from agents.plc.tia.flgnet_fold import attach_folded, fold_project
 from agents.plc.tia.ir import BlockType, PlcProject
 from agents.plc.tia.kg import PlcKnowledgeGraph, build_knowledge_graph
 from agents.plc.tia.package import build_conversion_report, write_result_package
@@ -26,20 +27,37 @@ from agents.plc.tia.scl import convert_project_to_scl
 from agents.plc.tia.simaticml import extract_project
 
 
-def analyze_tia_exports(export_dir: str, *, project_name: str = "") -> dict[str, Any]:
-    """Offline path: parse Openness exports, build KG, convert to SCL."""
-    project = extract_project(export_dir, project_name=project_name)
+def analyze_tia_exports(
+    export_dir: str,
+    *,
+    project_name: str = "",
+    publish_graph: bool = False,
+) -> dict[str, Any]:
+    """Offline path: parse Openness exports, build KG, convert to SCL.
+
+    When `publish_graph=True`, also upsert PLC nodes/edges into the configured
+    KnowledgeGraph backend (Neo4j if NEO4J_* is set, else in-memory).
+    """
+    project = attach_folded(extract_project(export_dir, project_name=project_name))
     kg = build_knowledge_graph(project)
     scl_sources = convert_project_to_scl(project)
     report = interpretation_report(project, kg)
     conversion = build_conversion_report(project, scl_sources)
-    return {
+    result: dict[str, Any] = {
         "project": project,
+        "folded_logic": fold_project(project),
         "knowledge_graph": kg,
         "scl_sources": scl_sources,
         "report": report,
         "conversion_report": conversion,
     }
+    if publish_graph:
+        from agents.plc.tia.neo4j_publish import publish_plc_knowledge_graph
+
+        result["graph_publish"] = publish_plc_knowledge_graph(
+            kg, project_name=project.name or project_name or "plc_project"
+        )
+    return result
 
 
 def analyze_plc_project(
@@ -51,11 +69,12 @@ def analyze_plc_project(
     tia_version: str = "",
     plc_name: str = "",
     auto_export: bool = True,
+    publish_graph: bool = False,
 ) -> dict[str, Any]:
-    """One-shot: accept .apxx or export folder → parse → understand → SCL package.
+    """One-shot: accept .apxx / .xml / export folder → parse → understand → SCL package.
 
-    `.apxx` requires TIA Portal Openness on this host (adapter script).
-    Export folders are fully offline.
+    `.apxx` requires TIA Portal Openness on this host (C# CLI or PowerShell adapter).
+    Export folders and single SimaticML `.xml` files are fully offline.
     """
     imported = resolve_project_input(
         path,
@@ -67,7 +86,11 @@ def analyze_plc_project(
     name = project_name or (
         imported.project_path.stem if imported.project_path else imported.export_dir.name
     )
-    analyzed = analyze_tia_exports(str(imported.export_dir), project_name=name)
+    analyzed = analyze_tia_exports(
+        str(imported.export_dir),
+        project_name=name,
+        publish_graph=publish_graph,
+    )
     project: PlcProject = analyzed["project"]
     for note in imported.notes or []:
         project.extraction_notes.append(note)

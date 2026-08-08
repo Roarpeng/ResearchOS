@@ -22,7 +22,10 @@ ResearchOS/
 │   ├── knowledge_graph/
 │   ├── vector_store/
 │   ├── repo/
-│   └── report/
+│   ├── report/
+│   ├── plc/                  # mcp-plc（手册 / 报警 / 离线 TIA 分析）
+│   └── industrial-mcp/
+│       └── tia-openness/     # TIA Openness MCP Foundation（C# / V19）
 ├── knowledge/                # ETL、分块、抽取、Hybrid 检索融合
 │   ├── parsers/              # Docling / MarkItDown / Unstructured 适配
 │   ├── chunking/

@@ -31,6 +31,8 @@ class RuntimeSettings(BaseSettings):
 
     # inprocess | stdio
     mcp_hello_mode: str = Field(default="inprocess", alias="MCP_HELLO_MODE")
+    # cli | stdio — how Runtime invokes tia.open_project / list_blocks / export_block
+    mcp_tia_mode: str = Field(default="cli", alias="MCP_TIA_MODE")
     max_supervisor_hops: int = Field(default=32, alias="MAX_SUPERVISOR_HOPS")
 
 

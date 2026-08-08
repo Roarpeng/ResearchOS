@@ -18,6 +18,7 @@ from agents.plc.tia.ir import (
     Part,
     PlcProject,
 )
+from agents.plc.tia.flgnet_fold import stmt_to_scl
 
 COMPARE_OPS = {
     "Eq": "=",
@@ -82,11 +83,27 @@ class NetworkTranslator:
             return self.network.access_parts.get(wire.source.uuid)
         return part.accesses.get("operand")
 
-    def _pin_access(self, part: Part, pin: str) -> Access | None:
-        wire = self._find_wire_to_pin(part.uuid, pin)
-        if wire and wire.source and wire.source.kind == "identcon":
-            return self.network.access_parts.get(wire.source.uuid)
+    def _pin_name_aliases(self, pin: str) -> tuple[str, ...]:
+        if pin == "out":
+            return ("out", "out1", "OUT", "OUT1")
+        return (pin,)
+
+    def _access_bound_to_pin(self, part: Part, pin: str) -> Access | None:
+        for wire in self.network.wires:
+            for endpoint in wire.endpoints:
+                if endpoint.kind != "namecon" or endpoint.uuid != part.uuid or endpoint.pin != pin:
+                    continue
+                for other in wire.endpoints:
+                    if other.kind == "identcon":
+                        return self.network.access_parts.get(other.uuid)
         return part.accesses.get(pin)
+
+    def _pin_access(self, part: Part, pin: str) -> Access | None:
+        for name in self._pin_name_aliases(pin):
+            access = self._access_bound_to_pin(part, name)
+            if access is not None:
+                return access
+        return None
 
     # -- expression synthesis -------------------------------------------------
     def _wire_driver_exprs(self, wire, sink: tuple[str, str] | None = None) -> list[str]:
@@ -149,6 +166,25 @@ class NetworkTranslator:
         return f"(* out of {name or 'part'} not expressible *)"
 
     # -- statement emission ----------------------------------------------------
+    def _emit_move(self, part: Part) -> None:
+        src = self._pin_access(part, "in")
+        dst = self._pin_access(part, "out")
+        if dst is None:
+            dst = self._operand_access(part)
+        src_txt = src.as_scl() if src else "(* in *)"
+        dst_txt = dst.as_scl() if dst else "(* out *)"
+        en = self._value_at_pin(part.uuid, "en")
+        en_wires = self._wires_to_pin(part.uuid, "en")
+        if not en_wires or en == "TRUE":
+            # powerrail-only or missing EN → unconditional
+            drivers = []
+            for wire in en_wires:
+                drivers.extend(self._wire_driver_exprs(wire, sink=(part.uuid, "en")))
+            if not drivers or drivers == ["TRUE"]:
+                self.statements.append(f"{dst_txt} := {src_txt};")
+                return
+        self.statements.append(f"IF {en} THEN {dst_txt} := {src_txt}; END_IF;")
+
     def _emit_coil(self, part: Part) -> None:
         operand = self._operand_access(part)
         target = operand.as_scl() if operand else "(* coil target unknown *)"
@@ -165,17 +201,12 @@ class NetworkTranslator:
                 self.statements.append(f"{target} := FALSE;")
             else:
                 self.statements.append(f"IF {cond} THEN {target} := FALSE; END_IF;")
+        elif " AND " not in cond and " OR " not in cond and cond not in {"TRUE", "FALSE"}:
+            self.statements.append(
+                f"IF {cond} THEN {target} := TRUE; ELSE {target} := FALSE; END_IF;"
+            )
         else:
             self.statements.append(f"{target} := {cond};")
-
-    def _emit_move(self, part: Part) -> None:
-        src = self._pin_access(part, "in")
-        dst = self._pin_access(part, "out")
-        if dst is None:
-            dst = self._operand_access(part)
-        src_txt = src.as_scl() if src else "(* in *)"
-        dst_txt = dst.as_scl() if dst else "(* out *)"
-        self.statements.append(f"{dst_txt} := {src_txt};")
 
     def _emit_call(self, part: Part) -> None:
         called = part.template_values.get("Call") or part.template_values.get("calledBlock") or ""
@@ -204,21 +235,73 @@ class NetworkTranslator:
         else:
             self.statements.append(f"{call}({', '.join(params)});")
 
+    def _emit_box_call(self, part: Part) -> None:
+        instance = (
+            part.accesses.get("instance")
+            or part.accesses.get("Instance")
+        )
+        inst = instance.as_scl() if instance is not None else (
+            f'"{part.template_values["InstanceDB"]}"'
+            if part.template_values.get("InstanceDB")
+            else part.name
+        )
+        params: list[str] = []
+        for pin in ("CU", "CD", "R", "LD", "IN"):
+            wires = self._wires_to_pin(part.uuid, pin)
+            if not wires:
+                continue
+            has_real = False
+            for wire in wires:
+                for ep in wire.endpoints:
+                    if ep.kind == "namecon" and ep.uuid == part.uuid and ep.pin == pin:
+                        continue
+                    if ep.kind == "opencon":
+                        continue
+                    has_real = True
+            if not has_real:
+                continue
+            params.append(f"{pin} := {self._value_at_pin(part.uuid, pin)}")
+        for pin in ("PV", "PT"):
+            access = self._pin_access(part, pin)
+            if access is not None:
+                params.append(f"{pin} := {access.as_scl()}")
+        for pin in ("CV", "Q", "QU", "QD", "ET"):
+            access = self._pin_access(part, pin)
+            if access is not None:
+                params.append(f"{pin} => {access.as_scl()}")
+        self.statements.append(f"{inst}({', '.join(params)});")
+
     def translate(self) -> list[str]:
         """Return SCL statements for this network."""
         if self.network.source_text:
             return [line for line in self.network.source_text.splitlines() if line.strip()]
 
+        folded_statements = iter(self.network.folded.statements) if self.network.folded else iter(())
+        counter_timer = {"CTU", "CTD", "CTUD", "TON", "TOF", "TP"}
         for part in self.network.parts.values():
             name = part.name
             if name in {"Coil", "NegCoil", "Set", "Reset", "Save"}:
-                self._emit_coil(part)
-            elif name == "Move":
-                self._emit_move(part)
+                folded = next(folded_statements, None)
+                if folded is not None:
+                    self.statements.append(stmt_to_scl(folded))
+                else:
+                    self._emit_coil(part)
+            elif name in {"Move", "Assign"} or (name or "").startswith("Move"):
+                folded = next(folded_statements, None)
+                if folded is not None and getattr(folded, "kind", "") == "move":
+                    self.statements.append(stmt_to_scl(folded))
+                else:
+                    self._emit_move(part)
+            elif name in counter_timer:
+                folded = next(folded_statements, None)
+                if folded is not None and getattr(folded, "kind", "") == "call":
+                    self.statements.append(stmt_to_scl(folded))
+                else:
+                    self._emit_box_call(part)
             elif name in {"Call"} or "Call" in (part.template_values or {}):
                 self._emit_call(part)
             elif name in BRANCH_PARTS:
-                continue  # consumed by downstream coils
+                continue  # consumed by downstream coils / moves
             else:
                 self.statements.append(
                     f"(* TODO[{name or 'unknown'}]: instruction not auto-translated; "

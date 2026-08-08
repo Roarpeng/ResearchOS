@@ -11,7 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from gateway.app.config import get_settings
 from gateway.app.middleware.request_id import RequestIdMiddleware
-from gateway.app.routers import auth, health, knowledge, research, sessions
+from gateway.app.routers import auth, chat, health, knowledge, plc, research, sessions
+from gateway.app.routers import settings as settings_router
 from gateway.app.services.runtime_client import RuntimeClient
 from gateway.app.ws import research as ws_research
 from researchos_shared import configure_logging
@@ -43,7 +44,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="ResearchOS Gateway",
         version="0.1.0",
-        description="Auth, sessions, research/knowledge API boundary (Phase 1 skeleton).",
+        description="Auth, sessions, research/knowledge/PLC API boundary.",
         lifespan=lifespan,
     )
 
@@ -61,7 +62,10 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(sessions.router)
     app.include_router(research.router)
+    app.include_router(chat.router)
     app.include_router(knowledge.router)
+    app.include_router(plc.router)
+    app.include_router(settings_router.router)
     app.include_router(ws_research.router)
 
     @app.get("/")

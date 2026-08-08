@@ -15,6 +15,15 @@ class KnowledgeSpaceCreate(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
+class KnowledgeDocument(BaseModel):
+    id: str
+    title: str | None = None
+    filename: str | None = None
+    status: str = "queued"
+    chunk_count: int = 0
+    created_at: datetime | None = None
+
+
 class KnowledgeSpace(BaseModel):
     id: str
     name: str
@@ -23,6 +32,7 @@ class KnowledgeSpace(BaseModel):
     document_count: int = 0
     workspace_id: str | None = None
     created_at: datetime
+    documents: list[KnowledgeDocument] = Field(default_factory=list)
 
 
 class DocumentUploadResponse(BaseModel):

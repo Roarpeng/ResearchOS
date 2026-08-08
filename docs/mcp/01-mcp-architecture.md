@@ -35,6 +35,7 @@ MCP（Model Context Protocol）层把 ResearchOS 的外部能力标准化为 **T
 | `mcp-documents` | `documents.*` | MinIO 文档对象与登记 |
 | `mcp-report` | `report.*` | Typst / Pandoc 导出 |
 | `mcp-github` | `github.*` | 仓库读写受限操作 |
+| `tia-openness` | `tia.*` | TIA Portal Openness（工业 Milestone 1） |
 
 Gateway 或 Runtime 启动时从配置加载 server 列表与 transport（stdio / HTTP / SSE，以部署为准）。
 

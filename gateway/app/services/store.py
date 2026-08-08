@@ -24,6 +24,7 @@ class InMemoryStore:
         self.spaces: dict[str, dict[str, Any]] = {}
         self.refresh_tokens: dict[str, dict[str, Any]] = {}
         self.api_keys: dict[str, dict[str, Any]] = {}
+        self.plc_jobs: dict[str, dict[str, Any]] = {}
 
 
 store = InMemoryStore()
@@ -85,6 +86,7 @@ def new_space(
         "description": description,
         "status": "ready",
         "document_count": 0,
+        "documents": [],
         "workspace_id": workspace_id,
         "settings": settings or {},
         "created_at": _now(),

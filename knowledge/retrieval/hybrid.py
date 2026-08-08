@@ -49,6 +49,27 @@ def _locator_from_payload(payload: dict[str, Any]) -> Locator:
     )
 
 
+def _passage_matches_filters(payload: dict[str, Any], filters: dict[str, Any]) -> bool:
+    models = filters.get("models")
+    if models:
+        text_blob = str(payload.get("text") or "")
+        payload_models = payload.get("model") or []
+        if not (
+            any(m in payload_models for m in models)
+            or any(m in text_blob for m in models)
+        ):
+            return False
+    workspace_id = filters.get("workspace_id")
+    if workspace_id is not None and str(payload.get("workspace_id") or "") != str(workspace_id):
+        return False
+    knowledge_space_ids = filters.get("knowledge_space_ids")
+    if knowledge_space_ids:
+        ws = str(payload.get("workspace_id") or "")
+        if ws not in {str(x) for x in knowledge_space_ids}:
+            return False
+    return True
+
+
 def _citation_from_payload(
     chunk_id: str,
     payload: dict[str, Any],
@@ -162,18 +183,11 @@ class HybridRetriever:
             weights=channel_weights,
         )
         passages: list[Passage] = []
-        for chunk_id, score, channels in fused[:top_k]:
+        for chunk_id, score, channels in fused[: max(top_k * 3, top_k)]:
             payload = payload_by_id.get(chunk_id, {"chunk_id": chunk_id, "text": ""})
             if filters:
-                models = filters.get("models")
-                if models:
-                    text_blob = str(payload.get("text") or "")
-                    payload_models = payload.get("model") or []
-                    if not (
-                        any(m in payload_models for m in models)
-                        or any(m in text_blob for m in models)
-                    ):
-                        continue
+                if not _passage_matches_filters(payload, filters):
+                    continue
             citation = _citation_from_payload(chunk_id, payload, score)
             passages.append(
                 Passage(
@@ -187,6 +201,8 @@ class HybridRetriever:
                     locator=citation.locator,
                 )
             )
+            if len(passages) >= top_k:
+                break
 
         diagnostics["rrf_k"] = self.settings.rrf_k
         diagnostics["fused_count"] = len(passages)

@@ -102,13 +102,18 @@ def plc_alarm_explain(alarm_code: str) -> dict[str, Any]:
 
 
 @mcp.tool(name="plc.tia.analyze")
-def plc_tia_analyze(export_dir: str, project_name: str = "") -> dict[str, Any]:
+def plc_tia_analyze(
+    export_dir: str,
+    project_name: str = "",
+    publish_graph: bool = False,
+) -> dict[str, Any]:
     """Analyze a TIA Portal Openness export folder -> KG + SCL (read-only).
 
     `export_dir` must contain SimaticML XML produced by Openness
-    `PlcBlock.Export(...)` (see industrial/tia_adapter/ExportProject.ps1).
+    `PlcBlock.Export(...)` (see industrial/tia_adapter or tia-openness MCP).
     Returns the interpretation report, generated SCL sources and the
     knowledge graph; never writes to any TIA project.
+    Set `publish_graph=true` to upsert PLC nodes into Neo4j/memory KG.
     """
     export_path = Path(export_dir).expanduser()
     if not export_path.is_dir():
@@ -119,9 +124,13 @@ def plc_tia_analyze(export_dir: str, project_name: str = "") -> dict[str, Any]:
         }
     from agents.plc.tia import analyze_tia_exports
 
-    result = analyze_tia_exports(str(export_path), project_name=project_name)
+    result = analyze_tia_exports(
+        str(export_path),
+        project_name=project_name,
+        publish_graph=publish_graph,
+    )
     project = result["project"]
-    return {
+    payload: dict[str, Any] = {
         "ok": True,
         "readonly": True,
         "project_name": project.name,
@@ -131,6 +140,59 @@ def plc_tia_analyze(export_dir: str, project_name: str = "") -> dict[str, Any]:
         "scl_sources": result["scl_sources"],
         "knowledge_graph": result["knowledge_graph"].to_json(),
         "conversion_report": result.get("conversion_report"),
+    }
+    if "graph_publish" in result:
+        payload["graph_publish"] = result["graph_publish"]
+    return payload
+
+
+@mcp.tool(name="plc.tia.ingest")
+def plc_tia_ingest(
+    path: str,
+    project_name: str = "",
+    result_dir: str = "",
+    publish_graph: bool = True,
+    tia_version: str = "",
+    plc_name: str = "",
+) -> dict[str, Any]:
+    """Bridge: XML | .apxx | export dir → Parser → PLC-IR → KG → (Neo4j) → Agent payload.
+
+    Preferred Milestone-1 follow-on tool after `tia.export_block` / `tia.export_project`.
+    """
+    target = Path(path).expanduser()
+    if not target.exists():
+        return {"ok": False, "error": "path_not_found", "path": str(path)}
+    from agents.plc.tia import analyze_plc_project
+
+    try:
+        result = analyze_plc_project(
+            str(target),
+            project_name=project_name,
+            result_dir=result_dir,
+            tia_version=tia_version,
+            plc_name=plc_name,
+            publish_graph=publish_graph,
+        )
+    except FileNotFoundError as exc:
+        return {"ok": False, "error": "not_found", "message": str(exc)}
+    except (RuntimeError, ValueError) as exc:
+        return {"ok": False, "error": "ingest_failed", "message": str(exc)}
+
+    project = result["project"]
+    return {
+        "ok": True,
+        "readonly": True,
+        "pipeline": "XML→PLC-IR→KG→Neo4j→Agent",
+        "project_name": project.name,
+        "import": result.get("import"),
+        "result_dir": result.get("result_dir") or "",
+        "summary": project.summary(),
+        "conversion_report": result.get("conversion_report"),
+        "report": result["report"],
+        "scl_sources": result["scl_sources"],
+        "knowledge_graph": result["knowledge_graph"].to_json(),
+        "graph_publish": result.get("graph_publish"),
+        "extraction_notes": project.extraction_notes,
     }
 
 
@@ -142,6 +204,7 @@ def plc_project_analyze(
     tia_version: str = "",
     plc_name: str = "",
     export_dir: str = "",
+    publish_graph: bool = False,
 ) -> dict[str, Any]:
     """One-shot Offline Analyzer: .apxx or export folder -> SCL result package.
 
@@ -162,6 +225,7 @@ def plc_project_analyze(
             export_dir=export_dir,
             tia_version=tia_version,
             plc_name=plc_name,
+            publish_graph=publish_graph,
         )
     except FileNotFoundError as exc:
         return {"ok": False, "error": "not_found", "message": str(exc)}
@@ -180,6 +244,7 @@ def plc_project_analyze(
         "report": result["report"],
         "scl_sources": result["scl_sources"],
         "knowledge_graph": result["knowledge_graph"].to_json(),
+        "graph_publish": result.get("graph_publish"),
         "extraction_notes": project.extraction_notes,
     }
 

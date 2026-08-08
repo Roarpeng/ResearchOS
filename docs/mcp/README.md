@@ -15,6 +15,7 @@ ResearchOS 以 **MCP Native** 为原则：Agent 不直连外部 SaaS SDK 或数�
 | 知识 | [05-knowledge-tools.md](./05-knowledge-tools.md) | KG 读写、向量 upsert/search、混合检索 |
 | 报告导出 | [06-report-export-tools.md](./06-report-export-tools.md) | Typst / Pandoc 导出 |
 | 安全权限 | [07-tool-security-and-permissions.md](./07-tool-security-and-permissions.md) | ACL、出网、密钥、审计 |
+| TIA Openness | [08-tia-openness-mcp.md](./08-tia-openness-mcp.md) | Milestone 1：`tia.get_status` / `open_project` / `list_blocks` / `export_block` |
 | （交叉）Documents / GitHub | 见架构与知识文档 | 对象存储文档、仓库资料 |
 
 ## 设计原则

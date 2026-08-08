@@ -196,20 +196,31 @@ def _tia_export_dir(state: TaskState, goal: dict[str, Any]) -> str:
 def _tia_analysis_block(
     state: TaskState, project_or_export: str
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Run Offline Analyzer (.apxx or export dir); returns (block, tool trace)."""
+    """Run Offline Analyzer (.apxx / .xml / export dir); returns (block, tool trace)."""
     started = time.monotonic()
     result_dir = str((state.get("meta") or {}).get("plc_result_dir") or "").strip()
+    publish = os.getenv("RESEARCHOS_PLC_PUBLISH_GRAPH", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     try:
         result = analyze_plc_project(
             project_or_export,
             result_dir=result_dir,
             auto_export=True,
+            publish_graph=publish,
         )
     except Exception as exc:  # advisory agent must not crash the graph
         duration_ms = int((time.monotonic() - started) * 1000)
         trace = {
-            "tool": "plc.project.analyze",
-            "args": {"path": project_or_export, "result_dir": result_dir},
+            "tool": "plc.tia.ingest",
+            "args": {
+                "path": project_or_export,
+                "result_dir": result_dir,
+                "publish_graph": publish,
+            },
             "result_summary": f"error={exc}",
             "ok": False,
             "duration_ms": duration_ms,
@@ -227,8 +238,12 @@ def _tia_analysis_block(
     duration_ms = int((time.monotonic() - started) * 1000)
     conversion = result.get("conversion_report") or {}
     trace = {
-        "tool": "plc.project.analyze",
-        "args": {"path": project_or_export, "result_dir": result_dir},
+        "tool": "plc.tia.ingest",
+        "args": {
+            "path": project_or_export,
+            "result_dir": result_dir,
+            "publish_graph": publish,
+        },
         "result_summary": (
             f"ok=True blocks={len(project.blocks)} "
             f"converted={conversion.get('converted', 0)} "
@@ -247,6 +262,7 @@ def _tia_analysis_block(
         "knowledge_graph": result["knowledge_graph"].to_json(),
         "conversion_report": conversion,
         "result_dir": result.get("result_dir") or "",
+        "graph_publish": result.get("graph_publish"),
     }
     return block, trace
 

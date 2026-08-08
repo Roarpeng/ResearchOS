@@ -319,9 +319,9 @@ Test and Verification
 
 PLC project extraction:
 
-- TIA Openness connector
-- XML/source export
-- Project model
+- [x] TIA Openness connector（`tools/industrial-mcp/tia-openness` MCP：`tia.get_status` / `open_project` / `list_blocks` / `export_block`）
+- [x] XML/source export（单块 MCP + 既有 `industrial/tia_adapter` 整工程导出）
+- [x] Project model（SimaticML → 既有 PLC-IR / KG 管线）
 
 ### Phase 2
 

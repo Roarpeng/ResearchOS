@@ -1,0 +1,10 @@
+{
+  "agents": {
+    "research": "deepseek-chat",
+    "planner": "planner",
+    "researcher": "researcher",
+    "writer": "writer",
+    "plc": "openai-gpt-4o-mini",
+    "embed": "embed"
+  }
+}

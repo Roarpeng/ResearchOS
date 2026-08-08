@@ -195,6 +195,141 @@ def test_classify_input_apxx():
 
     assert classify_input(Path("C:/x/Machine.ap19")) == "apxx"
     assert classify_input(FIXTURES) == "export_dir"
+    assert classify_input(FIXTURES / "Blocks" / "FB_Motor.xml") == "export_xml"
+    assert classify_input(Path("C:/x/Line.zap19")) == "archive"
+    assert classify_input(Path("C:/x/Line.zap")) == "archive"
+    assert classify_input(Path("C:/x/pack.zip")) == "archive"
+
+
+def test_extract_zap_archive_with_simaticml(tmp_path: Path):
+    import zipfile
+
+    from agents.plc.tia import analyze_plc_project
+    from agents.plc.tia.importer import extract_tia_archive
+
+    zap = tmp_path / "demo.zap19"
+    with zipfile.ZipFile(zap, "w") as zf:
+        xml = (FIXTURES / "Blocks" / "Main_OB1.xml").read_bytes()
+        zf.writestr("Project/Blocks/Main_OB1.xml", xml)
+
+    root = extract_tia_archive(zap, dest=tmp_path / "out")
+    assert (root / "Blocks" / "Main_OB1.xml").is_file() or list(root.rglob("Main_OB1.xml"))
+
+    result = analyze_plc_project(str(zap), project_name="ZapDemo", publish_graph=False)
+    assert result["project"].blocks
+    # notes may land on project.extraction_notes and/or import.notes
+    notes = " ".join(
+        list(result.get("import", {}).get("notes") or [])
+        + list(result["project"].extraction_notes or [])
+    ).lower()
+    assert "extract" in notes or "archive" in notes or "zap" in notes
+
+
+def test_format_openness_license_error():
+    from agents.plc.tia.openness_cli import format_openness_failure, is_license_error
+
+    raw = (
+        "DB1000_StdSignal:Error when calling method 'Export' of type "
+        "'Siemens.Engineering.SW.Blocks.InstanceDB'. Necessary license 'STEP 7 Basic' is missing."
+    )
+    assert is_license_error(raw)
+    msg = format_openness_failure(raw, project_path="C:/x/Line.ap19", action="export")
+    assert "STEP 7" in msg or "许可证" in msg
+    assert "Automation License Manager" in msg
+    assert "没有 SimaticML" not in msg
+
+
+def test_format_openness_inconsistent_blocks_error():
+    from agents.plc.tia.openness_cli import (
+        format_openness_failure,
+        is_inconsistent_export_error,
+    )
+
+    raw = (
+        "ce:Error when calling method 'Export' of type 'Siemens.Engineering.SW.Blocks.FC'.\n"
+        "Inconsistent blocks and PLC data types (UDT) cannot be exported.\n"
+        "Exported 0 blocks; 2 failed"
+    )
+    assert is_inconsistent_export_error(raw)
+    msg = format_openness_failure(raw, project_path="C:/x/test1.ap19", action="export")
+    assert "不一致" in msg or "Inconsistent" in msg
+    assert "编译" in msg
+    assert ".zap" in msg
+
+
+def test_pick_zap_junk_xml_prefers_apxx(tmp_path: Path):
+    """Real .zap often has ConversionLog/GSD XML + .ap19 — must not treat as SimaticML."""
+    import zipfile
+
+    from agents.plc.tia.importer import (
+        diagnose_extracted_tree,
+        extract_tia_archive,
+        has_simaticml_exports,
+        openness_unavailable_guidance,
+        resolve_project_input,
+    )
+
+    zap = tmp_path / "raw.zap19"
+    with zipfile.ZipFile(zap, "w") as zf:
+        zf.writestr("Logs/ConversionLog.xml", b"<ConversionLog><Item/></ConversionLog>")
+        zf.writestr(
+            "Vci/AdditionalFiles/GSD/GSDML-V2.3-demo.xml",
+            b'<?xml version="1.0"?><ISO15745Profile xmlns="http://www.profibus.com/GSDML"/>',
+        )
+        zf.writestr("Line/Plant.ap19", b"fake-binary-ap19")
+
+    root = extract_tia_archive(zap, dest=tmp_path / "out")
+    assert root.suffix.lower() == ".ap19"
+    assert not has_simaticml_exports(tmp_path / "out")
+    diag = diagnose_extracted_tree(tmp_path / "out")
+    assert diag["mode"] == "apxx_needs_openness"
+
+    try:
+        resolve_project_input(zap, auto_export=True)
+        raise AssertionError("expected Openness failure guidance")
+    except Exception as exc:
+        text = str(exc)
+        assert "Plant.ap19" in text or ".ap" in text
+        # Incomplete sidecar tree (preferred) or classic Openness-unavailable guidance.
+        assert (
+            "孤立的 TIA 工程" in text
+            or "Retrieve" in text
+            or "Openness" in text
+        )
+        assert "SimaticML" in text or "整包" in text or ".zap" in text
+
+
+def test_ingest_single_xml_and_publish_graph():
+    from agents.plc.tia import analyze_plc_project
+    from tools.plc.server import plc_tia_ingest
+
+    xml = FIXTURES / "Blocks" / "FB_Motor.xml"
+    analyzed = analyze_plc_project(str(xml), project_name="SingleFB", publish_graph=True)
+    assert analyzed["import"]["source_kind"] == "export_xml"
+    assert "FB_Motor" in analyzed["project"].blocks
+    assert analyzed["graph_publish"]["ok"] is True
+    assert analyzed["graph_publish"]["entities"] >= 1
+
+    via_tool = plc_tia_ingest(str(FIXTURES), project_name="MotorDemo", publish_graph=True)
+    assert via_tool["ok"] is True
+    assert via_tool["pipeline"].startswith("XML")
+    assert via_tool["graph_publish"]["ok"] is True
+    assert via_tool["summary"]["Networks"] == 2
+
+
+def test_mcp_client_dispatches_tia_ingest():
+    from runtime.researchos_runtime.mcp_client import MCPClient
+    from runtime.researchos_runtime.settings import RuntimeSettings
+
+    client = MCPClient(RuntimeSettings())
+    result = client.call_tool(
+        "plc.tia.ingest",
+        {"path": str(FIXTURES), "project_name": "MotorDemo", "publish_graph": True},
+        task_id="t1",
+    )
+    assert result["ok"] is True
+    assert result["result"]["ok"] is True
+    assert result["result"]["graph_publish"]["entities"] >= 1
 
 
 def test_cli_missing_dir_exits_nonzero():

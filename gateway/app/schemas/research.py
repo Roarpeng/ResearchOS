@@ -51,6 +51,13 @@ class ResearchTask(BaseModel):
     mode: str
     workspace_id: str | None = None
     session_id: str | None = None
+    options: ResearchOptions | None = None
+    context: ResearchContext | None = None
+    route: str | None = Field(
+        default=None,
+        description="research | plc — set by server intent routing",
+    )
+    plc_job_id: str | None = None
     created_at: datetime
     updated_at: datetime
     stream: StreamLinks | None = None

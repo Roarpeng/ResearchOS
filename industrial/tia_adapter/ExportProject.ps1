@@ -65,7 +65,7 @@ function Export-BlockGroup {
         $sub = if ($Relative) { Join-Path $BlocksDir $Relative } else { $BlocksDir }
         New-Item -ItemType Directory -Force -Path $sub | Out-Null
         $target = [System.IO.FileInfo]::new((Join-Path $sub ($safe + ".xml")))
-        $block.Export($target, [Siemens.Engineering.SW.Blocks.ExportOptions]::WithDefaults)
+        $block.Export($target, [Siemens.Engineering.ExportOptions]::WithDefaults)
         Write-Host ("  exported block: " + $(if ($Relative) { "$Relative/$($block.Name)" } else { $block.Name }))
         $exported++
     }
@@ -104,14 +104,103 @@ if (-not $dll) {
     throw "Siemens.Engineering.dll not found under Portal $TiaVersion. Install TIA Portal Openness / PublicAPI."
 }
 Write-Host "Using Openness DLL: $dll"
-Add-Type -Path $dll
+
+# Openness Engineering.dll depends on Siemens.Engineering.Contract under
+# Portal\Bin\PublicAPI. Stage Engineering + Contract into a private folder so
+# CLR probing finds dependencies without a recursive AssemblyResolve hook.
+$portalRoot = "C:\Program Files\Siemens\Automation\Portal $TiaVersion"
+$binPublicApi = Join-Path $portalRoot "Bin\PublicAPI"
+$binDir = Join-Path $portalRoot "Bin"
+$stage = Join-Path $env:TEMP ("researchos_openness_" + $TiaVersion)
+New-Item -ItemType Directory -Force -Path $stage | Out-Null
+Copy-Item -Force $dll (Join-Path $stage "Siemens.Engineering.dll")
+foreach ($depName in @(
+    "Siemens.Engineering.Contract.dll",
+    "Siemens.Engineering.ClientAdapter.Interfaces.dll"
+)) {
+    $src = Join-Path $binPublicApi $depName
+    if (Test-Path $src) {
+        Copy-Item -Force $src (Join-Path $stage $depName)
+    }
+}
+# Keep PATH/cwd on Bin for native/sidecar deps used when TiaPortal starts.
+$env:PATH = "$stage;$binPublicApi;$binDir;$env:PATH"
+[System.IO.Directory]::SetCurrentDirectory($binDir)
+foreach ($depName in @(
+    "Siemens.Engineering.Contract.dll",
+    "Siemens.Engineering.ClientAdapter.Interfaces.dll",
+    "Siemens.Engineering.dll"
+)) {
+    $p = Join-Path $stage $depName
+    if (Test-Path $p) {
+        [void][System.Reflection.Assembly]::LoadFrom($p)
+    }
+}
 Add-Type -AssemblyName System.IO
+Write-Host "Openness assemblies staged at: $stage"
 
 New-Item -ItemType Directory -Force -Path $ExportDir | Out-Null
 $blocksDir = Join-Path $ExportDir "Blocks"
 $tagsDir   = Join-Path $ExportDir "TagTables"
 New-Item -ItemType Directory -Force -Path $blocksDir | Out-Null
 New-Item -ItemType Directory -Force -Path $tagsDir | Out-Null
+
+function Get-EngineeringService {
+    param($Provider, [Type]$ServiceType)
+    if ($null -eq $Provider -or $null -eq $ServiceType) { return $null }
+    $method = $Provider.GetType().GetMethods() |
+        Where-Object {
+            $_.Name -eq "GetService" -and
+            $_.IsGenericMethodDefinition -and
+            $_.GetParameters().Count -eq 0
+        } |
+        Select-Object -First 1
+    if ($null -eq $method) { return $null }
+    try {
+        return $method.MakeGenericMethod($ServiceType).Invoke($Provider, @())
+    } catch {
+        return $null
+    }
+}
+
+function Find-PlcSoftwareInItem {
+    param($Item, [string]$WantedName, [string]$DeviceName)
+    $candidates = @(
+        [Type]::GetType("Siemens.Engineering.HW.Features.SoftwareContainer, Siemens.Engineering"),
+        [Type]::GetType("Siemens.Engineering.Software.SoftwareContainer, Siemens.Engineering")
+    ) | Where-Object { $_ -ne $null }
+    # Fallback: resolve from already-loaded Engineering assembly
+    if ($candidates.Count -eq 0) {
+        $engAsm = [AppDomain]::CurrentDomain.GetAssemblies() |
+            Where-Object { $_.GetName().Name -eq "Siemens.Engineering" } |
+            Select-Object -First 1
+        if ($engAsm) {
+            foreach ($tn in @(
+                "Siemens.Engineering.HW.Features.SoftwareContainer",
+                "Siemens.Engineering.Software.SoftwareContainer"
+            )) {
+                $t = $engAsm.GetType($tn)
+                if ($t) { $candidates += $t }
+            }
+        }
+    }
+    foreach ($svcType in $candidates) {
+        $container = Get-EngineeringService -Provider $Item -ServiceType $svcType
+        if ($null -eq $container) { continue }
+        $software = $container.Software
+        if ($null -eq $software) { continue }
+        if ($software -is [Siemens.Engineering.SW.PlcSoftware]) {
+            if ($WantedName -eq "" -or $DeviceName -eq $WantedName -or $software.Name -eq $WantedName -or $Item.Name -eq $WantedName) {
+                return $software
+            }
+        }
+    }
+    foreach ($child in @($Item.DeviceItems)) {
+        $found = Find-PlcSoftwareInItem -Item $child -WantedName $WantedName -DeviceName $DeviceName
+        if ($null -ne $found) { return $found }
+    }
+    return $null
+}
 
 Write-Host "Starting TIA Portal (no UI)..."
 $portal = New-Object Siemens.Engineering.TiaPortal([Siemens.Engineering.TiaPortalMode]::WithoutUserInterface)
@@ -124,13 +213,11 @@ try {
     $plcDeviceName = ""
     foreach ($device in $project.Devices) {
         foreach ($item in $device.DeviceItems) {
-            $sw = $item.GetService([Siemens.Engineering.SW.PlcSoftware])
+            $sw = Find-PlcSoftwareInItem -Item $item -WantedName $PlcName -DeviceName $device.Name
             if ($null -ne $sw) {
-                if ($PlcName -eq "" -or $device.Name -eq $PlcName -or $sw.Name -eq $PlcName) {
-                    $plcSoftware = $sw
-                    $plcDeviceName = $device.Name
-                    break
-                }
+                $plcSoftware = $sw
+                $plcDeviceName = $device.Name
+                break
             }
         }
         if ($null -ne $plcSoftware) { break }

@@ -13,8 +13,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 COPY pyproject.toml README.md researchos_shared.py ./
 COPY gateway ./gateway
+COPY agents ./agents
+COPY industrial ./industrial
+COPY tools ./tools
+COPY knowledge ./knowledge
+COPY runtime ./runtime
 
-# Minimal install for gateway runtime (editable not required in image)
+# Gateway + PLC Intelligence offline ingest (XML/ZIP). .ap19 needs Windows Openness.
 RUN pip install --upgrade pip \
     && pip install \
         "fastapi>=0.115.0" \
@@ -28,7 +33,11 @@ RUN pip install --upgrade pip \
         "PyJWT>=2.9.0" \
         "orjson>=3.10.0" \
         "structlog>=24.4.0" \
-        "tenacity>=9.0.0"
+        "tenacity>=9.0.0" \
+        "neo4j>=5.26.0" \
+        "typer>=0.12.0" \
+        "rich>=13.9.0" \
+        "langchain-core>=0.3.0"
 
 EXPOSE 8000
 

@@ -81,5 +81,6 @@ Research / Industrial Agent 经工具注册表发现能力；Gateway 不实现�
 
 ## 实现状态
 
+- **TIA Openness MCP Foundation（Milestone 1 — 已落地）**：`tools/industrial-mcp/tia-openness`（C#）暴露 `tia.get_status` / `tia.open_project` / `tia.list_blocks` / `tia.export_block` → TIA Portal V19。文档：[`docs/mcp/08-tia-openness-mcp.md`](../mcp/08-tia-openness-mcp.md)。
 - **PLC 只读切片（已落地）**：`agents/plc`（手册对照 / 变更建议 / 安全核查 / 可选 TIA→KG+SCL）+ `tools/plc` mcp-plc（`plc.manual.*` / `plc.alarm.explain` / `plc.tia.analyze`；下载永拒）+ `industrial/tia_adapter` Openness 导出。`mode=industrial` 时 Planner 插入 `plc` 步骤；可通过 `tia_export_dir` / `RESEARCHOS_TIA_EXPORTS` 指向你的导出目录。CLI：`researchos-tia-cli`。测试：`tests/unit/test_plc_agent.py`、`tests/unit/test_tia_pipeline.py`。
 - Architecture Phase：其余域（ROS2 / CAD / Isaac Sim）仍为目标架构与边界描述。代码落地应单开 ADR，并先以「知识只读 + 仿真沙箱」垂直切片验收。

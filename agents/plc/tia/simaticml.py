@@ -43,6 +43,19 @@ _SECTION_MAP = {
 
 _BLOCK_TYPE_BY_SUFFIX = {"FB": BlockType.FB, "FC": BlockType.FC, "OB": BlockType.OB, "DB": BlockType.DB}
 
+# Real Openness V17–V20 exports use typed roots (SW.Blocks.OB / FB / …).
+# Older ResearchOS fixtures use SW.Blocks.ObjectSW + <DocumentType>.
+_BLOCK_ROOT_TAGS = {
+    "SW.Blocks.OB": BlockType.OB,
+    "SW.Blocks.FB": BlockType.FB,
+    "SW.Blocks.FC": BlockType.FC,
+    "SW.Blocks.GlobalDB": BlockType.DB,
+    "SW.Blocks.InstanceDB": BlockType.DB,
+    "SW.Blocks.ArrayDB": BlockType.DB,
+    "SW.Blocks.ObjectSW": None,  # type comes from DocumentType
+    "SW.Types.PlcStruct": BlockType.UDT,
+}
+
 
 def _strip_ns(tag: str) -> str:
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag
@@ -63,6 +76,31 @@ def _detect_document_type(root: ET.Element) -> str:
     return ""
 
 
+def _find_block_root(root: ET.Element) -> tuple[ET.Element | None, BlockType | None]:
+    """Locate the primary SW.Blocks.* / PlcStruct element and inferred type."""
+    for node in root:
+        tag = _strip_ns(node.tag)
+        if tag in _BLOCK_ROOT_TAGS:
+            return node, _BLOCK_ROOT_TAGS[tag]
+        # Some exports nest under Document only; also accept deep match for fixtures
+    for node in root.iter():
+        tag = _strip_ns(node.tag)
+        if tag in _BLOCK_ROOT_TAGS:
+            return node, _BLOCK_ROOT_TAGS[tag]
+    return None, None
+
+
+def _block_type_from_doc(doc_type: str, inferred: BlockType | None, is_udt: bool) -> BlockType:
+    if inferred is not None:
+        return inferred
+    if is_udt or doc_type.endswith("TypeTable.ML"):
+        return BlockType.UDT
+    suffix = doc_type.split(".")[-1].upper() if doc_type else ""
+    if suffix in _BLOCK_TYPE_BY_SUFFIX:
+        return _BLOCK_TYPE_BY_SUFFIX[suffix]
+    return BlockType.DB
+
+
 # ---------------------------------------------------------------------------
 # Access parsing
 # ---------------------------------------------------------------------------
@@ -79,30 +117,106 @@ def parse_access(access_el: ET.Element) -> Access:
         scope = AccessScope.UNKNOWN
 
     symbols: list[str] = []
+    # Classic fixture shape: <Symbol><Component Name=…/></Symbol>
     for node in access_el.iter():
         if _strip_ns(node.tag) == "Symbol":
             for comp in node:
                 if _strip_ns(comp.tag) == "Component":
                     symbols.append(_attr(comp, "Name"))
-    raw = ".".join(symbols)
+    # Openness V19 Call Instance / some Access nodes: direct <Component Name=…/>
+    if not symbols:
+        for node in access_el:
+            if _strip_ns(node.tag) == "Component":
+                name = _attr(node, "Name")
+                if name:
+                    symbols.append(name)
 
-    root = symbols[0] if symbols else ""
-    if scope == AccessScope.LOCAL and root.startswith("#"):
-        root = root[1:]
-    path = tuple(symbols[1:]) if len(symbols) > 1 else ()
-
+    absolute = _parse_absolute_address(access_el)
     data_type = ""
-    for node in access_el.iter():
-        if _strip_ns(node.tag) == "PredefinedAttribute":
-            if _attr(node, "Name") == "DataType":
-                data_type = _attr(node, "Value")
+    raw = ".".join(symbols) or absolute
+    root = ""
+    path: tuple[str, ...] = ()
+
+    # LiteralConstant: <Constant><ConstantType/><ConstantValue/></Constant>
+    if scope == AccessScope.LITERAL:
+        const_val = ""
+        const_type = ""
+        for node in access_el.iter():
+            tag = _strip_ns(node.tag)
+            if tag == "ConstantValue":
+                const_val = (node.text or "").strip()
+            elif tag == "ConstantType":
+                const_type = (node.text or "").strip()
+        if const_val:
+            raw = const_val
+            data_type = const_type
+    elif symbols:
+        root = symbols[0]
+        if scope == AccessScope.LOCAL and root.startswith("#"):
+            root = root[1:]
+        path = tuple(symbols[1:]) if len(symbols) > 1 else ()
+    elif absolute:
+        # Absolute-only access (e.g. %M0.5)
+        scope = AccessScope.GLOBAL if scope == AccessScope.UNKNOWN else scope
+        raw = absolute
+
+    if not data_type:
+        for node in access_el.iter():
+            if _strip_ns(node.tag) == "PredefinedAttribute":
+                if _attr(node, "Name") == "DataType":
+                    data_type = _attr(node, "Value")
     return Access(
         scope=scope,
         root=root,
         path=path,
         data_type=data_type,
         raw=raw or _attr(access_el, "Name"),
+        absolute=absolute,
     )
+
+
+_ABS_AREA = {
+    "Memory": "M",
+    "Input": "I",
+    "Output": "Q",
+    "PeripheralInput": "PI",
+    "PeripheralOutput": "PQ",
+    "Counter": "C",
+    "Timer": "T",
+    "DB": "DB",
+}
+
+
+def _parse_absolute_address(access_el: ET.Element) -> str:
+    """Render Siemens AbsoluteAddress / AbsoluteAdress as %M0.5 style."""
+    for node in access_el.iter():
+        tag = _strip_ns(node.tag)
+        if tag not in {"AbsoluteAddress", "AbsoluteAdress"}:
+            continue
+        area = _ABS_AREA.get(_attr(node, "Area") or "", _attr(node, "Area") or "")
+        if not area:
+            continue
+        typ = (_attr(node, "Type") or "Bit").strip()
+        try:
+            byte_off = int(_attr(node, "ByteOffset") or "0")
+        except ValueError:
+            byte_off = 0
+        try:
+            bit_off = int(_attr(node, "BitOffset") or "0")
+        except ValueError:
+            bit_off = 0
+        if typ.lower() in {"bit", "bool"}:
+            return f"%{area}{byte_off}.{bit_off}"
+        if typ.lower() in {"byte"}:
+            return f"%{area}B{byte_off}"
+        if typ.lower() in {"word"}:
+            return f"%{area}W{byte_off}"
+        if typ.lower() in {"dword"}:
+            return f"%{area}D{byte_off}"
+        if typ.lower() in {"lword"}:
+            return f"%{area}L{byte_off}"
+        return f"%{area}{byte_off}.{bit_off}"
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +284,75 @@ def _parse_part(part_el: ET.Element) -> Part:
             # Nested access (some call parts embed their instance access)
             access_name = _attr(node, "Name") or f"acc{len(part.accesses)}"
             part.accesses[access_name] = parse_access(node)
+        elif tag == "Instance":
+            # IEC timer/counter: <Instance Scope=…><Component Name=DB/></Instance>
+            comps = [
+                _attr(c, "Name")
+                for c in node.iter()
+                if _strip_ns(c.tag) == "Component" and _attr(c, "Name")
+            ]
+            if not comps:
+                continue
+            scope_attr = _attr(node, "Scope") or "GlobalVariable"
+            scope = (
+                AccessScope.LOCAL
+                if scope_attr == "LocalVariable"
+                else AccessScope.GLOBAL
+            )
+            part.accesses["instance"] = Access(
+                scope=scope,
+                root=comps[0],
+                path=tuple(comps[1:]),
+                raw=".".join(comps),
+            )
+            part.template_values["InstanceDB"] = comps[0]
+    return part
+
+
+def _parse_call_el(call_el: ET.Element) -> Part:
+    """Openness V17–V20: ``<Call><CallInfo Name=… BlockType=…><Instance/></CallInfo></Call>``."""
+    part = Part(
+        name="Call",
+        part_type="Call",
+        uuid=_attr(call_el, "UId") or f"call_{id(call_el)}",
+    )
+    for node in call_el.iter():
+        tag = _strip_ns(node.tag)
+        if tag == "CallInfo":
+            called = (_attr(node, "Name") or "").strip()
+            btype = (_attr(node, "BlockType") or "").strip()
+            if called:
+                part.template_values["Call"] = called
+                part.template_values["calledBlock"] = called
+            if btype:
+                part.template_values["BlockType"] = btype
+        elif tag == "Instance":
+            comps = [
+                _attr(c, "Name")
+                for c in node
+                if _strip_ns(c.tag) == "Component" and _attr(c, "Name")
+            ]
+            if not comps:
+                comps = [
+                    _attr(c, "Name")
+                    for c in node.iter()
+                    if _strip_ns(c.tag) == "Component" and _attr(c, "Name")
+                ]
+            if comps:
+                scope_attr = _attr(node, "Scope") or "GlobalVariable"
+                if scope_attr == "LocalVariable":
+                    scope = AccessScope.LOCAL
+                elif scope_attr in {"GlobalVariable", "TypedValue"}:
+                    scope = AccessScope.GLOBAL
+                else:
+                    scope = AccessScope.UNKNOWN
+                part.accesses["instance"] = Access(
+                    scope=scope,
+                    root=comps[0],
+                    path=tuple(comps[1:]),
+                    raw=".".join(comps),
+                )
+                part.template_values["InstanceDB"] = comps[0]
     return part
 
 
@@ -228,7 +411,11 @@ def parse_network(compile_unit: ET.Element) -> Network:
             elif tag == "Parts":
                 for part_el in node:
                     part_tag = _strip_ns(part_el.tag)
-                    if part_tag == "Part":
+                    if part_tag == "Call":
+                        # Real Openness exports use <Call>…</Call>, not <Part Name="Call">
+                        part = _parse_call_el(part_el)
+                        network.parts[part.uuid or f"call{len(network.parts)}"] = part
+                    elif part_tag == "Part":
                         part = _parse_part(part_el)
                         if part.name in {"LeftRail", "RightRail"}:
                             network.rails[part.name] = part
@@ -262,16 +449,13 @@ def parse_block_xml(path: Path) -> Block | None:
     tree = ET.parse(path)
     root = tree.getroot()
     doc_type = _detect_document_type(root)
-    if not doc_type.startswith("Simatic"):
-        return None
-
-    # Locate SW.Blocks.ObjectSW / SW.Blocks.GlobalDB
-    sw_obj = None
-    for node in root.iter():
-        if _strip_ns(node.tag) in {"SW.Blocks.ObjectSW", "SW.Blocks.GlobalDB", "SW.Types.PlcStruct"}:
-            sw_obj = node
-            break
+    sw_obj, inferred_type = _find_block_root(root)
     if sw_obj is None:
+        return None
+    # Fixtures use DocumentType + ObjectSW; real Openness V19 uses typed roots.
+    if inferred_type is None and doc_type and not doc_type.startswith("Simatic"):
+        return None
+    if inferred_type is None and not doc_type and _strip_ns(sw_obj.tag) == "SW.Blocks.ObjectSW":
         return None
 
     name = _attr(sw_obj, "Name") or path.stem
@@ -284,7 +468,6 @@ def parse_block_xml(path: Path) -> Block | None:
                 if child == "Attribute":
                     attrs[_attr(attr_el, "Name")] = (attr_el.text or "").strip()
                 elif (attr_el.text or "").strip() or child:
-                    # Direct children (Name, Number, KnowHowProtection, …)
                     attrs.setdefault(child, (attr_el.text or "").strip())
         elif tag in {
             "KnowHowProtection",
@@ -298,26 +481,19 @@ def parse_block_xml(path: Path) -> Block | None:
 
     name = _attr(sw_obj, "Name") or attrs.get("Name") or path.stem
 
-    block_type = BlockType.DB
     number = 0
     try:
         number = int(attrs.get("Number") or "0")
     except ValueError:
         number = 0
-    is_udt = any(
-        _strip_ns(node.tag) == "SW.Types.PlcStruct" for node in root.iter()
-    )
+    is_udt = any(_strip_ns(node.tag) == "SW.Types.PlcStruct" for node in root.iter())
     for node in sw_obj.iter():
         if _strip_ns(node.tag) == "Number":
             try:
                 number = int((node.text or "0").strip())
             except ValueError:
                 number = 0
-    suffix = doc_type.split(".")[-1].upper()
-    if suffix in _BLOCK_TYPE_BY_SUFFIX:
-        block_type = _BLOCK_TYPE_BY_SUFFIX[suffix]
-    elif is_udt or doc_type.endswith("TypeTable.ML"):
-        block_type = BlockType.UDT
+    block_type = _block_type_from_doc(doc_type, inferred_type, is_udt)
 
     lang = attrs.get("ProgrammingLanguage") or ""
     if not lang:
@@ -330,10 +506,12 @@ def parse_block_xml(path: Path) -> Block | None:
     for node in sw_obj.iter():
         if (
             _strip_ns(node.tag) == "SW.Blocks.InterfaceSection"
+            or _strip_ns(node.tag) == "Interface"
             or _attr(node, "CompositionName") == "Interface"
         ):
             interface = parse_interface(node)
-            break
+            if interface or _strip_ns(node.tag) in {"Interface", "SW.Blocks.InterfaceSection"}:
+                break
 
     networks: list[Network] = []
     for node in sw_obj.iter():
@@ -371,10 +549,28 @@ def parse_tag_table_xml(path: Path) -> TagTable | None:
     tree = ET.parse(path)
     root = tree.getroot()
     doc_type = _detect_document_type(root)
-    if "TagTable" not in doc_type and "Tag" not in doc_type:
+    has_tag_table = any(_strip_ns(n.tag) == "SW.Tags.PlcTagTable" for n in root.iter())
+    has_plc_tag = any(_strip_ns(n.tag) == "SW.Tags.PlcTag" for n in root.iter())
+    if not (has_tag_table or has_plc_tag or "TagTable" in doc_type or "Tag" in doc_type):
         return None
 
     table_name = path.stem
+    for node in root.iter():
+        if _strip_ns(node.tag) != "SW.Tags.PlcTagTable":
+            continue
+        for child in node:
+            if _strip_ns(child.tag) != "AttributeList":
+                continue
+            for attr_el in child:
+                if _strip_ns(attr_el.tag) == "Name" and (attr_el.text or "").strip():
+                    table_name = (attr_el.text or "").strip()
+                    break
+        if not table_name or table_name == path.stem:
+            n = _attr(node, "Name")
+            if n:
+                table_name = n
+        break
+
     tags: list[Tag] = []
     for node in root.iter():
         if _strip_ns(node.tag) != "SW.Tags.PlcTag":
@@ -394,24 +590,11 @@ def parse_tag_table_xml(path: Path) -> TagTable | None:
             elif sub_tag == "Text" and not comment:
                 comment = (sub.text or "").strip()
             elif sub_tag == "Name" and not name:
-                # SimaticML keeps the tag name inside <AttributeList>
                 name = (sub.text or "").strip()
         if name:
             tags.append(Tag(name=name, data_type=data_type, logical_address=address, comment=comment))
-    if not tags:
+    if not tags and not has_tag_table:
         return None
-    for node in root.iter():
-        if _strip_ns(node.tag) != "SW.Tags.PlcTagTable":
-            continue
-        n = _attr(node, "Name")
-        if not n:
-            for sub in node.iter():
-                if _strip_ns(sub.tag) == "Name":
-                    n = (sub.text or "").strip()
-                    break
-        if n:
-            table_name = n
-        break
     return TagTable(name=table_name, tags=tags)
 
 

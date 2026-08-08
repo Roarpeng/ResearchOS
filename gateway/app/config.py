@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     public_api_base: str = Field(default="http://localhost:8000", alias="PUBLIC_API_BASE")
     public_ws_base: str = Field(default="ws://localhost:8000", alias="PUBLIC_WS_BASE")
 
+    # PLC Intelligence feature (path sandbox + upload limits)
+    plc_path_allowlist: str = Field(
+        default="",
+        alias="PLC_PATH_ALLOWLIST",
+        description="Semicolon-separated absolute roots allowed for path ingest",
+    )
+    plc_work_dir: str | None = Field(default=None, alias="PLC_WORK_DIR")
+    plc_upload_max_mb: int = Field(default=200, alias="PLC_UPLOAD_MAX_MB")
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
