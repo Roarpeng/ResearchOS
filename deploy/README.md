@@ -2,7 +2,36 @@
 
 Local data plane + LiteLLM + Gateway skeleton.
 
-## Quick start
+## 一键启动（Windows）
+
+仓库根目录双击或命令行：
+
+```bat
+Start-ResearchOS.cmd
+```
+
+| 命令 | 行为 |
+|------|------|
+| `Start-ResearchOS.cmd` | 启动 Docker Desktop（若未开）→ `compose --profile plc up` → 构建/校验 **TIA Openness** CLI |
+| `Start-ResearchOS.cmd Hybrid` | Docker **仅数据面** + 本机 Gateway/Frontend + Openness（推荐 `.ap19` / 写回） |
+| `Stop-ResearchOS.cmd` | 停止宿主进程 + `docker compose down` |
+
+PowerShell 等价：
+
+```powershell
+.\scripts\Start-ResearchOS.ps1
+.\scripts\Start-ResearchOS.ps1 -Mode Hybrid
+.\scripts\Stop-ResearchOS.ps1
+```
+
+常用开关：`-SkipDocker` / `-SkipOpenness` / `-NoBuild`。
+
+Openness 为按需 CLI（非常驻守护）；脚本会写入 `RESEARCHOS_TIA_OPENNESS_EXE`，Hybrid 下宿主 Gateway 使用 `RESEARCHOS_TIA_OPENNESS=cli`。  
+日志与 PID：`.researchos/logs`、`.researchos/run`。
+
+访问：Frontend http://localhost:5173 · Gateway http://localhost:8000/api/v1/health/live
+
+## Quick start（手动）
 
 ```bash
 cp deploy/env/.env.example deploy/env/.env

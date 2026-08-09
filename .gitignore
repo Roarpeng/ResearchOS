@@ -18,6 +18,7 @@ frontend/dist/
 # Local / tooling artifacts
 .env
 deploy/env/.env
+.researchos/
 .graphflow-cache/
 graphflow-out/
 Cursor/

@@ -36,7 +36,7 @@ WRITE_PARTS = {
 
 MOVE_PARTS = {"Move", "Assign", "Move_Bool", "Move_Word", "Move_DWord", "Move_Real"}
 CALL_PARTS = {"Call", "CallPart"}
-INSTANCE_BOX_PARTS = {"CTU", "CTD", "CTUD", "TON", "TOF", "TP"}
+INSTANCE_BOX_PARTS = {"CTU", "CTD", "CTUD", "TON", "TOF", "TP", "R_TRIG", "F_TRIG", "P_TRIG"}
 #: Move / Call / timer-counter pins that write an IdentCon target
 WRITE_PINS = {
     "out",
@@ -518,7 +518,12 @@ def build_knowledge_graph(project: PlcProject) -> PlcKnowledgeGraph:
     for block in project.blocks.values():
         if block.block_type != BlockType.DB:
             continue
-        type_attr = block.attributes.get("OfType") or block.attributes.get("OfBlock") or ""
+        type_attr = (
+            block.attributes.get("InstanceOfName")
+            or block.attributes.get("OfType")
+            or block.attributes.get("OfBlock")
+            or ""
+        )
         if type_attr in fb_names:
             kg.add_edge(f"Block::{block.name}", f"Block::{type_attr}", "INSTANCE_OF")
 

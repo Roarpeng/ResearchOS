@@ -64,7 +64,7 @@ type Props = {
 
 const COL_W = 160;
 const ROW_H = 100;
-const MARGIN = 48;
+const MARGIN = 56;
 
 function shortLabel(s: string, n = 16) {
   const t = (s || "").trim();
@@ -127,25 +127,56 @@ function components(
   return out.sort((a, b) => b.length - a.length);
 }
 
+const PLC_GRAPH_KINDS = new Set([
+  "plc_block",
+  "plc_ob",
+  "plc_db",
+  "plc_tag",
+]);
+
+/** PLC implementation graph only — hide chat insights / questions / project hub. */
+export function isPlcGraphNode(n: {
+  kind?: string;
+  source?: { type?: string; block_name?: string };
+}): boolean {
+  const kind = String(n.kind || "");
+  if (PLC_GRAPH_KINDS.has(kind)) return true;
+  // Legacy nodes: plc source with a block name, but not dialogue snippets
+  if (n.source?.type === "plc" && n.source.block_name) return true;
+  return false;
+}
+
 /**
  * Galaxy layout: cluster by functional dependency edges.
- * Connected components → mini-galaxies; degree-0 isolates → bottom strip
- * (not a fake second ring “galaxy”).
+ * Connected components → mini-galaxies; degree-0 **PLC** isolates → bottom strip.
+ * Dialogue insight/question nodes are excluded from this view.
  */
 export function autoLayoutKnowledge(
   nodes: KnowledgeNode[],
   edges: KnowledgeEdge[] = [],
 ): KnowledgeNode[] {
-  const project = nodes.filter((n) => n.kind === "plc_project");
-  const blocks = nodes.filter((n) => n.kind === "plc_block" || n.kind === "plc_tag");
-  const other = nodes.filter(
-    (n) => n.kind !== "plc_project" && n.kind !== "plc_block" && n.kind !== "plc_tag",
+  const plcNodes = nodes.filter(isPlcGraphNode);
+  const project = plcNodes.filter((n) => n.kind === "plc_project");
+  const blocks = plcNodes.filter(
+    (n) =>
+      n.kind === "plc_block" ||
+      n.kind === "plc_tag" ||
+      n.kind === "plc_ob" ||
+      n.kind === "plc_db",
   );
-  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const byId = new Map(plcNodes.map((n) => [n.id, n]));
   const blockIds = blocks.map((n) => n.id);
+  const idSet = new Set(blockIds);
   const depEdges = edges.filter((e) => {
+    if (!idSet.has(e.source) || !idSet.has(e.target)) return false;
     const lab = e.label || "";
-    return lab === "DEPENDS_ON" || lab === "INSTANCE_OF" || e.user_created;
+    return (
+      lab === "DEPENDS_ON" ||
+      lab === "INSTANCE_OF" ||
+      lab === "CALLS" ||
+      lab === "USES" ||
+      e.user_created
+    );
   });
 
   const comps = components(
@@ -160,7 +191,7 @@ export function autoLayoutKnowledge(
     degree.set(e.target, (degree.get(e.target) || 0) + 1);
   });
 
-  // Isolates (no DEPENDS_ON) are normal for pure DBs / unused blocks — not a galaxy.
+  // Isolates (no dependency links) — keep project blocks that are truly unused
   const orphans: string[] = [];
   const galaxies: string[][] = [];
   comps.forEach((comp) => {
@@ -244,7 +275,7 @@ export function autoLayoutKnowledge(
     });
   });
 
-  // Orphan strip (no variable-dependency links)
+  // Orphan strip: unused PLC blocks / tags only (never chat insights)
   const orphanBaseY =
     (out.length ? Math.max(...out.map((n) => n.y)) : 360) + 160;
   orphans
@@ -262,16 +293,11 @@ export function autoLayoutKnowledge(
       });
     });
 
+  // Optional project hub — skip cryptic / hash-only labels (noise in top-left)
   project.forEach((n, i) => {
+    const label = String(n.label || "").trim();
+    if (!label || /^[a-f0-9]{5,}$/i.test(label) || /^plc[_-]/i.test(label)) return;
     out.push({ ...n, isolate: false, x: MARGIN + 40 + i * 160, y: MARGIN + 20 });
-  });
-  other.forEach((n, i) => {
-    out.push({
-      ...n,
-      isolate: true,
-      x: MARGIN + 40 + (i % 4) * COL_W,
-      y: orphanBaseY + Math.ceil(orphans.length / 10) * ROW_H + 80 + Math.floor(i / 4) * ROW_H,
-    });
   });
 
   return normalizePad(out);
@@ -293,13 +319,11 @@ function isMainCycleOb(n: { label: string; props?: Record<string, unknown> }): b
 }
 
 /**
- * PLC scan-cycle layout (Siemens):
- * 1) Main OB (OB1) runs networks top→bottom each cycle.
- * 2) Each network Call runs that FB/FC fully, then returns — order = seq.
- * 3) Other OBs (Startup / interrupt / fault) are separate lanes, not mixed into OB1 order.
+ * PLC scan-cycle layout (Siemens) — **逻辑图** only:
+ * Main/OB calls which FC/FB each cycle (ordered). No internal USES / nested CALLS.
  */
 function logicLayout(graph: LogicGraphData): {
-  nodes: Array<{ id: string; label: string; type?: string; x: number; y: number }>;
+  nodes: Array<{ id: string; label: string; type?: string; kind?: string; x: number; y: number }>;
   edges: Array<{ id: string; source: string; target: string; type: string }>;
 } {
   const blockNodes = (graph.nodes || []).filter((n) => n.type === "Block");
@@ -311,9 +335,6 @@ function logicLayout(graph: LogicGraphData): {
   );
   const nexts = (graph.edges || []).filter(
     (e) => e.type === "NEXT" && ids.has(e.source) && ids.has(e.target),
-  );
-  const uses = (graph.edges || []).filter(
-    (e) => e.type === "USES" && ids.has(e.source) && ids.has(e.target),
   );
 
   const callOut = new Map<string, Array<{ tgt: string; seq: number }>>();
@@ -335,13 +356,14 @@ function logicLayout(graph: LogicGraphData): {
     )[0] ||
     null;
 
-  const STEP_X = 150;
-  const LANE_Y = 170;
+  const STEP_X = 280;
+  const LANE_Y = 260;
+  const MIN_SEP = 130;
   const placed = new Map<string, { x: number; y: number; step?: number; lane: string }>();
 
-  // --- Lane 0: main scan cycle ---
+  // --- Lane 0: main scan cycle (OB → direct callees only) ---
   if (mainOb) {
-    placed.set(mainOb.id, { x: MARGIN + 40, y: MARGIN + 70, lane: "main" });
+    placed.set(mainOb.id, { x: MARGIN + 56, y: MARGIN + 88, lane: "main" });
     const spine = callOut.get(mainOb.id) || [];
     const uniqueSpine: string[] = [];
     spine.forEach(({ tgt }) => {
@@ -349,46 +371,11 @@ function logicLayout(graph: LogicGraphData): {
     });
     uniqueSpine.forEach((id, i) => {
       placed.set(id, {
-        x: MARGIN + 220 + i * STEP_X,
-        y: MARGIN + 70,
+        x: MARGIN + 300 + i * STEP_X,
+        y: MARGIN + 88,
         step: i + 1,
         lane: "main",
       });
-    });
-
-    // Nested calls under each spine FB (inner networks), one row below
-    uniqueSpine.forEach((parentId, pi) => {
-      const nested = (callOut.get(parentId) || [])
-        .map((x) => x.tgt)
-        .filter((t) => t !== mainOb.id && !uniqueSpine.includes(t));
-      const seen = new Set<string>();
-      nested.forEach((tid, j) => {
-        if (seen.has(tid) || placed.has(tid)) return;
-        seen.add(tid);
-        placed.set(tid, {
-          x: MARGIN + 220 + pi * STEP_X + (j % 3) * 40,
-          y: MARGIN + 70 + LANE_Y + Math.floor(j / 3) * 90,
-          lane: "nested",
-        });
-      });
-    });
-
-    // DBs used by Main / spine (e.g. Main USES ceD) — place under the user
-    const placeUsesFor = (userId: string, baseX: number, baseY: number) => {
-      const dbs = uses.filter((e) => e.source === userId).map((e) => e.target);
-      dbs.forEach((dbId, j) => {
-        if (placed.has(dbId)) return;
-        placed.set(dbId, {
-          x: baseX + (j % 3) * 48,
-          y: baseY + 110 + Math.floor(j / 3) * 80,
-          lane: "uses",
-        });
-      });
-    };
-    placeUsesFor(mainOb.id, MARGIN + 40, MARGIN + 70);
-    uniqueSpine.forEach((id) => {
-      const pos = placed.get(id);
-      if (pos) placeUsesFor(id, pos.x, pos.y);
     });
   }
 
@@ -400,16 +387,16 @@ function logicLayout(graph: LogicGraphData): {
       const seq = callOut.get(ob.id) || [];
       if (!seq.length && !mainOb) {
         placed.set(ob.id, {
-          x: MARGIN + 40,
-          y: MARGIN + 70 + lane * (LANE_Y + 40),
+          x: MARGIN + 56,
+          y: MARGIN + 88 + lane * LANE_Y,
           lane: "other",
         });
         lane += 1;
         return;
       }
-      if (!seq.length) return; // idle fault OBs with no calls — skip clutter
-      const y = MARGIN + 70 + lane * (LANE_Y + 80);
-      placed.set(ob.id, { x: MARGIN + 40, y, lane: "other" });
+      if (!seq.length) return;
+      const y = MARGIN + 88 + lane * LANE_Y;
+      placed.set(ob.id, { x: MARGIN + 56, y, lane: "other" });
       const uniq: string[] = [];
       seq.forEach(({ tgt }) => {
         if (!uniq.includes(tgt)) uniq.push(tgt);
@@ -417,7 +404,7 @@ function logicLayout(graph: LogicGraphData): {
       uniq.forEach((id, i) => {
         if (placed.has(id)) return;
         placed.set(id, {
-          x: MARGIN + 220 + i * STEP_X,
+          x: MARGIN + 300 + i * STEP_X,
           y,
           step: i + 1,
           lane: "other",
@@ -430,32 +417,60 @@ function logicLayout(graph: LogicGraphData): {
   if (!placed.size) {
     blockNodes.slice(0, 20).forEach((n, i) => {
       placed.set(n.id, {
-        x: MARGIN + 60 + (i % 8) * STEP_X,
-        y: MARGIN + 60 + Math.floor(i / 8) * 110,
+        x: MARGIN + 72 + (i % 6) * STEP_X,
+        y: MARGIN + 72 + Math.floor(i / 6) * 160,
         lane: "fallback",
       });
     });
+  }
+
+  // Push apart any pairs that still sit too close
+  const entries = [...placed.values()];
+  for (let iter = 0; iter < 6; iter++) {
+    for (let i = 0; i < entries.length; i++) {
+      for (let j = i + 1; j < entries.length; j++) {
+        const a = entries[i];
+        const b = entries[j];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const d = Math.hypot(dx, dy) || 0.01;
+        if (d >= MIN_SEP) continue;
+        const push = (MIN_SEP - d) / 2;
+        const ux = dx / d;
+        const uy = dy / d;
+        a.x = Math.max(MARGIN + 28, a.x - ux * push);
+        a.y = Math.max(MARGIN + 28, a.y - uy * push);
+        b.x = Math.max(MARGIN + 28, b.x + ux * push);
+        b.y = Math.max(MARGIN + 28, b.y + uy * push);
+      }
+    }
   }
 
   const nodes = [...placed.entries()].map(([id, pos]) => {
     const n = byId.get(id)!;
     const base = n.label || id.split("::").pop() || id;
     const label = pos.step ? `${pos.step}.${base}` : base;
+    const bt = String(n.props?.block_type || n.props?.type || "").toUpperCase();
+    const kind =
+      bt === "OB"
+        ? "plc_ob"
+        : bt === "DB"
+          ? "plc_db"
+          : bt === "FC" || bt === "FB"
+            ? "plc_block"
+            : "plc_block";
     return {
       id,
       label,
       type: n.type,
+      kind,
       x: pos.x,
       y: pos.y,
     };
   });
   const showSet = new Set(placed.keys());
 
-  // Edges for runtime story:
-  // - NEXT along main sequence (order)
-  // - CALLS from OBs into their steps (who invokes)
-  // - nested CALLS under spine
-  // Skip INSTANCE_OF (type link, not scan order)
+  // Edges: CALLS from OB → step; NEXT along spine. No USES / nested CALLS here.
   const edgeList: Array<{ id: string; source: string; target: string; type: string }> = [];
   let ei = 0;
   const addE = (source: string, target: string, type: string) => {
@@ -469,38 +484,27 @@ function logicLayout(graph: LogicGraphData): {
     spine.forEach((t) => {
       if (!uniq.includes(t)) uniq.push(t);
     });
-    // Prefer NEXT between consecutive steps; if missing, synthesize visual order edges
     for (let i = 0; i < uniq.length - 1; i++) {
-      const hasNext = nexts.some((e) => e.source === uniq[i] && e.target === uniq[i + 1]);
-      addE(uniq[i], uniq[i + 1], hasNext ? "NEXT" : "NEXT");
+      addE(uniq[i], uniq[i + 1], "NEXT");
     }
-    // OB enables the cycle — link to first step only (avoid fan-out spaghetti)
-    if (uniq[0]) addE(mainOb.id, uniq[0], "CALLS");
+    // Main/OB → each top-level FC/FB (scan cycle steps)
+    uniq.forEach((id) => addE(mainOb.id, id, "CALLS"));
   }
 
   nexts.forEach((e) => {
     if (showSet.has(e.source) && showSet.has(e.target)) {
-      if (!edgeList.some((x) => x.source === e.source && x.target === e.target)) {
+      if (!edgeList.some((x) => x.source === e.source && x.target === e.target && x.type === "NEXT")) {
         addE(e.source, e.target, "NEXT");
       }
     }
   });
 
-  // Nested CALLS (parent on spine → child)
-  calls.forEach((e) => {
-    if (!showSet.has(e.source) || !showSet.has(e.target)) return;
-    if (mainOb && e.source === mainOb.id) return; // already linked first only
-    if (isObNode(byId.get(e.source) || { label: "" })) {
-      addE(e.source, e.target, "CALLS");
-      return;
-    }
-    addE(e.source, e.target, "CALLS");
-  });
-
-  // Block → DB / instance associations (Main USES ceD, ce USES IEC_Counter_0_DB)
-  uses.forEach((e) => {
-    addE(e.source, e.target, "USES");
-  });
+  // Other OB → their direct callees
+  obs
+    .filter((o) => o.id !== mainOb?.id)
+    .forEach((ob) => {
+      (callOut.get(ob.id) || []).forEach(({ tgt }) => addE(ob.id, tgt, "CALLS"));
+    });
 
   return { nodes, edges: edgeList };
 }
@@ -620,7 +624,14 @@ function GraphPane({
         const isSelected = selectedId === n.id;
         const isHi = highlighted.has(n.id);
         const isFocus = isSelected || isHi || linkFrom === n.id;
-        const baseR = n.kind === "plc_project" ? 22 : 16;
+        const baseR =
+          classPrefix === "lg"
+            ? n.kind === "plc_ob"
+              ? 20
+              : 18
+            : n.kind === "plc_project"
+              ? 22
+              : 16;
         const maxChars = n.isolate ? 10 : 16;
         return (
           <g
@@ -676,7 +687,29 @@ export default function KnowledgeCanvas({
     localStorage.setItem(KG_SPLIT_KEY, String(Math.round(splitPct)));
   }, [splitPct]);
 
-  const laidOutKnowledge = useMemo(() => data.nodes, [data.nodes]);
+  const laidOutKnowledge = useMemo(() => {
+    // Display filter: PLC blocks/tags only (keeps project isolates; drops chat noise)
+    const plc = data.nodes.filter(isPlcGraphNode);
+    const ids = new Set(plc.map((n) => n.id));
+    const edges = data.edges.filter((e) => ids.has(e.source) && ids.has(e.target));
+    // Re-layout so dropping dialogue nodes doesn't leave empty bottom strip gaps
+    return autoLayoutKnowledge(plc, edges);
+  }, [data.nodes, data.edges]);
+
+  const knowledgeEdges = useMemo(() => {
+    const ids = new Set(laidOutKnowledge.map((n) => n.id));
+    return data.edges.filter((e) => {
+      if (!ids.has(e.source) || !ids.has(e.target)) return false;
+      const label = e.label || "";
+      if (e.user_created) return true;
+      return (
+        label === "CALLS" ||
+        label === "USES" ||
+        label === "INSTANCE_OF" ||
+        label === "DEPENDS_ON"
+      );
+    });
+  }, [data.edges, laidOutKnowledge]);
 
   const logicLaid = useMemo(
     () => (logicGraph ? logicLayout(logicGraph) : { nodes: [], edges: [] }),
@@ -758,10 +791,10 @@ export default function KnowledgeCanvas({
     setSelectedLogicId(null);
     setSelectedLogicEdge(null);
     // Cross-highlight: selecting a knowledge block lights matching logic nodes
-    if (node.kind === "plc_block") {
+    if (node.kind === "plc_block" || node.kind === "plc_ob" || node.kind === "plc_db") {
       const name = node.source?.block_name || node.label;
       const logicIds = logicLaid.nodes
-        .filter((ln) => ln.label === name || ln.id.endsWith(`::${name}`))
+        .filter((ln) => ln.label === name || ln.id.endsWith(`::${name}`) || ln.label.endsWith(`.${name}`))
         .map((ln) => ln.id);
       if (logicIds[0]) setSelectedLogicId(logicIds[0]);
       setHighlighted(new Set([id, ...logicIds]));
@@ -779,7 +812,12 @@ export default function KnowledgeCanvas({
     setSelectedId(firstKn);
     setHighlighted(new Set([...kn, id]));
     const node = firstKn ? byId.get(firstKn) : undefined;
-    if (node?.kind === "plc_block" && !busy && onNodeDescribe) {
+    if (
+      node &&
+      (node.kind === "plc_block" || node.kind === "plc_ob" || node.kind === "plc_db") &&
+      !busy &&
+      onNodeDescribe
+    ) {
       void onNodeDescribe(node);
     }
   }
@@ -821,13 +859,6 @@ export default function KnowledgeCanvas({
     await onDeepDive(selected, q);
   }
 
-  const knowledgeEdges = data.edges.filter((e) => {
-    const label = e.label || "";
-    // Galaxy = functional dependencies between blocks (+ user links).
-    if (e.user_created) return true;
-    if (label === "DEPENDS_ON" || label === "INSTANCE_OF") return true;
-    return false;
-  });
   const hasSelection =
     Boolean(selectedId || selectedLogicId || selectedLogicEdge) || highlighted.size > 0;
 
@@ -844,7 +875,10 @@ export default function KnowledgeCanvas({
           className="kg-pane"
           style={{ flex: `0 0 ${splitPct}%`, width: `${splitPct}%` }}
         >
-          <div className="kg-pane-title">逻辑图</div>
+          <div className="kg-pane-title">
+            逻辑图
+            <span className="kg-pane-hint">扫描周期 · Main 调用谁</span>
+          </div>
           <div className="kg-scroll">
             {logicLaid.nodes.length ? (
               <GraphPane
@@ -852,7 +886,8 @@ export default function KnowledgeCanvas({
                 height={logicSize.h}
                 nodes={logicLaid.nodes.map((n) => ({
                   ...n,
-                  kind: n.type === "Block" ? "plc_block" : "plc_tag",
+                  // Keep OB/DB/FC kinds from layout — do not collapse to plc_block
+                  kind: n.kind || (n.type === "Block" ? "plc_block" : "plc_tag"),
                 }))}
                 edges={logicLaid.edges.map((e) => ({
                   id: e.id,
@@ -893,7 +928,10 @@ export default function KnowledgeCanvas({
           className="kg-pane"
           style={{ flex: `1 1 ${100 - splitPct}%`, width: `${100 - splitPct}%` }}
         >
-          <div className="kg-pane-title">知识图谱</div>
+          <div className="kg-pane-title">
+            知识图谱
+            <span className="kg-pane-hint">实现 · 调用/依赖/实例</span>
+          </div>
           <div className="kg-scroll">
             {laidOutKnowledge.length ? (
               <GraphPane

@@ -310,7 +310,7 @@ def _parse_part(part_el: ET.Element) -> Part:
 
 
 def _parse_call_el(call_el: ET.Element) -> Part:
-    """Openness V17–V20: ``<Call><CallInfo Name=… BlockType=…><Instance/></CallInfo></Call>``."""
+    """Openness V17–V20: ``<Call><CallInfo Name=… BlockType=…><Instance/><Parameter/></CallInfo></Call>``."""
     part = Part(
         name="Call",
         part_type="Call",
@@ -353,6 +353,26 @@ def _parse_call_el(call_el: ET.Element) -> Part:
                     raw=".".join(comps),
                 )
                 part.template_values["InstanceDB"] = comps[0]
+        elif tag == "Parameter":
+            pname = (_attr(node, "Name") or "").strip()
+            if not pname:
+                continue
+            section = (_attr(node, "Section") or "").strip()
+            ptype = (_attr(node, "Type") or "").strip()
+            if section:
+                part.template_values[f"__sec__{pname}"] = section
+            if ptype:
+                part.template_values[f"__type__{pname}"] = ptype
+            # Embedded Access under Parameter (common in some Openness builds)
+            for child in node:
+                if _strip_ns(child.tag) == "Access":
+                    part.accesses[pname] = parse_access(child)
+                    break
+                # Some exports nest Access deeper
+                for sub in child.iter():
+                    if _strip_ns(sub.tag) == "Access" and _attr(sub, "Scope") != "Call":
+                        part.accesses[pname] = parse_access(sub)
+                        break
     return part
 
 
@@ -379,6 +399,220 @@ def _ml_text(parent: ET.Element) -> str:
     return ""
 
 
+def _structured_text_to_scl(st_el: ET.Element) -> str:
+    """Reconstruct SCL source from Openness StructuredText token tree.
+
+    NetworkSource may contain ``<StructuredText>`` (SCL networks) instead of
+    ``<FlgNet>`` (LAD/FBD). Tokens carry Text/Blank/NewLine; Access nodes are
+    operands; Instruction/Parameter form calls.
+    """
+    chunks: list[str] = []
+
+    def walk(el: ET.Element) -> None:
+        tag = _strip_ns(el.tag)
+        if tag == "Token":
+            chunks.append(_attr(el, "Text"))
+            return
+        if tag == "Blank":
+            try:
+                n = max(0, int(_attr(el, "Num") or "1"))
+            except ValueError:
+                n = 1
+            chunks.append(" " * n)
+            return
+        if tag == "NewLine":
+            try:
+                n = max(1, int(_attr(el, "Num") or "1"))
+            except ValueError:
+                n = 1
+            chunks.append("\n" * n)
+            return
+        if tag == "Access":
+            # Call-shaped Access embeds Instruction; render children.
+            if _attr(el, "Scope") == "Call" or any(
+                _strip_ns(child.tag) == "Instruction" for child in el
+            ):
+                for child in el:
+                    walk(child)
+                return
+            chunks.append(parse_access(el).as_scl())
+            return
+        if tag == "Instruction":
+            chunks.append(_attr(el, "Name"))
+            for child in el:
+                walk(child)
+            return
+        if tag == "Parameter":
+            name = _attr(el, "Name")
+            if name:
+                chunks.append(name)
+            for child in el:
+                walk(child)
+            return
+        if tag == "ConstantValue":
+            chunks.append((el.text or "").strip())
+            return
+        if tag in {"BooleanAttribute", "Component", "LineComment", "Text"}:
+            # Attributes / comments on symbols are reflected via Access.as_scl
+            return
+        for child in el:
+            walk(child)
+
+    for child in st_el:
+        walk(child)
+    text = "".join(chunks)
+    # Normalize trailing whitespace on each line; keep intentional blank lines.
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    return "\n".join(lines).strip()
+
+
+_STL_OUTPUT_PINS = {
+    "Q",
+    "QU",
+    "QD",
+    "OUT",
+    "OUT1",
+    "CV",
+    "ET",
+    "ENO",
+    "RET_VAL",
+}
+
+
+def _instruction_instance_name(instr_el: ET.Element) -> str:
+    for node in instr_el:
+        if _strip_ns(node.tag) != "Instance":
+            continue
+        comps = [
+            _attr(c, "Name")
+            for c in node.iter()
+            if _strip_ns(c.tag) == "Component" and _attr(c, "Name")
+        ]
+        if comps:
+            return comps[0]
+    return ""
+
+
+def _stl_call_to_scl(stmt_el: ET.Element) -> str:
+    """Rebuild one STL CALL statement as Siemens SCL instance call."""
+    for node in stmt_el.iter():
+        if _strip_ns(node.tag) != "Instruction":
+            continue
+        instr = (_attr(node, "Name") or "").strip()
+        inst = _instruction_instance_name(node)
+        params: list[str] = []
+        for child in node:
+            if _strip_ns(child.tag) != "Parameter":
+                continue
+            pname = (_attr(child, "Name") or "").strip()
+            if not pname:
+                continue
+            access_el = None
+            for sub in child.iter():
+                if _strip_ns(sub.tag) != "Access":
+                    continue
+                # Skip nested Call wrappers; take operand Access
+                if _attr(sub, "Scope") == "Call":
+                    continue
+                access_el = sub
+                break
+            if access_el is None:
+                continue
+            acc = parse_access(access_el)
+            op = "=>" if pname.upper() in _STL_OUTPUT_PINS else ":="
+            params.append(f"{pname} {op} {acc.as_scl()}")
+        callee = f'"{inst}"' if inst else (instr or "(*call*)")
+        body = ", ".join(params)
+        return f"{callee}({body});" if body else f"{callee}();"
+    return ""
+
+
+def _part_from_stl_call(stmt_el: ET.Element, *, uid: str) -> Part | None:
+    """Materialize STL CALL as a Part so KG can emit USES / CALLS."""
+    for node in stmt_el.iter():
+        if _strip_ns(node.tag) != "Instruction":
+            continue
+        instr = (_attr(node, "Name") or "").strip() or "Call"
+        inst = _instruction_instance_name(node)
+        part = Part(
+            name=instr,
+            part_type=instr,
+            uuid=uid or _attr(stmt_el, "UId") or f"stl_{instr}",
+        )
+        part.template_values["Call"] = instr
+        part.template_values["calledBlock"] = instr
+        if inst:
+            part.template_values["InstanceDB"] = inst
+            part.accesses["instance"] = Access(
+                scope=AccessScope.GLOBAL,
+                root=inst,
+                path=(),
+                raw=inst,
+            )
+        for child in node:
+            if _strip_ns(child.tag) != "Parameter":
+                continue
+            pname = (_attr(child, "Name") or "").strip()
+            if not pname:
+                continue
+            for sub in child.iter():
+                if _strip_ns(sub.tag) != "Access" or _attr(sub, "Scope") == "Call":
+                    continue
+                part.accesses[pname] = parse_access(sub)
+                break
+        return part
+    return None
+
+
+def _statement_list_to_scl(stl_el: ET.Element) -> str:
+    """Reconstruct SCL from Openness StatementList (STL network export).
+
+    Mixed LAD blocks sometimes store a network as ``StatementList`` with
+    ``StlToken Text=CALL`` + Instruction (e.g. R_TRIG) instead of FlgNet.
+    """
+    lines: list[str] = []
+    for stmt in stl_el:
+        if _strip_ns(stmt.tag) != "StlStatement":
+            continue
+        token = ""
+        for child in stmt:
+            if _strip_ns(child.tag) == "StlToken":
+                token = (_attr(child, "Text") or "").strip().upper()
+                break
+        if token in {"", "EMPTY_LINE", "COMMENT"}:
+            continue
+        if token == "CALL":
+            line = _stl_call_to_scl(stmt)
+            if line:
+                lines.append(line)
+            continue
+        # Best-effort: ignore unsupported pure STL boolean mnemonics for now
+    return "\n".join(lines).strip()
+
+
+def _ingest_statement_list(network: Network, stl_el: ET.Element) -> None:
+    """Attach StatementList body as source_text + Call parts."""
+    reconstructed = _statement_list_to_scl(stl_el)
+    if reconstructed:
+        network.source_text = reconstructed
+        if not network.programming_language:
+            network.programming_language = "STL"
+    for stmt in stl_el:
+        if _strip_ns(stmt.tag) != "StlStatement":
+            continue
+        token = ""
+        for child in stmt:
+            if _strip_ns(child.tag) == "StlToken":
+                token = (_attr(child, "Text") or "").strip().upper()
+                break
+        if token != "CALL":
+            continue
+        uid = _attr(stmt, "UId") or f"stl_call_{len(network.parts)}"
+        part = _part_from_stl_call(stmt, uid=uid)
+        if part is not None:
+            network.parts[part.uuid or uid] = part
+
+
 def parse_network(compile_unit: ET.Element) -> Network:
     network = Network(id=_attr(compile_unit, "UId"))
     # Title/Comment are MultilingualText compositions, not element tags
@@ -398,16 +632,25 @@ def parse_network(compile_unit: ET.Element) -> Network:
             network.programming_language = (node.text or "").strip()
             break
 
-    body = None
+    flgnet: ET.Element | None = None
+    structured: ET.Element | None = None
+    statement_list: ET.Element | None = None
     for node in compile_unit.iter():
-        if _strip_ns(node.tag) == "FlgNet":
-            body = node
-            break
-    if body is not None:
-        for node in body:
+        tag = _strip_ns(node.tag)
+        if tag == "FlgNet" and flgnet is None:
+            flgnet = node
+        elif tag == "StructuredText" and structured is None:
+            structured = node
+        elif tag == "StatementList" and statement_list is None:
+            statement_list = node
+
+    if flgnet is not None:
+        for node in flgnet:
             tag = _strip_ns(node.tag)
             if tag == "StructuredText":
-                network.source_text = (node.text or "").strip()
+                # Rare: ST embedded under FlgNet
+                if structured is None:
+                    structured = node
             elif tag == "Parts":
                 for part_el in node:
                     part_tag = _strip_ns(part_el.tag)
@@ -428,6 +671,24 @@ def parse_network(compile_unit: ET.Element) -> Network:
                 for wire_el in node:
                     if _strip_ns(wire_el.tag) == "Wire":
                         network.wires.append(_parse_wire(wire_el))
+
+    # SCL / ST networks: NetworkSource → StructuredText (token tree), not FlgNet
+    if structured is not None:
+        reconstructed = _structured_text_to_scl(structured)
+        if reconstructed:
+            network.source_text = reconstructed
+            if not network.programming_language:
+                network.programming_language = "SCL"
+        elif (structured.text or "").strip():
+            network.source_text = (structured.text or "").strip()
+
+    # STL StatementList (CALL boxes / mixed-language networks)
+    if statement_list is not None and not network.parts and not network.source_text:
+        _ingest_statement_list(network, statement_list)
+    elif statement_list is not None and not network.source_text:
+        # FlgNet empty but STL present (or hybrid): still ingest STL body
+        _ingest_statement_list(network, statement_list)
+
     return network
 
 
@@ -608,6 +869,8 @@ def extract_project(export_dir: str | Path, *, project_name: str = "") -> PlcPro
     Expected layout (flexible): any number of *.xml files exported via
     `PlcBlock.Export(..., ExportOptions.WithDefaults)` and tag tables.
     """
+    from agents.plc.tia.enrich import enrich_project_interfaces
+
     export_path = Path(export_dir)
     project = PlcProject(name=project_name or export_path.name, source_path=str(export_path))
     if not export_path.exists():
@@ -657,4 +920,5 @@ def extract_project(export_dir: str | Path, *, project_name: str = "") -> PlcPro
             "no PLC blocks or tag tables recognized — check Openness export layout"
         )
 
+    enrich_project_interfaces(project)
     return project

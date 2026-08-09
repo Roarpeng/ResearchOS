@@ -162,11 +162,13 @@ def _attach_canvas(
     # Always refresh PLC knowledge + logic graph onto the canvas when job is ready.
     if job and job.get("status") == "ready":
         canvas = kx.strip_job_plc_nodes(canvas, job_id=str(job.get("id") or ""))
+        canvas = kx.strip_dialogue_nodes(canvas)
         plc_nodes = kx.nodes_from_plc_job(job, task_id=task_id, turn_id=turn_id)
         new_nodes.extend(plc_nodes)
         new_edges.extend(kx.edges_from_plc_logic(job, plc_nodes))
 
-    if user_text:
+    # PLC job canvas = implementation graph only — do not inject dialogue snippets
+    if not job and user_text:
         new_nodes.extend(
             kx.nodes_from_text(
                 text=user_text,
@@ -178,24 +180,20 @@ def _attach_canvas(
                 limit=2,
             )
         )
-    if assistant_text:
-        # Prefer short dialogue insights; skip dumping the full PLC report into canvas noise
-        insight_src = assistant_text
-        if job and "## 解析结果" in assistant_text:
-            insight_src = assistant_text.split("## 解析结果", 1)[-1][:600]
+    if not job and assistant_text:
         new_nodes.extend(
             kx.nodes_from_text(
-                text=insight_src,
+                text=assistant_text,
                 role="assistant",
                 turn_id=turn_id,
                 task_id=task_id,
-                source_type="dialogue" if not job else "plc",
+                source_type="dialogue",
                 start_index=len(canvas.get("nodes") or []) + len(new_nodes),
-                limit=2 if job else 3,
+                limit=3,
             )
         )
 
-    if focus_node and assistant_text:
+    if not job and focus_node and assistant_text:
         for n in new_nodes:
             if n.get("kind") == "insight":
                 new_edges.append(

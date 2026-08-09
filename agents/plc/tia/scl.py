@@ -8,6 +8,8 @@ comment so an LLM agent (or engineer) can finish it with full context.
 
 from __future__ import annotations
 
+import re
+
 from agents.plc.tia.ir import (
     Access,
     AccessScope,
@@ -217,21 +219,42 @@ class NetworkTranslator:
             or self._pin_access(part, "db")
         )
         params: list[str] = []
+        seen: set[str] = set()
+        skip = {"in", "operand", "db", "instance", "en", "eno", "EN", "ENO", "Instance"}
+        out_pins = {"Q", "QU", "QD", "OUT", "OUT1", "CV", "ET", "ENO", "RET_VAL"}
+
+        for pin, acc in part.accesses.items():
+            if pin in skip:
+                continue
+            sec = str(part.template_values.get(f"__sec__{pin}") or "")
+            op = "=>" if sec in {"Output", "Return"} or pin.upper() in out_pins else ":="
+            params.append(f"{pin} {op} {acc.as_scl()}")
+            seen.add(pin)
+
         for wire in self.network.wires:
-            for ep in wire.targets:
+            for ep in wire.endpoints:
                 if ep.kind != "namecon" or ep.uuid != part.uuid:
                     continue
-                if ep.pin in {"in", "operand", "db", "instance", "en", "eno"}:
+                pin = ep.pin or ""
+                if not pin or pin in skip or pin in seen:
                     continue
                 acc = None
-                if wire.source and wire.source.kind == "identcon":
-                    acc = self.network.access_parts.get(wire.source.uuid)
-                value = acc.as_scl() if acc else "(* signal *)"
-                params.append(f"{ep.pin} := {value}")
+                for other in wire.endpoints:
+                    if other.kind == "identcon":
+                        acc = self.network.access_parts.get(other.uuid)
+                        if acc is not None:
+                            break
+                if acc is None:
+                    continue
+                sec = str(part.template_values.get(f"__sec__{pin}") or "")
+                op = "=>" if sec in {"Output", "Return"} or pin.upper() in out_pins else ":="
+                params.append(f"{pin} {op} {acc.as_scl()}")
+                seen.add(pin)
+
         call = called or "UNKNOWN_BLOCK"
         if instance and instance.root:
             prefix = f"#{instance.root}" if instance.scope == AccessScope.LOCAL else f'"{instance.root}"'
-            self.statements.append(f"{prefix}.{call}({', '.join(params)});")
+            self.statements.append(f"{prefix}({', '.join(params)});")
         else:
             self.statements.append(f"{call}({', '.join(params)});")
 
@@ -246,7 +269,10 @@ class NetworkTranslator:
             else part.name
         )
         params: list[str] = []
-        for pin in ("CU", "CD", "R", "LD", "IN"):
+        for pin in ("CU", "CD", "R", "LD", "IN", "CLK"):
+            if part.accesses.get(pin) is not None and not self._wires_to_pin(part.uuid, pin):
+                params.append(f"{pin} := {part.accesses[pin].as_scl()}")
+                continue
             wires = self._wires_to_pin(part.uuid, pin)
             if not wires:
                 continue
@@ -262,11 +288,11 @@ class NetworkTranslator:
                 continue
             params.append(f"{pin} := {self._value_at_pin(part.uuid, pin)}")
         for pin in ("PV", "PT"):
-            access = self._pin_access(part, pin)
+            access = self._pin_access(part, pin) or part.accesses.get(pin)
             if access is not None:
                 params.append(f"{pin} := {access.as_scl()}")
         for pin in ("CV", "Q", "QU", "QD", "ET"):
-            access = self._pin_access(part, pin)
+            access = self._pin_access(part, pin) or part.accesses.get(pin)
             if access is not None:
                 params.append(f"{pin} => {access.as_scl()}")
         self.statements.append(f"{inst}({', '.join(params)});")
@@ -277,7 +303,7 @@ class NetworkTranslator:
             return [line for line in self.network.source_text.splitlines() if line.strip()]
 
         folded_statements = iter(self.network.folded.statements) if self.network.folded else iter(())
-        counter_timer = {"CTU", "CTD", "CTUD", "TON", "TOF", "TP"}
+        box_parts = {"CTU", "CTD", "CTUD", "TON", "TOF", "TP", "R_TRIG", "F_TRIG", "P_TRIG"}
         for part in self.network.parts.values():
             name = part.name
             if name in {"Coil", "NegCoil", "Set", "Reset", "Save"}:
@@ -292,14 +318,20 @@ class NetworkTranslator:
                     self.statements.append(stmt_to_scl(folded))
                 else:
                     self._emit_move(part)
-            elif name in counter_timer:
+            elif name in box_parts:
                 folded = next(folded_statements, None)
                 if folded is not None and getattr(folded, "kind", "") == "call":
                     self.statements.append(stmt_to_scl(folded))
                 else:
                     self._emit_box_call(part)
-            elif name in {"Call"} or "Call" in (part.template_values or {}):
-                self._emit_call(part)
+            elif name in {"Call"} or "Call" in (part.template_values or {}) or "calledBlock" in (
+                part.template_values or {}
+            ):
+                folded = next(folded_statements, None)
+                if folded is not None and getattr(folded, "kind", "") == "call":
+                    self.statements.append(stmt_to_scl(folded))
+                else:
+                    self._emit_call(part)
             elif name in BRANCH_PARTS:
                 continue  # consumed by downstream coils / moves
             else:
@@ -313,71 +345,211 @@ class NetworkTranslator:
 
 
 # ---------------------------------------------------------------------------
-# Block / project level
+# Block / project level — Siemens SCL / IEC 61131-3 Structured Text style
+# Ref: Siemens SCL manual — VAR_INPUT…END_VAR, VAR_OUTPUT…END_VAR, …
 # ---------------------------------------------------------------------------
+
+#: Interface section → SCL declaration keyword (closed by END_VAR).
+_SECTION_KEYWORDS: dict[InterfaceSection, str] = {
+    InterfaceSection.INPUT: "VAR_INPUT",
+    InterfaceSection.OUTPUT: "VAR_OUTPUT",
+    InterfaceSection.IN_OUT: "VAR_IN_OUT",
+    InterfaceSection.STATIC: "VAR",
+    InterfaceSection.TEMP: "VAR_TEMP",
+    InterfaceSection.CONSTANT: "VAR_CONSTANT",
+}
+
+#: Block type → (open keyword, close keyword)
+_BLOCK_KEYWORDS: dict[BlockType, tuple[str, str]] = {
+    BlockType.FB: ("FUNCTION_BLOCK", "END_FUNCTION_BLOCK"),
+    BlockType.FC: ("FUNCTION", "END_FUNCTION"),
+    BlockType.OB: ("ORGANIZATION_BLOCK", "END_ORGANIZATION_BLOCK"),
+}
+
+
+def explain_scl_statement(stmt: str) -> str:
+    """Chinese meaning comment for one SCL statement (engineer-facing)."""
+    s = stmt.strip().rstrip(";")
+    if not s or s.startswith("(*") or s.startswith("//"):
+        return ""
+    upper = s.upper()
+    if "EMPTY NETWORK" in upper:
+        return "空网络，无执行逻辑"
+    # IF cond THEN tgt := TRUE; ELSE tgt := FALSE; END_IF
+    m = re.fullmatch(
+        r"IF\s+(.+?)\s+THEN\s+(.+?)\s*:=\s*TRUE\s*;\s*ELSE\s+\2\s*:=\s*FALSE\s*;\s*END_IF",
+        s,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        return f"当 {m.group(1)} 为 TRUE 时置位 {m.group(2)}，否则复位（触点→线圈）"
+    # IF en THEN dst := src; END_IF  (move / conditional assign)
+    m = re.fullmatch(
+        r"IF\s+(.+?)\s+THEN\s+(.+?)\s*:=\s*(.+?)\s*;\s*END_IF",
+        s,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        return f"条件 {m.group(1)} 成立时，将 {m.group(3)} 传送到 {m.group(2)}"
+    # IF cond THEN tgt := TRUE|FALSE; END_IF
+    m = re.fullmatch(
+        r"IF\s+(.+?)\s+THEN\s+(.+?)\s*:=\s*(TRUE|FALSE)\s*;\s*END_IF",
+        s,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        act = "置位" if m.group(3).upper() == "TRUE" else "复位"
+        return f"条件 {m.group(1)} 成立时{act} {m.group(2)}"
+    # Instance / FC call: name(params)
+    m = re.fullmatch(r"(.+?)\((.*)\)", s)
+    if m and ":=" not in m.group(1):
+        callee = m.group(1).strip()
+        params = m.group(2).strip()
+        if "CU" in params.upper() or "CV" in params.upper() or "PV" in params.upper():
+            return f"调用计数器实例 {callee}（上升沿计数，当前值写入 CV）"
+        if "R_TRIG" in callee.upper() or "CLK" in params.upper():
+            return f"上升沿检测 {callee}（CLK 上升时 Q 为 TRUE）"
+        if "F_TRIG" in callee.upper():
+            return f"下降沿检测 {callee}"
+        if "PT" in params.upper() or "ET" in params.upper() or re.search(r"\bIN\s*:=", params, re.I):
+            return f"调用定时器实例 {callee}"
+        return f"调用块/实例 {callee}" + (f"，参数：{params}" if params else "")
+    if ":=" in s:
+        left, right = s.split(":=", 1)
+        return f"将 {right.strip()} 赋给 {left.strip()}"
+    return "执行该语句"
 
 def _header(block: Block) -> str:
     bt = block.block_type
     if bt == BlockType.UDT:
-        return f"TYPE {block.name}"
+        return f"TYPE \"{block.name}\""
+    open_kw, _ = _BLOCK_KEYWORDS.get(bt, (bt.value, f"END_{bt.value}"))
     ret = ""
     if bt == BlockType.FC:
         returns = block.interface_section(InterfaceSection.RETURN)
-        ret = f" : {returns[0].data_type or 'Void'}" if returns else " : Void"
-    num = f"{block.number}" if block.number else "?"
-    header = f"{bt.value} {block.name}{ret}"
-    sub = []
+        ret_type = "Void"
+        if returns:
+            ret_type = returns[0].data_type or "Void"
+            if ret_type.lower() == "void" or returns[0].name in {"Ret_Val", "RET_VAL"}:
+                # Keep Void when no useful RET_VAL type
+                if (returns[0].data_type or "Void").lower() == "void":
+                    ret_type = "Void"
+        ret = f" : {ret_type}"
+    header = f'{open_kw} "{block.name}"{ret}'
+    sub: list[str] = []
     if block.number:
-        sub.append(f"// Number: {bt.value}{num}")
+        sub.append(f"// 编号：{bt.value}{block.number}")
     if block.programming_language:
-        sub.append(f"// Original language: {block.programming_language}")
+        sub.append(f"// 原始语言：{block.programming_language}（规则翻译为 SCL）")
     if block.header_comment:
-        sub.append(f"// {block.header_comment}")
+        sub.append(f"// 含义：{block.header_comment}")
+    else:
+        sub.append("// 含义：由 LAD/FBD 网络折叠生成的等效 SCL，导入前请人工复核")
     return header + ("\n" + "\n".join(sub) if sub else "")
+
+
+def _var_line(var, *, constant: bool = False) -> str:
+    dtype = var.data_type or "Bool"
+    comment_bits: list[str] = []
+    if var.comment:
+        comment_bits.append(var.comment)
+    if var.section == InterfaceSection.INPUT and not var.comment:
+        comment_bits.append("输入参数")
+    elif var.section == InterfaceSection.OUTPUT and not var.comment:
+        comment_bits.append("输出参数")
+    elif var.section == InterfaceSection.IN_OUT and not var.comment:
+        comment_bits.append("输入输出参数")
+    elif var.section == InterfaceSection.TEMP and not var.comment:
+        comment_bits.append("临时变量")
+    elif var.section == InterfaceSection.STATIC and not var.comment:
+        comment_bits.append("静态变量")
+    comment = f"  // {'；'.join(comment_bits)}" if comment_bits else ""
+    if constant:
+        val = var.start_value or "0"
+        return f"    {var.name} : {dtype} := {val};{comment}"
+    value = f" := {var.start_value}" if var.start_value else ""
+    return f"    {var.name} : {dtype}{value};{comment}"
 
 
 def _interface_text(block: Block) -> str:
     if block.block_type in {BlockType.DB, BlockType.UDT}:
-        lines = []
+        # Prefer sectioned layout for InstanceDB / GlobalDB readability
+        by_section: dict[InterfaceSection, list] = {s: [] for s in _SECTION_ORDER}
+        orphan: list = []
         for var in block.interface:
-            comment = f"  // {var.comment}" if var.comment else ""
-            value = f" := {var.start_value}" if var.start_value else ""
-            lines.append(f"    {var.name} : {var.data_type or 'Struct'}{value};{comment}")
+            if var.section in by_section:
+                by_section[var.section].append(var)
+            else:
+                orphan.append(var)
+        lines: list[str] = []
+        for section in _SECTION_ORDER:
+            members = by_section.get(section) or []
+            if not members:
+                continue
+            lines.append(f"    // ---- {section.value} ----")
+            for var in members:
+                lines.append(_var_line(var))
+        for var in orphan:
+            lines.append(_var_line(var))
         return "\n".join(lines)
 
-    lines = []
+    lines: list[str] = []
     for section in _SECTION_ORDER:
         members = block.interface_section(section)
+        # Skip Void Ret_Val noise on FC
+        if section == InterfaceSection.RETURN:
+            continue
         if not members:
             continue
-        lines.append(f"VAR{section.value.upper()}")
+        keyword = _SECTION_KEYWORDS.get(section)
+        if not keyword:
+            continue
+        lines.append(keyword)
         for var in members:
             if section == InterfaceSection.CONSTANT:
-                val = var.start_value or "0"
-                lines.append(f"    {var.name} : {var.data_type} := {val};")
+                lines.append(_var_line(var, constant=True))
             else:
-                comment = f"  // {var.comment}" if var.comment else ""
-                value = f" := {var.start_value}" if var.start_value else ""
-                lines.append(f"    {var.name} : {var.data_type}{value};{comment}")
+                lines.append(_var_line(var))
         lines.append("END_VAR")
     return "\n".join(lines)
 
 
 def translate_block_to_scl(block: Block) -> str:
-    """Convert one block to a full SCL compilation unit."""
+    """Convert one block to a full Siemens-standard SCL compilation unit."""
     if block.block_type == BlockType.DB:
         body = _interface_text(block)
-        return (
-            f"DATA_BLOCK {block.name}\n"
-            + (f"// Number: DB{block.number}\n" if block.number else "")
-            + (f"NON_RETAIN\n" if not any(v.is_retain for v in block.interface) else "")
-            + "STRUCT\n" + body + "\nEND_STRUCT;\nBEGIN\n\nEND_DATA_BLOCK"
+        lines = [f'DATA_BLOCK "{block.name}"']
+        if block.number:
+            lines.append(f"// 编号：DB{block.number}")
+        inst_of = (
+            (block.attributes or {}).get("InstanceOfName")
+            or (block.attributes or {}).get("OfType")
+            or (block.attributes or {}).get("OfBlock")
+            or ""
         )
+        if inst_of:
+            lines.append(f'// 实例数据块 · 类型 FB "{inst_of}"')
+            lines.append("// 含义：成员声明含 FB 接口镜像与多实例推断")
+        else:
+            lines.append("// 含义：数据块成员声明（由导出接口生成）")
+        if not any(v.is_retain for v in block.interface):
+            lines.append("NON_RETAIN")
+        lines.append("STRUCT")
+        lines.append(body if body else "    // （无成员）")
+        lines.append("END_STRUCT;")
+        lines.append("BEGIN")
+        lines.append("END_DATA_BLOCK")
+        return "\n".join(lines)
     if block.block_type == BlockType.UDT:
         return (
-            f"TYPE {block.name}\nSTRUCT\n" + _interface_text(block) + "\nEND_STRUCT;\nEND_TYPE"
+            f'TYPE "{block.name}"\nSTRUCT\n'
+            + _interface_text(block)
+            + "\nEND_STRUCT;\nEND_TYPE"
         )
 
+    _, end_kw = _BLOCK_KEYWORDS.get(
+        block.block_type, (block.block_type.value, f"END_{block.block_type.value}")
+    )
     lines: list[str] = [_header(block)]
     interface = _interface_text(block)
     if interface:
@@ -385,17 +557,43 @@ def translate_block_to_scl(block: Block) -> str:
     lines.append("BEGIN")
 
     for idx, network in enumerate(block.networks, start=1):
-        title = network.title or f"Network {idx}"
-        lines.append("")
-        lines.append(f"// NETWORK {idx}: {title}")
-        if network.comment:
-            lines.append(f"// {network.comment}")
         translator = NetworkTranslator(block, network)
-        for stmt in translator.translate():
+        statements = translator.translate()
+        title = (network.title or "").strip()
+        lines.append("")
+        lines.append(f"    // ---------- 网络 {idx} ----------")
+        if title and not re.match(r"(?i)^network\s*\d*$", title):
+            lines.append(f"    // 标题：{title}")
+        if network.comment:
+            lines.append(f"    // 注释：{network.comment}")
+        # Blank network: keep placeholder so middle gaps never look like "parse ended"
+        if statements == ["(* empty network *)"] or (
+            not statements and not network.parts and not network.source_text
+        ):
+            lines.append("    // （空白网络）")
+            continue
+        # StructuredText / StatementList source: emit reconstructed text as-is
+        if network.source_text:
+            lang = (network.programming_language or "").upper()
+            if lang == "STL":
+                lines.append(
+                    "    // 含义：本网络为 StatementList/STL 导出重建（CALL 盒等），等效 SCL"
+                )
+            else:
+                lines.append(
+                    "    // 含义：本网络为 StructuredText（SCL）原文重建，非 LAD 折叠"
+                )
+            for stmt in statements:
+                lines.append("    " + stmt)
+            continue
+        for stmt in statements:
+            meaning = explain_scl_statement(stmt)
+            if meaning:
+                lines.append(f"    // 含义：{meaning}")
             lines.append("    " + stmt)
 
     lines.append("")
-    lines.append(f"END_{block.block_type.value}")
+    lines.append(end_kw)
     return "\n".join(lines)
 
 

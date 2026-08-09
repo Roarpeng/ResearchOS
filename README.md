@@ -162,6 +162,19 @@ ResearchOS/
 
 ## Quick Start
 
+### Windows 一键启动（Docker + Openness）
+
+```bat
+Start-ResearchOS.cmd
+:: .ap19 / 写回工程请用：
+Start-ResearchOS.cmd Hybrid
+Stop-ResearchOS.cmd
+```
+
+详见 [`deploy/README.md`](./deploy/README.md)。
+
+### 开发机手动
+
 ```bash
 # 安装
 uv venv .venv --python 3.13 && uv pip install -e ".[dev]"

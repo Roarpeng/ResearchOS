@@ -77,7 +77,9 @@ flowchart LR
 
 ## 单机局域网（推荐验收拓扑）
 
-同一台 Windows：
+**一键启动（推荐）：** 仓库根目录 `Start-ResearchOS.cmd Hybrid`（数据面 Docker + 本机 Gateway/Frontend + Openness CLI 就绪）。普通全栈用 `Start-ResearchOS.cmd`。详见 [`deploy/README.md`](../deploy/README.md)。
+
+同一台 Windows（手动）：
 
 1. **Docker Desktop** 起数据面（至少 neo4j + minio；可全量 default compose）
 2. **本机 Gateway**（`uv run researchos-gateway`）以便直接调用 Openness CLI 处理 `.ap19`

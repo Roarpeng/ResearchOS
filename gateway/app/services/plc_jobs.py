@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import re
 import tempfile
 import zipfile
 from datetime import datetime, timezone
@@ -14,7 +15,6 @@ from uuid import uuid4
 
 from gateway.app.config import Settings, get_settings
 from gateway.app.services import store as mem
-from agents.plc.tia.graph_query import derive_depends_on_edges
 from agents.plc.tia.xml_understand import enrich_kg_calls_from_xml_files
 
 logger = logging.getLogger("researchos.gateway.plc")
@@ -82,66 +82,117 @@ def resolve_allowed_path(path: str, settings: Settings | None = None) -> Path:
     )
 
 
+def _is_ob_props(props: dict[str, Any], label: str = "") -> bool:
+    bt = str(props.get("block_type") or props.get("type") or "").upper()
+    name = label or str(props.get("name") or "")
+    if bt == "OB":
+        return True
+    if re.match(r"^OB\d", name, re.I):
+        return True
+    if re.match(r"^(Startup|System|Pull|Rack|Main)\b", name, re.I):
+        return True
+    return False
+
+
 def _logic_graph_from_kg(
     kg: dict[str, Any],
     *,
     max_dep_edges: int = 160,
 ) -> dict[str, Any]:
-    """Build UI graphs from XML-derived KG only.
+    """Build **逻辑图** (scan-cycle) from KG.
 
-    - CALLS / USES / NEXT / INSTANCE_OF = runtime / structural associations
-    - DEPENDS_ON = functional deps from READS/WRITES variable associations
-    Never invent edges from network titles or SCL comments.
+    Engineer view: which blocks Main/OB invokes each cycle — ordered CALLS + NEXT.
+    Does **not** include internal implementation deps (nested CALLS, USES, INSTANCE_OF,
+    DEPENDS_ON); those belong on the knowledge canvas via ``edges_from_plc_logic``.
     """
-    nodes: list[dict[str, Any]] = []
+    del max_dep_edges  # kept for call-site compatibility; deps live on knowledge canvas
+    blocks: list[dict[str, Any]] = []
     for n in kg.get("nodes") or []:
-        if n.get("type") not in {"Block", "TagTable"}:
+        if n.get("type") != "Block":
             continue
         props = n.get("props") or {}
-        nodes.append(
+        blocks.append(
             {
                 "id": n["id"],
                 "label": props.get("name") or n["id"].split("::")[-1],
-                "type": n.get("type") or "Block",
+                "type": "Block",
                 "props": props,
             }
         )
-    block_ids = {n["id"] for n in nodes if n["type"] == "Block"}
+    by_id = {b["id"]: b for b in blocks}
+    ob_ids = {
+        b["id"]
+        for b in blocks
+        if _is_ob_props(b.get("props") or {}, str(b.get("label") or ""))
+    }
 
-    primary: list[dict[str, Any]] = []
-    seen_primary: set[tuple[str, str, str]] = set()
-
+    # OB → callee CALLS only (top-level scan cycle)
+    calls: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
     for e in kg.get("edges") or []:
-        et = str(e.get("type") or "")
+        if str(e.get("type") or "") != "CALLS":
+            continue
         src = str(e.get("source") or "")
         tgt = str(e.get("target") or "")
-        props = e.get("props") if isinstance(e.get("props"), dict) else {}
-        if et in {"CALLS", "USES", "INSTANCE_OF", "DEPENDS_ON", "NEXT"}:
-            if src in block_ids and tgt in block_ids and src != tgt:
-                key = (src, tgt, et)
-                if key not in seen_primary:
-                    seen_primary.add(key)
-                    item: dict[str, Any] = {
-                        "source": src,
-                        "target": tgt,
-                        "type": et,
-                        "weight": 1,
-                    }
-                    if "seq" in props:
-                        item["seq"] = props["seq"]
-                    elif "seq" in e:
-                        item["seq"] = e["seq"]
-                    if props.get("evidence"):
-                        item["evidence"] = props["evidence"]
-                    primary.append(item)
+        if src not in ob_ids or tgt not in by_id or src == tgt:
             continue
-    primary_pairs = {(e["source"], e["target"]) for e in primary}
-    deps = [
-        edge
-        for edge in derive_depends_on_edges(kg, max_edges=max_dep_edges)
-        if (edge["source"], edge["target"]) not in primary_pairs
-    ]
-    return {"nodes": nodes, "edges": primary + deps}
+        key = (src, tgt, "CALLS")
+        if key in seen:
+            continue
+        seen.add(key)
+        props = e.get("props") if isinstance(e.get("props"), dict) else {}
+        item: dict[str, Any] = {"source": src, "target": tgt, "type": "CALLS", "weight": 1}
+        if "seq" in props:
+            item["seq"] = props["seq"]
+        elif "seq" in e:
+            item["seq"] = e["seq"]
+        if props.get("evidence"):
+            item["evidence"] = props["evidence"]
+        calls.append(item)
+
+    # NEXT between successive OB callees (prefer KG NEXT; else synthesize by seq)
+    callee_seq: dict[str, list[tuple[int, str]]] = {oid: [] for oid in ob_ids}
+    for c in calls:
+        seq = int(c.get("seq") or 999)
+        callee_seq.setdefault(c["source"], []).append((seq, c["target"]))
+    for oid, lst in callee_seq.items():
+        lst.sort(key=lambda x: (x[0], x[1]))
+
+    next_edges: list[dict[str, Any]] = []
+    kg_next = {
+        (str(e.get("source")), str(e.get("target")))
+        for e in (kg.get("edges") or [])
+        if str(e.get("type") or "") == "NEXT"
+    }
+    for oid, lst in callee_seq.items():
+        uniq: list[str] = []
+        for _, tid in lst:
+            if tid not in uniq:
+                uniq.append(tid)
+        for i in range(len(uniq) - 1):
+            a, b = uniq[i], uniq[i + 1]
+            key = (a, b, "NEXT")
+            if key in seen:
+                continue
+            seen.add(key)
+            next_edges.append(
+                {
+                    "source": a,
+                    "target": b,
+                    "type": "NEXT",
+                    "weight": 1,
+                    "seq": i + 1,
+                    "evidence": "kg_next" if (a, b) in kg_next else "scan_cycle_order",
+                }
+            )
+
+    keep_ids = set(ob_ids)
+    for c in calls:
+        keep_ids.add(c["source"])
+        keep_ids.add(c["target"])
+    # Always keep OBs even with no calls (show Main alone)
+    nodes = [b for b in blocks if b["id"] in keep_ids]
+    return {"nodes": nodes, "edges": calls + next_edges}
 
 
 def refresh_logic_graph(job: dict[str, Any]) -> dict[str, Any]:
@@ -187,17 +238,31 @@ def _block_list(project: Any) -> list[dict[str, Any]]:
         interface = getattr(block, "interface", None) or []
         inputs: list[str] = []
         outputs: list[str] = []
+        statics: list[str] = []
+        members: list[str] = []
         for v in interface:
             section = getattr(v, "section", None)
             sec = getattr(section, "value", None) or str(section or "")
             var_name = getattr(v, "name", "") or ""
+            dtype = getattr(v, "data_type", "") or ""
             if not var_name:
                 continue
             label = f"#{var_name}"
+            member = f"{var_name} : {dtype}" if dtype else var_name
+            members.append(member)
             if sec == "Input":
                 inputs.append(label)
             elif sec == "Output":
                 outputs.append(label)
+            elif sec == "Static":
+                statics.append(f"{label} : {dtype}" if dtype else label)
+        attrs = getattr(block, "attributes", None) or {}
+        instance_of = (
+            str(attrs.get("InstanceOfName") or "").strip()
+            or str(attrs.get("OfType") or "").strip()
+            or str(attrs.get("OfBlock") or "").strip()
+            or None
+        )
         blocks.append(
             {
                 "name": name,
@@ -208,6 +273,9 @@ def _block_list(project: Any) -> list[dict[str, Any]]:
                 "comment": (getattr(block, "header_comment", None) or "")[:240],
                 "inputs": inputs,
                 "outputs": outputs,
+                "statics": statics,
+                "members": members,
+                "instance_of": instance_of,
             }
         )
     blocks.sort(key=lambda b: (b.get("type") or "", b.get("name") or ""))
@@ -830,9 +898,13 @@ def _purpose_from_fold(folded: list[str], reads: list[str], writes: list[str]) -
 
 
 def _format_scl_logic_block(statements: list[str]) -> list[str]:
-    """Render folded/SCL statements as a fenced Markdown SCL block."""
+    """Render folded statements as commented SCL fragment (fallback)."""
     if not statements:
         return []
+    try:
+        from agents.plc.tia.scl import explain_scl_statement
+    except Exception:  # noqa: BLE001
+        explain_scl_statement = lambda _s: ""  # type: ignore[misc, assignment]
     body: list[str] = []
     for raw in statements[:16]:
         line = str(raw).strip()
@@ -842,10 +914,25 @@ def _format_scl_logic_block(statements: list[str]) -> list[str]:
             continue
         if not line.endswith(";"):
             line = f"{line};"
+        meaning = explain_scl_statement(line)
+        if meaning:
+            body.append(f"// {meaning}")
         body.append(line)
     if not body:
         return []
     return ["逻辑：", "```scl", *body, "```"]
+
+
+def _format_block_scl_markdown(job: dict[str, Any], block_name: str) -> list[str]:
+    """Prefer full standard SCL unit (VAR_INPUT…END_VAR + commented body)."""
+    scl = str((job.get("scl_sources") or {}).get(block_name) or "").strip()
+    if not scl:
+        return []
+    # Keep chat readable; still show complete unit for typical FC/FB sizes
+    lines = scl.splitlines()
+    if len(lines) > 120:
+        lines = lines[:120] + ["// …（已截断，完整 SCL 见导出包）"]
+    return ["SCL：", "```scl", *lines, "```"]
 
 
 def _block_assoc_lines(job: dict[str, Any], block_name: str) -> list[str]:
@@ -903,6 +990,8 @@ def _describe_block_function(job: dict[str, Any], block_name: str, block: dict[s
     comment = str(block.get("comment") or "").strip()
     iface_in = [str(x) for x in (block.get("inputs") or []) if x]
     iface_out = [str(x) for x in (block.get("outputs") or []) if x]
+    statics = [str(x) for x in (block.get("statics") or []) if x]
+    instance_of = str(block.get("instance_of") or "").strip()
     reads, writes = _tag_io_for_block(job, block_name)
     if iface_in or iface_out:
         reads = iface_in + [r for r in reads if r not in iface_in and not r.startswith("#")]
@@ -923,10 +1012,28 @@ def _describe_block_function(job: dict[str, Any], block_name: str, block: dict[s
     lines: list[str] = []
     if comment:
         lines.append(f"注释：{comment}")
+    if instance_of:
+        lines.append(f'实例类型：FB `{instance_of}`')
     lines.append(f"作用：{_purpose_from_fold(folded, reads, writes)}")
     lines.append(f"输入：{', '.join(reads) if reads else '（无已验证读取标签）'}")
     lines.append(f"输出：{', '.join(writes) if writes else '（无已验证写入标签）'}")
-    lines.extend(_format_scl_logic_block(folded))
+    if statics:
+        lines.append(f"静态/多实例：{', '.join(statics)}")
+    scl_md = _format_block_scl_markdown(job, block_name)
+    if scl_md:
+        lines.extend(scl_md)
+    else:
+        lines.extend(_format_scl_logic_block(folded))
+    # Instance DB has no networks — surface typed FB logic for engineers
+    if instance_of and instance_of != block_name:
+        fb_scl = _format_block_scl_markdown(job, instance_of)
+        if fb_scl:
+            lines.append(f"类型 FB `{instance_of}` 逻辑：")
+            # drop the leading "SCL：" label from helper
+            if fb_scl and fb_scl[0] == "SCL：":
+                lines.extend(fb_scl[1:])
+            else:
+                lines.extend(fb_scl)
     return lines
 
 

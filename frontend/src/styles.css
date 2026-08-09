@@ -756,9 +756,22 @@ body.col-resizing * {
 
 .lg-edge.uses,
 .kg-edge.uses {
-  stroke: #7c3aed;
-  stroke-width: 1.55;
+  stroke: #6d28d9;
+  stroke-width: 1.7;
   stroke-dasharray: 6 4;
+  opacity: 0.9;
+}
+
+.kg-edge.calls {
+  stroke: #1d4ed8;
+  stroke-width: 1.85;
+  opacity: 0.9;
+}
+
+.kg-edge.depends {
+  stroke: #c2410c;
+  stroke-width: 1.35;
+  opacity: 0.8;
 }
 
 .interrupt {
@@ -1008,6 +1021,17 @@ body.col-resizing * {
   border-bottom: 1px solid var(--line);
   background: var(--bg-elevated);
   flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+}
+
+.kg-pane-hint {
+  font-size: 0.65rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #64748b;
+  font-weight: 500;
 }
 
 .kg-scroll {
@@ -1051,23 +1075,22 @@ body.col-resizing * {
   opacity: 0.55;
 }
 
-.kg-edge.depends,
-.lg-edge.depends {
+.kg-edge.depends {
   stroke: #64748b;
   stroke-width: 1.15;
   opacity: 0.65;
 }
 
 .lg-edge.depends {
-  stroke: #c47a3a;
-  stroke-width: 1.35;
-  opacity: 0.75;
+  stroke: #c2410c;
+  stroke-width: 1.5;
+  opacity: 0.85;
 }
 
 .lg-edge.calls {
-  stroke: #2563eb;
-  stroke-width: 1.7;
-  opacity: 0.9;
+  stroke: #1d4ed8;
+  stroke-width: 2;
+  opacity: 0.95;
 }
 
 .lg-edge[class*="NEXT"],
@@ -1092,9 +1115,9 @@ body.col-resizing * {
 
 .kg-node circle,
 .lg-node circle {
-  fill: #0d7377;
-  stroke: #fff;
-  stroke-width: 2;
+  fill: #0f766e;
+  stroke: #0f172a;
+  stroke-width: 2.5;
   transition:
     fill 160ms var(--ease-out),
     stroke 160ms var(--ease-out),
@@ -1110,54 +1133,65 @@ body.col-resizing * {
 .kg-node.plc_block circle,
 .lg-node.plc_block circle,
 .lg-node.Block circle {
-  fill: #b45309;
+  fill: #9a3412;
+}
+
+.kg-node.plc_ob circle,
+.lg-node.plc_ob circle {
+  fill: #115e59;
+}
+
+.kg-node.plc_db circle,
+.lg-node.plc_db circle,
+.kg-node.plc_tag circle,
+.lg-node.plc_tag circle {
+  fill: #3f6212;
 }
 
 .kg-node.plc_project circle {
   fill: #7c2d12;
 }
 
-.kg-node.plc_tag circle,
-.lg-node.plc_tag circle {
+.kg-node.plc_tag circle {
   fill: #3f6212;
 }
 
 /* Isolates (bottom strip): cool slate — contrast warm galaxy amber */
 .kg-node.isolate circle {
-  fill: #64748b !important;
-  stroke: #e2e8f0;
+  fill: #475569 !important;
+  stroke: #0f172a;
   stroke-width: 2;
 }
 
 .kg-node.isolate.plc_block circle,
 .kg-node.isolate.plc_tag circle {
-  fill: #64748b !important;
+  fill: #475569 !important;
 }
 
 .kg-node.isolate.question circle {
-  fill: #7889a1 !important;
+  fill: #64748b !important;
 }
 
 .kg-node.galaxy.plc_block circle {
-  fill: #b45309;
+  fill: #9a3412;
 }
 
 /* Focus: brighter fill + glow; selected > highlighted */
 .kg-node.highlighted circle,
 .lg-node.highlighted circle {
-  fill: #fbbf24 !important;
-  stroke: #fff7ed;
+  fill: #f59e0b !important;
+  stroke: #78350f;
   stroke-width: 3;
-  filter: drop-shadow(0 0 8px rgba(251, 191, 36, 0.85));
+  filter: drop-shadow(0 0 8px rgba(245, 158, 11, 0.75));
 }
 
 .kg-node.selected circle,
 .lg-node.selected circle,
 .kg-node.linking circle {
-  fill: #fde047 !important;
-  stroke: #ffffff;
+  fill: #eab308 !important;
+  stroke: #713f12;
   stroke-width: 3.5;
-  filter: drop-shadow(0 0 12px rgba(253, 224, 71, 0.95));
+  filter: drop-shadow(0 0 10px rgba(234, 179, 8, 0.85));
 }
 
 .kg-node.selected text,
@@ -1165,23 +1199,33 @@ body.col-resizing * {
 .kg-node.highlighted text,
 .lg-node.highlighted text,
 .kg-node.linking text {
-  fill: #92400e;
+  fill: #78350f;
   font-weight: 700;
 }
 
-.kg-panes.has-selection .kg-node:not(.selected):not(.highlighted):not(.linking) circle,
-.kg-panes.has-selection .lg-node:not(.selected):not(.highlighted):not(.linking) circle {
-  opacity: 0.38;
+/* Only dim the pane that owns the selection — keep the other graph readable */
+.kg-panes.has-selection .kg-node:not(.selected):not(.highlighted):not(.linking) circle {
+  opacity: 0.55;
 }
 
-.kg-panes.has-selection .kg-node:not(.selected):not(.highlighted):not(.linking) text,
-.kg-panes.has-selection .lg-node:not(.selected):not(.highlighted):not(.linking) text {
+.kg-panes.has-selection .kg-node:not(.selected):not(.highlighted):not(.linking) text {
+  opacity: 0.65;
+}
+
+.kg-panes.has-selection .kg-edge:not(.lit) {
   opacity: 0.45;
 }
 
-.kg-panes.has-selection .kg-edge:not(.lit),
+.kg-panes.has-selection .lg-node:not(.selected):not(.highlighted):not(.linking) circle {
+  opacity: 0.92;
+}
+
+.kg-panes.has-selection .lg-node:not(.selected):not(.highlighted):not(.linking) text {
+  opacity: 0.95;
+}
+
 .kg-panes.has-selection .lg-edge:not(.lit) {
-  opacity: 0.28;
+  opacity: 0.72;
 }
 
 .kg-edge.lit,
@@ -1193,9 +1237,22 @@ body.col-resizing * {
 
 .kg-node text,
 .lg-node text {
-  fill: var(--ink);
-  font-size: 11px;
+  fill: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
   pointer-events: none;
+}
+
+.lg-node text {
+  fill: #020617;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.lg-edge-label {
+  fill: #1e293b;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .kg-pop {

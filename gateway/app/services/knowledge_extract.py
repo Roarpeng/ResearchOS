@@ -101,6 +101,28 @@ def strip_job_plc_nodes(canvas: dict[str, Any] | None, *, job_id: str | None = N
     return {"nodes": keep_nodes, "edges": edges}
 
 
+def strip_dialogue_nodes(canvas: dict[str, Any] | None) -> dict[str, Any]:
+    """Drop chat insight/question nodes — PLC galaxy stays block/dependency only."""
+    canvas = canvas or empty_canvas()
+    keep_nodes: list[dict[str, Any]] = []
+    removed: set[str] = set()
+    for n in canvas.get("nodes") or []:
+        kind = str(n.get("kind") or "")
+        src = n.get("source") or {}
+        is_dialogue = kind in {"insight", "question"} or src.get("type") == "dialogue"
+        if is_dialogue:
+            removed.add(str(n["id"]))
+            continue
+        keep_nodes.append(n)
+    keep_ids = {str(n["id"]) for n in keep_nodes}
+    edges = [
+        e
+        for e in (canvas.get("edges") or [])
+        if e.get("source") in keep_ids and e.get("target") in keep_ids
+    ]
+    return {"nodes": keep_nodes, "edges": edges}
+
+
 def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> list[dict[str, Any]]:
     """Build canvas nodes from PLC job blocks + project (knowledge / logic seeds)."""
     nodes: list[dict[str, Any]] = []
@@ -136,6 +158,14 @@ def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> li
             return 2
         return 1
 
+    def _kind_for(btype: str) -> str:
+        t = (btype or "").upper()
+        if t == "OB":
+            return "plc_ob"
+        if t == "DB":
+            return "plc_db"
+        return "plc_block"
+
     by_ring: dict[int, list[dict[str, Any]]] = {0: [], 1: [], 2: []}
     for block in blocks[:120]:
         by_ring[_ring_for(str(block.get("type") or ""))].append(block)
@@ -146,13 +176,27 @@ def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> li
             name = str(block.get("name") or f"Block{i}")
             btype = str(block.get("type") or "Block")
             comment = str(block.get("comment") or "")
+            inst = str(block.get("instance_of") or "").strip()
+            nets = block.get("networks")
+            lang = str(block.get("language") or "")
+            statics = block.get("statics") or []
+            bits = [btype]
+            if lang:
+                bits.append(lang)
+            if nets is not None:
+                bits.append(f"{nets} 网络")
+            if inst:
+                bits.append(f"实例←{inst}")
+            if statics:
+                bits.append(f"静态 {len(statics)}")
+            summary = comment or " · ".join(bits)
             x, y = _place_star(i, total, ring=ring)
             nodes.append(
                 {
                     "id": _nid("plc", f"{job_id}:{name}"),
                     "label": name,
-                    "summary": comment or f"{btype} · networks={block.get('networks', 0)}",
-                    "kind": "plc_block",
+                    "summary": summary[:280],
+                    "kind": _kind_for(btype),
                     "x": x,
                     "y": y,
                     "source": {
@@ -160,6 +204,7 @@ def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> li
                         "quote": comment or name,
                         "block_name": name,
                         "block_type": btype,
+                        "instance_of": inst or None,
                         "project": project,
                         "path": job.get("source_path") or job.get("project_path"),
                         "task_id": task_id,
@@ -169,12 +214,18 @@ def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> li
                 }
             )
 
-    # Tag tables from logic graph if present
+    # Tag tables from logic/knowledge graph if present
     tag_nodes = [
         n
         for n in (job.get("logic_graph") or {}).get("nodes") or []
         if n.get("type") == "TagTable"
     ]
+    if not tag_nodes:
+        tag_nodes = [
+            n
+            for n in (job.get("knowledge_graph") or {}).get("nodes") or []
+            if n.get("type") == "TagTable"
+        ]
     for i, n in enumerate(tag_nodes[:12]):
         props = n.get("props") or {}
         name = str(props.get("name") or n.get("label") or n.get("id") or "Tags")
@@ -190,6 +241,45 @@ def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> li
                 "source": {
                     "type": "plc",
                     "quote": name,
+                    "project": project,
+                    "task_id": task_id,
+                    "turn_id": turn_id,
+                    "plc_job_id": job_id,
+                },
+            }
+        )
+
+    # KG-only blocks (multi-instance / external DBs referenced by USES but not listed)
+    known_names = {str(b.get("name") or "") for b in blocks}
+    known_names |= {str(n.get("label") or "") for n in nodes}
+    extra_blocks = [
+        n
+        for n in (job.get("knowledge_graph") or {}).get("nodes") or []
+        if n.get("type") == "Block"
+    ]
+    extra_i = 0
+    for n in extra_blocks:
+        props = n.get("props") or {}
+        name = str(props.get("name") or n.get("id", "").split("::")[-1] or "")
+        if not name or name in known_names:
+            continue
+        btype = str(props.get("block_type") or "DB")
+        x, y = _place_star(extra_i, max(len(extra_blocks), 1), ring=2)
+        extra_i += 1
+        known_names.add(name)
+        nodes.append(
+            {
+                "id": _nid("plc", f"{job_id}:{name}"),
+                "label": name,
+                "summary": f"{btype} · 由依赖引用补全",
+                "kind": _kind_for(btype),
+                "x": x,
+                "y": y,
+                "source": {
+                    "type": "plc",
+                    "quote": name,
+                    "block_name": name,
+                    "block_type": btype,
                     "project": project,
                     "task_id": task_id,
                     "turn_id": turn_id,
@@ -223,39 +313,67 @@ def _plc_id_map(plc_nodes: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def edges_from_plc_logic(job: dict[str, Any], plc_nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Canvas edges for knowledge galaxy: functional DEPENDS_ON between blocks.
+    """Canvas edges for **知识图谱**: implementation & inter-block dependencies.
 
-    Runtime CALLS/NEXT stay on logic_graph for the logic pane.
+    Includes CALLS / USES / INSTANCE_OF / DEPENDS_ON from the full knowledge_graph.
+    Scan-cycle-only edges stay on ``logic_graph`` for the left pane.
     """
+    from agents.plc.tia.graph_query import derive_depends_on_edges
+
     id_map = _plc_id_map(plc_nodes)
-    lg = job.get("logic_graph") or {}
-    weighted = [
-        e
-        for e in (lg.get("edges") or [])
-        if str(e.get("type") or "") in {"DEPENDS_ON", "INSTANCE_OF"}
-    ]
-    weighted.sort(key=lambda e: (-int(e.get("weight") or 1), str(e.get("type") or "")))
+    kg = job.get("knowledge_graph") or {}
+    if not isinstance(kg, dict):
+        kg = {}
+
+    wanted = {"CALLS", "USES", "INSTANCE_OF", "DEPENDS_ON"}
+    raw: list[dict[str, Any]] = []
+    for e in kg.get("edges") or []:
+        et = str(e.get("type") or "")
+        if et not in wanted:
+            continue
+        raw.append(e)
+
+    strong_pairs = {
+        (str(e.get("source")), str(e.get("target")))
+        for e in raw
+        if str(e.get("type") or "") in {"CALLS", "USES", "INSTANCE_OF"}
+    }
+    for edge in derive_depends_on_edges(kg, max_edges=160):
+        pair = (str(edge.get("source")), str(edge.get("target")))
+        if pair in strong_pairs:
+            continue
+        raw.append(edge)
+
+    # Prefer structural edges first, then deps by weight
+    rank = {"CALLS": 0, "USES": 1, "INSTANCE_OF": 2, "DEPENDS_ON": 3}
+    raw.sort(
+        key=lambda e: (
+            rank.get(str(e.get("type") or ""), 9),
+            -int(e.get("weight") or 1),
+        )
+    )
 
     edges: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for e in weighted:
+    seen: set[tuple[str, str, str]] = set()
+    for e in raw:
         src = str(e.get("source") or "")
         tgt = str(e.get("target") or "")
+        et = str(e.get("type") or "DEPENDS_ON")
         sid = id_map.get(src) or id_map.get(src.split("::")[-1] if "::" in src else src)
         tid = id_map.get(tgt) or id_map.get(tgt.split("::")[-1] if "::" in tgt else tgt)
-        if not sid or not tid or sid == tid or (sid, tid) in seen:
+        if not sid or not tid or sid == tid or (sid, tid, et) in seen:
             continue
-        seen.add((sid, tid))
+        seen.add((sid, tid, et))
         edges.append(
             {
                 "id": f"e_{uuid4().hex[:8]}",
                 "source": sid,
                 "target": tid,
-                "label": str(e.get("type") or "DEPENDS_ON"),
+                "label": et,
                 "user_created": False,
             }
         )
-        if len(edges) >= 140:
+        if len(edges) >= 180:
             break
     return edges
 

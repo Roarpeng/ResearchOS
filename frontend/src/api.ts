@@ -342,6 +342,11 @@ export type PlcJobDetail = PlcJobSummary & {
     language?: string | null;
     networks?: number;
     comment?: string;
+    instance_of?: string | null;
+    statics?: string[];
+    members?: string[];
+    inputs?: string[];
+    outputs?: string[];
   }>;
   chat?: Array<{ role: string; content: string; block_name?: string | null }>;
   report?: string;

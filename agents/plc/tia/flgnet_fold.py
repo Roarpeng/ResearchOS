@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from agents.plc.tia.ir import (
     Access,
+    AccessScope,
     And,
     AssignStmt,
     Block,
@@ -34,6 +35,19 @@ COIL_PARTS = {"Coil", "NegCoil", "Set", "Reset", "Save"}
 MOVE_PARTS = {"Move", "Assign", "Move_Bool", "Move_Word", "Move_DWord", "Move_Real"}
 COUNTER_PARTS = {"CTU", "CTD", "CTUD"}
 TIMER_PARTS = {"TON", "TOF", "TP"}
+EDGE_TRIG_PARTS = {"R_TRIG", "F_TRIG", "P_TRIG"}
+CALL_PARTS = {"Call", "CallPart"}
+BOX_PARTS = COUNTER_PARTS | TIMER_PARTS | EDGE_TRIG_PARTS
+_SKIP_CALL_PINS = {"in", "operand", "db", "instance", "en", "eno", "EN", "ENO"}
+_OUTPUT_SECTIONS = {"Output", "Return"}
+_OUTPUT_PINS = {"Q", "QU", "QD", "OUT", "OUT1", "CV", "ET", "ENO", "RET_VAL"}
+
+
+def _pin_assign_op(part: Part, pin: str) -> str:
+    sec = str(part.template_values.get(f"__sec__{pin}") or "")
+    if sec in _OUTPUT_SECTIONS or pin.upper() in _OUTPUT_PINS:
+        return "=>"
+    return ":="
 
 
 def _paren(expr: str) -> str:
@@ -193,6 +207,16 @@ class _NetworkFolder:
     def fold(self) -> FoldedNetwork:
         folded = FoldedNetwork(network_id=self.network.id, title=self.network.title)
         if self.network.source_text:
+            # SCL / StructuredText network: keep statements for folded_logic / chat
+            for line in self.network.source_text.splitlines():
+                text = line.strip()
+                if not text:
+                    continue
+                if not text.endswith(";"):
+                    text = f"{text};"
+                folded.statements.append(
+                    AssignStmt(None, Lit(True), kind="call", target_scl=text)
+                )
             return folded
         for part in self.network.parts.values():
             if part.name in COIL_PARTS:
@@ -223,8 +247,14 @@ class _NetworkFolder:
                 folded.statements.append(
                     AssignStmt(dst, src_expr, kind="move", enable=en_expr)
                 )
-            elif part.name in COUNTER_PARTS | TIMER_PARTS:
+            elif part.name in BOX_PARTS:
                 folded.statements.append(self._fold_box_call(part))
+            elif (
+                part.name in CALL_PARTS
+                or part.template_values.get("Call")
+                or part.template_values.get("calledBlock")
+            ):
+                folded.statements.append(self._fold_block_call(part))
             elif part.name in BRANCH_PARTS:
                 continue
             else:
@@ -242,8 +272,63 @@ class _NetworkFolder:
                 return True
         return False
 
+    def _fold_block_call(self, part: Part) -> AssignStmt:
+        """Fold FC/FB Call parts into SCL call statements (wires + CallInfo params)."""
+        called = (
+            part.template_values.get("Call")
+            or part.template_values.get("calledBlock")
+            or ""
+        ).strip().strip('"') or "UNKNOWN_BLOCK"
+        instance = (
+            part.accesses.get("instance")
+            or part.accesses.get("Instance")
+            or self._pin_access(part, "db")
+        )
+        params: list[str] = []
+        seen_pins: set[str] = set()
+
+        # 1) Explicit Access on CallInfo Parameter
+        for pin, acc in part.accesses.items():
+            if pin in _SKIP_CALL_PINS or pin in {"instance", "Instance"}:
+                continue
+            op = _pin_assign_op(part, pin)
+            params.append(f"{pin} {op} {acc.as_scl()}")
+            seen_pins.add(pin)
+
+        # 2) FlgNet wires onto call pins
+        for wire in self.network.wires:
+            for ep in wire.endpoints:
+                if ep.kind != "namecon" or ep.uuid != part.uuid:
+                    continue
+                pin = ep.pin or ""
+                if not pin or pin in _SKIP_CALL_PINS or pin in seen_pins:
+                    continue
+                acc = None
+                for other in wire.endpoints:
+                    if other.kind == "identcon":
+                        acc = self.network.access_parts.get(other.uuid)
+                        if acc is not None:
+                            break
+                if acc is None:
+                    continue
+                op = _pin_assign_op(part, pin)
+                params.append(f"{pin} {op} {acc.as_scl()}")
+                seen_pins.add(pin)
+
+        if instance is not None and instance.root:
+            callee = (
+                f"#{instance.root}"
+                if instance.scope == AccessScope.LOCAL
+                else f'"{instance.root}"'
+            )
+            # Siemens: multi-instance / InstanceDB → call the instance, not Type.method
+            call = f"{callee}({', '.join(params)});"
+        else:
+            call = f"{called}({', '.join(params)});"
+        return AssignStmt(None, Lit(True), kind="call", target_scl=call)
+
     def _fold_box_call(self, part: Part) -> AssignStmt:
-        """Fold IEC counter/timer boxes into a call-like SCL statement."""
+        """Fold IEC counter/timer/edge boxes into a call-like SCL statement."""
         instance = part.accesses.get("instance")
         inst = instance.as_scl() if instance is not None else (
             f'"{part.template_values["InstanceDB"]}"'
@@ -252,16 +337,23 @@ class _NetworkFolder:
         )
         params: list[str] = []
         # Boolean / RLO inputs may be driven by contacts, not IdentCon Access.
-        for pin in ("CU", "CD", "R", "LD", "IN"):
+        for pin in ("CU", "CD", "R", "LD", "IN", "CLK"):
+            if part.accesses.get(pin) is not None and not self._wires_to_pin(part.uuid, pin):
+                params.append(f"{pin} := {part.accesses[pin].as_scl()}")
+                continue
             if not self._pin_has_real_driver(part, pin):
+                # Still allow explicit Access-bound pins (StatementList / CallInfo)
+                access = part.accesses.get(pin)
+                if access is not None:
+                    params.append(f"{pin} := {access.as_scl()}")
                 continue
             params.append(f"{pin} := {expr_to_scl(self._value_at_pin(part.uuid, pin))}")
         for pin in ("PV", "PT"):
-            access = self._pin_access(part, pin)
+            access = self._pin_access(part, pin) or part.accesses.get(pin)
             if access is not None:
                 params.append(f"{pin} := {access.as_scl()}")
         for pin in ("CV", "Q", "QU", "QD", "ET"):
-            access = self._pin_access(part, pin)
+            access = self._pin_access(part, pin) or part.accesses.get(pin)
             if access is not None:
                 params.append(f"{pin} => {access.as_scl()}")
         call = f"{inst}({', '.join(params)});"

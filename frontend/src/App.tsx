@@ -368,6 +368,12 @@ export default function App() {
     startNew();
   }
 
+  function canvasGalaxyScore(c: KnowledgeCanvasData | null | undefined): number {
+    if (!c?.edges?.length) return 0;
+    const want = new Set(["CALLS", "USES", "INSTANCE_OF", "DEPENDS_ON"]);
+    return c.edges.filter((e) => want.has(String(e.label || "")) || e.user_created).length;
+  }
+
   function applyCanvasFromTask(task: ReturnType<typeof unwrapTask>, fallback?: unknown) {
     const result = (task.result || {}) as Record<string, unknown>;
     const raw = result.knowledge_canvas ?? fallback;
@@ -379,7 +385,16 @@ export default function App() {
           nodes: autoLayoutKnowledge(next.nodes, next.edges),
           edges: next.edges,
         };
-        setCanvas(laid);
+        setCanvas((prev) => {
+          // Don't let a sparse chat canvas wipe a richer PLC galaxy (causes edge flash on click)
+          if (
+            canvasGalaxyScore(prev) > canvasGalaxyScore(laid) &&
+            prev.nodes.length >= Math.max(1, laid.nodes.length - 2)
+          ) {
+            return prev;
+          }
+          return laid;
+        });
         return laid;
       }
     }
@@ -402,11 +417,19 @@ export default function App() {
       },
     ];
     blocks.slice(0, 120).forEach((b) => {
+      const btype = String(b.type || "Block").toUpperCase();
+      const kind =
+        btype === "OB" ? "plc_ob" : btype === "DB" ? "plc_db" : "plc_block";
+      const inst = String(b.instance_of || "").trim();
+      const bits = [btype];
+      if (b.language) bits.push(String(b.language));
+      if (b.networks != null) bits.push(`${b.networks} 网络`);
+      if (inst) bits.push(`实例←${inst}`);
       nodes.push({
         id: `plc_b_${detail.id}_${b.name}`,
         label: b.name,
-        summary: b.comment || `${b.type} · networks=${b.networks ?? 0}`,
-        kind: "plc_block",
+        summary: b.comment || bits.join(" · "),
+        kind,
         x: 0,
         y: 0,
         source: {
@@ -418,36 +441,84 @@ export default function App() {
         },
       });
     });
+    const known = new Set(nodes.map((n) => n.label));
+    for (const n of detail.knowledge_graph?.nodes || []) {
+      if (String(n.type || "") !== "Block") continue;
+      const props = (n.props || {}) as Record<string, unknown>;
+      const name = String(props.name || String(n.id || "").split("::").pop() || "");
+      if (!name || known.has(name)) continue;
+      known.add(name);
+      const btype = String(props.block_type || "DB").toUpperCase();
+      nodes.push({
+        id: `plc_b_${detail.id}_${name}`,
+        label: name,
+        summary: `${btype} · 由依赖引用补全`,
+        kind: btype === "OB" ? "plc_ob" : btype === "DB" ? "plc_db" : "plc_block",
+        x: 0,
+        y: 0,
+        source: {
+          type: "plc",
+          plc_job_id: detail.id,
+          block_name: name,
+          block_type: btype,
+          project: detail.project_name,
+        },
+      });
+    }
     const byLabel = new Map<string, string>();
     nodes.forEach((n) => {
       byLabel.set(n.label, n.id);
       byLabel.set(`Block::${n.label}`, n.id);
     });
-    // Galaxy edges: functional DEPENDS_ON (not CONTAINS membership)
-    const depEdges = (detail.logic_graph?.edges || [])
+    // Knowledge galaxy: CALLS / USES / INSTANCE_OF / DEPENDS_ON (full KG)
+    const kgEdges = (detail.knowledge_graph?.edges || []) as Array<{
+      source?: string;
+      target?: string;
+      type?: string;
+      weight?: number;
+    }>;
+    const lgFallback = (detail.logic_graph?.edges || []) as Array<{
+      source?: string;
+      target?: string;
+      type?: string;
+      weight?: number;
+    }>;
+    const rawEdges = (kgEdges.length ? kgEdges : lgFallback)
       .filter((e) => {
         const t = String(e.type || "");
-        return t === "DEPENDS_ON" || t === "INSTANCE_OF";
+        return t === "CALLS" || t === "USES" || t === "INSTANCE_OF" || t === "DEPENDS_ON";
       })
       .slice()
-      .sort((a, b) => Number(b.weight || 1) - Number(a.weight || 1));
+      .sort((a, b) => {
+        const rank: Record<string, number> = {
+          CALLS: 0,
+          USES: 1,
+          INSTANCE_OF: 2,
+          DEPENDS_ON: 3,
+        };
+        return (
+          (rank[String(a.type)] ?? 9) - (rank[String(b.type)] ?? 9) ||
+          Number(b.weight || 1) - Number(a.weight || 1)
+        );
+      });
     const edges: KnowledgeCanvasData["edges"] = [];
     const seen = new Set<string>();
-    for (const e of depEdges) {
-      if (edges.length >= 140) break;
+    for (const e of rawEdges) {
+      if (edges.length >= 180) break;
       const src = String(e.source || "");
       const tgt = String(e.target || "");
+      const et = String(e.type || "DEPENDS_ON");
       const sid =
         byLabel.get(src) || byLabel.get(src.includes("::") ? src.split("::").pop() || "" : src);
       const tid =
         byLabel.get(tgt) || byLabel.get(tgt.includes("::") ? tgt.split("::").pop() || "" : tgt);
-      if (!sid || !tid || sid === tid || seen.has(`${sid}|${tid}`)) continue;
-      seen.add(`${sid}|${tid}`);
+      if (!sid || !tid || sid === tid || seen.has(`${sid}|${tid}|${et}`)) continue;
+      seen.add(`${sid}|${tid}|${et}`);
       edges.push({
         id: `dep_${edges.length}_${sid}`,
         source: sid,
         target: tid,
-        label: String(e.type || "DEPENDS_ON"),
+        label: et,
         user_created: false,
       });
     }
@@ -601,14 +672,20 @@ export default function App() {
         setMessages((prev) => prev.filter((m) => m.id !== progressId));
       }
       pushMsg("assistant", turn.assistant_message || "");
-      const applied = applyCanvasFromTask(task, turn.knowledge_canvas);
       const linked = turn.plc_job_id || task.plc_job_id;
-      if (linked) {
-        const detail = await hydratePlc(String(linked));
-        const hasGalaxy = Boolean(applied?.edges.some((e) => e.label === "DEPENDS_ON"));
-        if (detail.status === "ready" && (!applied?.nodes.length || !hasGalaxy)) {
-          applyCanvasFromPlcJob(detail);
-        }
+      // Node deep-dive / describe: keep current galaxy; only hydrate chat/job text.
+      const isNodeFocus = Boolean(opts.focusNodeId || opts.blockName);
+      if (!isNodeFocus || canvasGalaxyScore(canvas) === 0) {
+        const applied = applyCanvasFromTask(task, turn.knowledge_canvas);
+        if (linked) {
+          const detail = await hydratePlc(String(linked));
+          const hasGalaxy = canvasGalaxyScore(applied) > 0 || canvasGalaxyScore(canvas) > 0;
+          if (detail.status === "ready" && (!applied?.nodes.length || !hasGalaxy)) {
+            applyCanvasFromPlcJob(detail);
+          }
+        } else if (turn.route === "research") connectWs(id);
+      } else if (linked) {
+        await hydratePlc(String(linked));
       } else if (turn.route === "research") connectWs(id);
       void refreshTopics();
     } catch (err) {

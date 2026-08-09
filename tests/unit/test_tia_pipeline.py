@@ -110,23 +110,26 @@ def test_kg_json_roundtrip(result):
 def test_scl_self_holding_expression(result):
     scl = result["scl_sources"]["FB_Motor"]
     assert "#Running := ((#Start OR #Running) AND NOT (#Stop)) AND NOT (#Fault);" in scl
-    assert "VARINPUT" in scl and "VAROUTPUT" in scl
-    assert scl.startswith("FB FB_Motor")
-    assert "END_FB" in scl
+    assert "VAR_INPUT" in scl and "END_VAR" in scl
+    assert "VAR_OUTPUT" in scl
+    assert 'FUNCTION_BLOCK "FB_Motor"' in scl
+    assert "END_FUNCTION_BLOCK" in scl
+    assert "// 将" in scl or "// 含义" in scl
 
 
 def test_scl_call_statement(result):
     scl = result["scl_sources"]["Main"]
     assert (
-        '#MotorInst.FB_Motor(Start := "HMI".StartCmd, '
+        '#MotorInst(Start := "HMI".StartCmd, '
         'Stop := "HMI".StopCmd, Fault := "Safety".FaultOk);' in scl
     )
-    assert "END_OB" in scl
+    assert 'ORGANIZATION_BLOCK "Main"' in scl
+    assert "END_ORGANIZATION_BLOCK" in scl
 
 
 def test_scl_db_instance(result):
     scl = result["scl_sources"]["MotorInst"]
-    assert scl.startswith("DATA_BLOCK MotorInst")
+    assert 'DATA_BLOCK "MotorInst"' in scl
     assert "Start : Bool;" in scl and "END_DATA_BLOCK" in scl
 
 
