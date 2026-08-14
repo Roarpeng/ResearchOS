@@ -103,6 +103,7 @@ async def post_chat_turn(
         route=str(result["route"]),
         plc_job_id=str(plc_job_id) if plc_job_id else None,
         knowledge_canvas=result.get("knowledge_canvas"),
+        citations=list(result.get("citations") or []),
     )
     logger.info(
         "chat turn ok route=%s task=%s plc=%s request_id=%s",

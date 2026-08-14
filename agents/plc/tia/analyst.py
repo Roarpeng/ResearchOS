@@ -74,6 +74,10 @@ def _edge_evidence(edge: dict[str, Any]) -> dict[str, Any]:
         evidence["source_evidence"] = props["evidence"]
     elif edge.get("evidence"):
         evidence["source_evidence"] = edge["evidence"]
+    if isinstance(props, dict) and props.get("network"):
+        evidence["network"] = str(props["network"])
+    elif edge.get("network"):
+        evidence["network"] = str(edge["network"])
     return evidence
 
 
@@ -325,6 +329,31 @@ def analyze_project(job: dict) -> dict:
                     "evidence": evidence,
                 }
             )
+    writers: dict[str, list[str]] = defaultdict(list)
+    for edge in _edges(job, "WRITES"):
+        tag = _name(edge.get("target"))
+        src = _name(edge.get("source"))
+        if tag and src and src not in writers[tag]:
+            writers[tag].append(src)
+    for tag, srcs in sorted(writers.items()):
+        if len(srcs) < 2:
+            continue
+        findings.append(
+            {
+                "code": "MULTIPLE_WRITERS",
+                "severity": "warn",
+                "message": f"标签 `{tag}` 被多个块写入: {', '.join(srcs)}。",
+                "evidence": [
+                    _edge_evidence(e)
+                    for e in _edges(job, "WRITES")
+                    if _name(e.get("target")) == tag
+                ],
+            }
+        )
+    interlock_findings = _missing_interlock_findings(job)
+    findings.extend(interlock_findings)
+    safety_findings = _safety_findings(job, writers)
+    findings.extend(safety_findings)
     return {
         "project": job.get("project_name") or "",
         "findings": findings,
@@ -333,7 +362,116 @@ def analyze_project(job: dict) -> dict:
         "blocks_with_no_writes": no_writes,
         "ob_entry_points": ob_entries,
         "calls_edge_count": len(call_edges),
+        "safety_outputs": safety_findings[0]["evidence"] if safety_findings else [],
     }
+
+
+def _block_is_safety(job: dict[str, Any], name: str) -> bool:
+    meta = _block_metadata(job).get(name) or {}
+    if meta.get("is_safety") or meta.get("safety"):
+        return True
+    for node in (job.get("knowledge_graph") or {}).get("nodes") or []:
+        if node.get("type") != "Block":
+            continue
+        props = node.get("props") if isinstance(node.get("props"), dict) else {}
+        nid = str(node.get("id") or "")
+        if _name(nid) == name:
+            return bool(props.get("safety"))
+    n = (name or "").upper()
+    return n.startswith(("F-", "F_", "FOB", "FFB", "FFC", "FDB"))
+
+
+def _missing_interlock_findings(job: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flag outputs whose folded coil is unconditional / single contact — do not auto-fix."""
+    findings: list[dict[str, Any]] = []
+    folded = job.get("folded_logic") or {}
+    if not isinstance(folded, dict):
+        return findings
+    for block_name, networks in folded.items():
+        if not isinstance(networks, list):
+            continue
+        for net in networks:
+            if not isinstance(net, dict):
+                continue
+            net_id = str(net.get("network_id") or net.get("title") or "")
+            for stmt in net.get("statements") or []:
+                if not isinstance(stmt, dict):
+                    continue
+                kind = str(stmt.get("kind") or "coil")
+                if kind not in {"coil", "set"}:
+                    continue
+                target = str(stmt.get("target") or "")
+                if not target or target.startswith("(*"):
+                    continue
+                value = stmt.get("value")
+                simple = False
+                if isinstance(value, dict) and value.get("type") == "literal" and value.get("value") is True:
+                    simple = True
+                if isinstance(value, dict) and value.get("type") == "ref":
+                    simple = True
+                if not simple:
+                    continue
+                findings.append(
+                    {
+                        "code": "OUTPUT_NO_INTERLOCK",
+                        "severity": "warn",
+                        "message": (
+                            f"`{block_name}` 输出 `{target}` 未见明显互锁触点（仅单条件/恒 TRUE）。"
+                            "仅标记，不自动改 LAD。"
+                        ),
+                        "evidence": [
+                            {
+                                "kind": "folded_logic",
+                                "block": block_name,
+                                "network": net_id,
+                                "target": target,
+                                "snippet": f"{target} := …",
+                            }
+                        ],
+                    }
+                )
+    return findings[:20]
+
+
+def _safety_findings(job: dict[str, Any], writers: dict[str, list[str]]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    safety_blocks = [n for n in _block_metadata(job) if _block_is_safety(job, n)]
+    safety_tags: set[str] = set()
+    for edge in _edges(job, "WRITES"):
+        src = _name(edge.get("source"))
+        tag = _name(edge.get("target"))
+        if src in safety_blocks and tag:
+            safety_tags.add(tag)
+    if safety_tags:
+        findings.append(
+            {
+                "code": "SAFETY_OUTPUTS",
+                "severity": "info",
+                "message": f"安全输出: {', '.join(sorted(safety_tags)[:20])}",
+                "evidence": [
+                    {"kind": "safety_tag", "tag": t, "writers": writers.get(t, [])}
+                    for t in sorted(safety_tags)[:20]
+                ],
+            }
+        )
+    for tag in sorted(safety_tags):
+        std = [w for w in writers.get(tag, []) if not _block_is_safety(job, w)]
+        if not std:
+            continue
+        findings.append(
+            {
+                "code": "STANDARD_WRITES_SAFETY",
+                "severity": "risk",
+                "message": f"标准块写入安全标签 `{tag}`: {', '.join(std)}。",
+                "evidence": [
+                    _edge_evidence(e)
+                    for e in _edges(job, "WRITES")
+                    if _name(e.get("target")) == tag
+                    and not _block_is_safety(job, _name(e.get("source")))
+                ],
+            }
+        )
+    return findings
 
 
 def _role_hint(name: str, comment: str = "", titles: list[str] | None = None) -> str:

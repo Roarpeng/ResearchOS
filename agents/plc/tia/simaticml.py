@@ -21,6 +21,9 @@ from agents.plc.tia.ir import (
     AccessScope,
     Block,
     BlockType,
+    GraphStep,
+    GraphTransition,
+    HardwareDevice,
     InterfaceSection,
     Network,
     Part,
@@ -588,13 +591,109 @@ def _statement_list_to_scl(stl_el: ET.Element) -> str:
             if line:
                 lines.append(line)
             continue
-        # Best-effort: ignore unsupported pure STL boolean mnemonics for now
+        operand = _stl_operand_scl(stmt)
+        if token in {"A", "AN", "O", "ON", "=", "S", "R", "CU", "TON"}:
+            lines.append(_stl_boolean_line(token, operand))
+            continue
+        # Best-effort: ignore unsupported rare STL mnemonics
+    return "\n".join(ln for ln in lines if ln).strip()
+
+
+def _stl_operand_scl(stmt_el: ET.Element) -> str:
+    for child in stmt_el.iter():
+        if _strip_ns(child.tag) != "Access":
+            continue
+        if _attr(child, "Scope") == "Call":
+            continue
+        return parse_access(child).as_scl()
+    return "(* operand *)"
+
+
+def _stl_boolean_line(token: str, operand: str) -> str:
+    """Common STL ops → folded SCL (A/AN/O/ON/= /S/R/CU/TON)."""
+    if token == "A":
+        return f"(* STL A *) {operand}"
+    if token == "AN":
+        return f"(* STL AN *) NOT ({operand})"
+    if token == "O":
+        return f"(* STL O *) {operand}"
+    if token == "ON":
+        return f"(* STL ON *) NOT ({operand})"
+    if token == "=":
+        return f"{operand} := (* RLO *);"
+    if token == "S":
+        return f"IF (* RLO *) THEN {operand} := TRUE; END_IF;"
+    if token == "R":
+        return f"IF (* RLO *) THEN {operand} := FALSE; END_IF;"
+    if token == "CU":
+        return f"{operand}(CU := TRUE);"
+    if token == "TON":
+        return f"{operand}(IN := TRUE);"
+    return f"(* STL {token} {operand} *)"
+
+
+def _fold_stl_rlo_to_scl(stl_el: ET.Element) -> str:
+    """Walk A/AN/O/ON then =/S/R into a single assignment when possible."""
+    rlo: list[tuple[str, str]] = []
+    lines: list[str] = []
+
+    def rlo_expr() -> str:
+        expr = ""
+        for tok, op in rlo:
+            term = f"NOT ({op})" if tok in {"AN", "ON"} else op
+            if not expr:
+                expr = term
+            elif tok in {"O", "ON"}:
+                expr = f"{expr} OR {term}"
+            else:
+                expr = f"{expr} AND {term}"
+        return expr or "TRUE"
+
+    for stmt in stl_el:
+        if _strip_ns(stmt.tag) != "StlStatement":
+            continue
+        token = ""
+        for child in stmt:
+            if _strip_ns(child.tag) == "StlToken":
+                token = (_attr(child, "Text") or "").strip().upper()
+                break
+        if token in {"", "EMPTY_LINE", "COMMENT"}:
+            continue
+        if token == "CALL":
+            line = _stl_call_to_scl(stmt)
+            if line:
+                lines.append(line)
+            continue
+        operand = _stl_operand_scl(stmt)
+        if token in {"A", "AN", "O", "ON"}:
+            rlo.append((token, operand))
+            continue
+        if token == "=":
+            lines.append(f"{operand} := {rlo_expr()};")
+            rlo = []
+            continue
+        if token == "S":
+            lines.append(f"IF {rlo_expr()} THEN {operand} := TRUE; END_IF;")
+            rlo = []
+            continue
+        if token == "R":
+            lines.append(f"IF {rlo_expr()} THEN {operand} := FALSE; END_IF;")
+            rlo = []
+            continue
+        if token == "CU":
+            lines.append(f"{operand}(CU := {rlo_expr()});")
+            rlo = []
+            continue
+        if token == "TON":
+            lines.append(f"{operand}(IN := {rlo_expr()});")
+            rlo = []
+            continue
     return "\n".join(lines).strip()
 
 
 def _ingest_statement_list(network: Network, stl_el: ET.Element) -> None:
     """Attach StatementList body as source_text + Call parts."""
-    reconstructed = _statement_list_to_scl(stl_el)
+    reconstructed = _fold_stl_rlo_to_scl(stl_el) or _statement_list_to_scl(stl_el)
     if reconstructed:
         network.source_text = reconstructed
         if not network.programming_language:
@@ -691,7 +790,86 @@ def parse_network(compile_unit: ET.Element) -> Network:
         # FlgNet empty but STL present (or hybrid): still ingest STL body
         _ingest_statement_list(network, statement_list)
 
+    _ingest_graph(network, compile_unit)
     return network
+
+
+def _ingest_graph(network: Network, compile_unit: ET.Element) -> None:
+    """Parse S7-GRAPH steps/transitions into IR (SCL is a commented sequence)."""
+    steps: list[GraphStep] = []
+    transitions: list[GraphTransition] = []
+    for node in compile_unit.iter():
+        tag = _strip_ns(node.tag)
+        if tag != "Step":
+            continue
+        name = _attr(node, "Name") or _child_text_local(node, "Name") or f"Step{len(steps) + 1}"
+        number = 0
+        try:
+            number = int(_attr(node, "Number") or _child_text_local(node, "Number") or "0")
+        except ValueError:
+            number = 0
+        actions: list[str] = []
+        for act in node.iter():
+            at = _strip_ns(act.tag)
+            if at in {"Action", "Instruction", "Token"}:
+                txt = _attr(act, "Text") or (act.text or "").strip()
+                if txt:
+                    actions.append(txt)
+        steps.append(
+            GraphStep(
+                name=name,
+                number=number,
+                uuid=_attr(node, "UId"),
+                actions=actions,
+                comment=_ml_text(node),
+            )
+        )
+    for node in compile_unit.iter():
+        if _strip_ns(node.tag) != "Transition":
+            continue
+        name = _attr(node, "Name") or _child_text_local(node, "Name") or f"T{len(transitions) + 1}"
+        cond = (
+            _attr(node, "Condition")
+            or _child_text_local(node, "Condition")
+            or _child_text_local(node, "Event")
+        )
+        transitions.append(
+            GraphTransition(
+                name=name,
+                number=len(transitions) + 1,
+                uuid=_attr(node, "UId"),
+                source_step=_attr(node, "From") or _child_text_local(node, "From"),
+                target_step=_attr(node, "To") or _child_text_local(node, "To"),
+                condition=cond,
+                comment=_ml_text(node),
+            )
+        )
+    if not steps and not transitions:
+        return
+    network.graph_steps = steps
+    network.graph_transitions = transitions
+    if not network.programming_language:
+        network.programming_language = "GRAPH"
+    if network.source_text:
+        return
+    lines = ["(* GRAPH sequence — advisory, not executable S7-GRAPH *)"]
+    for step in steps:
+        act = "; ".join(step.actions) if step.actions else ""
+        extra = f" // {act}" if act else ""
+        lines.append(f"(* Step {step.number or ''} {step.name}{extra} *)")
+    for tr in transitions:
+        lines.append(
+            f"(* Transition {tr.name}: {tr.source_step} -[{tr.condition or '?'}]-> {tr.target_step} *)"
+        )
+    network.source_text = "\n".join(lines)
+
+
+def _child_text_local(el: ET.Element, *names: str) -> str:
+    want = {n.lower() for n in names}
+    for child in el:
+        if _strip_ns(child.tag).lower() in want and (child.text or "").strip():
+            return (child.text or "").strip()
+    return ""
 
 
 def _extract_source_text(sw_object: ET.Element) -> str:
@@ -737,10 +915,15 @@ def parse_block_xml(path: Path) -> Block | None:
             "WriteProtection",
             "IsKnowHowProtected",
             "SetKnowHowProtection",
+            "IsFailsafe",
+            "Failsafe",
         }:
             attrs.setdefault(tag, (node.text or "").strip() or "true")
-        elif tag == "BooleanAttribute" and "protect" in _attr(node, "Name").lower():
-            attrs[_attr(node, "Name")] = _attr(node, "Value") or (node.text or "").strip() or "true"
+        elif tag == "BooleanAttribute":
+            n = _attr(node, "Name")
+            v = _attr(node, "Value") or (node.text or "").strip() or "true"
+            if n:
+                attrs[n] = v
 
     name = _attr(sw_obj, "Name") or attrs.get("Name") or path.stem
 
@@ -794,7 +977,7 @@ def parse_block_xml(path: Path) -> Block | None:
             if header_comment:
                 break
 
-    return Block(
+    block = Block(
         name=name,
         number=number,
         block_type=block_type,
@@ -806,6 +989,10 @@ def parse_block_xml(path: Path) -> Block | None:
         attributes=attrs,
         source_file=str(path),
     )
+    from agents.plc.tia.safety import detect_block_safety
+
+    block.is_safety = detect_block_safety(block)
+    return block
 
 
 def parse_tag_table_xml(path: Path) -> TagTable | None:
@@ -867,17 +1054,18 @@ def parse_tag_table_xml(path: Path) -> TagTable | None:
 
 @dataclass
 class XmlParseResult:
-    """One export XML classified as block, tag table, skip, or error."""
+    """One export XML classified as block, tag table, hardware, skip, or error."""
 
-    kind: str  # "block" | "table" | "skip" | "error"
+    kind: str  # "block" | "table" | "hardware" | "skip" | "error"
     rel: str
     block: Block | None = None
     table: TagTable | None = None
+    hardware: list[HardwareDevice] | None = None
     note: str = ""
 
 
 def parse_export_xml(xml_file: Path, export_path: Path) -> XmlParseResult:
-    """Parse a single Openness XML into a block or tag table (thread-safe per file)."""
+    """Parse a single Openness XML into a block, tag table, or hardware row."""
     try:
         rel = str(xml_file.relative_to(export_path))
     except ValueError:
@@ -898,6 +1086,15 @@ def parse_export_xml(xml_file: Path, export_path: Path) -> XmlParseResult:
         return XmlParseResult(kind="error", rel=rel, note=f"tag table parse error in {rel}: {exc}")
     except Exception as exc:  # noqa: BLE001
         return XmlParseResult(kind="error", rel=rel, note=f"tag table parse failed in {rel}: {exc}")
+    try:
+        from agents.plc.tia.hardware import looks_like_hardware_xml, parse_hardware_xml
+
+        if looks_like_hardware_xml(xml_file):
+            devices = parse_hardware_xml(xml_file)
+            if devices:
+                return XmlParseResult(kind="hardware", rel=rel, hardware=devices)
+    except Exception as exc:  # noqa: BLE001 — hardware is advisory
+        return XmlParseResult(kind="error", rel=rel, note=f"hardware parse skipped in {rel}: {exc}")
     return XmlParseResult(kind="skip", rel=rel)
 
 
@@ -909,6 +1106,8 @@ def merge_parse_results(project: PlcProject, results: list[XmlParseResult]) -> N
             project.add_block(item.block)
         elif item.kind == "table" and item.table is not None:
             project.tag_tables[item.table.name] = item.table
+        elif item.kind == "hardware" and item.hardware:
+            project.hardware.extend(item.hardware)
         elif item.kind == "error" and item.note:
             project.extraction_notes.append(item.note)
         elif item.kind == "skip":
@@ -954,4 +1153,7 @@ def extract_project(export_dir: str | Path, *, project_name: str = "") -> PlcPro
         )
 
     enrich_project_interfaces(project)
+    from agents.plc.tia.safety import apply_safety_flags
+
+    apply_safety_flags(project)
     return project

@@ -13,3 +13,4 @@ class ChatTurnResponse(BaseModel):
     route: str = Field(description="research | plc")
     plc_job_id: str | None = None
     knowledge_canvas: dict | None = None
+    citations: list[dict] = Field(default_factory=list)

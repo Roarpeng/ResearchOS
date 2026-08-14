@@ -979,6 +979,51 @@ body.col-resizing * {
   padding: 0.4rem;
 }
 
+.plc-coverage {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.4rem 0.5rem 0.55rem;
+  margin-bottom: 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  flex: 0 0 auto;
+}
+
+.plc-coverage-ring {
+  flex: 0 0 auto;
+}
+
+.plc-coverage-meta {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  min-width: 0;
+}
+
+.plc-coverage-todos,
+.plc-coverage-tree {
+  margin-top: 0.2rem;
+  color: var(--muted, #667);
+}
+
+.plc-chip {
+  display: inline-block;
+  margin: 0.1rem 0.25rem 0 0;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
+}
+
+.evidence-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  margin-top: 0.4rem;
+}
+
 .kg-wrap {
   position: relative;
   flex: 1;

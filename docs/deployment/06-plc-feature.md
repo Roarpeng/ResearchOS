@@ -162,14 +162,35 @@ dotnet build TiaOpenness.sln -c Release
 - KG 注释变更写入 `comments.json` sidecar；完整 LAD 重写仍需可导入 XML
 - 路径仍受 `PLC_PATH_ALLOWLIST` 约束
 
+## 覆盖率与证据（job 级）
+
+每份结果包写入：
+
+- `reports/coverage.json` — 语言直方图、Part 直方图、TODO 率、F-block 列表
+- `reports/coverage.md` — 给人看的同一份摘要
+
+`GET /api/v1/plc/jobs/{id}` 的 `coverage` 字段与 UI 画布顶栏（转换环、未译 Part、OB 调用链）同源。对话答案带 `citations`（`CALLS` / `READS` / `WRITES` + 网络/SCL 片段），**不编造未出现的 CALLS**。
+
+离线目录示例：
+
+```bash
+researchos-tia-cli --exports tests/fixtures/tia_exports --result-dir ./ResearchOS_PLC_Result --json-summary
+# 覆盖率：./ResearchOS_PLC_Result/reports/coverage.json
+```
+
+写回仍是 HITL：`POST /optimize` 提案 → 确认 → `POST /writeback` → 下载 `.zap`。Know-how 保护体从不解密或猜测。
+
+仍为 TODO / 有限覆盖：稀有 STL 助记符、GRAPH 可执行语义（当前是步序注释）、硬件机架（尽力而为，缺 XML 不失败）。增量 Openness 导出缓存 / `extract_stream` 已在主干落地，此处不重复实现。
+
 ## API 速查
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/plc/jobs` | JSON `{path, project_name?, publish_graph?}` |
 | POST | `/api/v1/plc/jobs/upload` | multipart 文件 |
-| GET | `/api/v1/plc/jobs/{id}` | 状态 / 图谱 / 块列表 / changeset |
-| POST | `/api/v1/plc/jobs/{id}/chat` | `{message, block_name?}` |
+| GET | `/api/v1/plc/jobs/{id}` | 状态 / 图谱 / 块列表 / **coverage** / changeset |
+| POST | `/api/v1/plc/jobs/{id}/chat` | `{message, block_name?}` → `citations`（KG 边 + SCL 片段） |
+| POST | `/api/v1/chat/turns` | 统一对话；PLC 路由同样返回 `citations` |
 | POST | `/api/v1/plc/jobs/{id}/changes` | 提案变更集 |
 | POST | `/api/v1/plc/jobs/{id}/writeback` | HITL：应用 KG + 可选 Openness 导入 |
 | GET | `/api/v1/plc/jobs/{id}/export` | ZIP 下载 |
@@ -180,6 +201,7 @@ dotnet build TiaOpenness.sln -c Release
 - [ ] 上传 `tests/fixtures/tia_exports` 中 XML 或整目录 ZIP → job `ready`
 - [ ] 逻辑图 / KG / 块列表非空
 - [ ] 块对话返回结构化答复
-- [ ] 导出 ZIP 可下载
+- [ ] 导出 ZIP 含 `reports/coverage.json`
+- [ ] 对话返回 `citations`（块 / 边类型 / SCL 片段）
 - [ ] Research 控制台 `/` 行为不变
 - [ ]（可选）宿主 + Openness：`.ap19` path ingest 成功

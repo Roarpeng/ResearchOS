@@ -57,6 +57,10 @@ def test_plc_job_path_ingest_chat_export(client: TestClient) -> None:
     assert body["blocks"]
     assert body["logic_graph"]["nodes"] or body["knowledge_graph"]["nodes"]
     assert body["export_ready"] is True
+    assert isinstance(body.get("coverage"), dict)
+    assert "todo_rate" in body["coverage"]
+    assert "part_histogram" in body["coverage"]
+    assert "language_histogram" in body["coverage"]
 
     block_name = body["blocks"][0]["name"]
     chat = client.post(
@@ -65,7 +69,9 @@ def test_plc_job_path_ingest_chat_export(client: TestClient) -> None:
         headers={"X-API-Key": "ros_ak_test_key"},
     )
     assert chat.status_code == 200
-    assert block_name in chat.json()["data"]["content"]
+    chat_body = chat.json()["data"]
+    assert block_name in chat_body["content"]
+    assert isinstance(chat_body.get("citations"), list)
 
     export = client.get(
         f"/api/v1/plc/jobs/{job_id}/export",

@@ -30,6 +30,7 @@ from agents.plc.tia.ir import (
     PlcProject,
     Variable,
 )
+from agents.plc.tia.parts import canon_part
 
 #: Parts whose primary Access pin writes state (coils, assignments, resets)
 WRITE_PARTS = {
@@ -45,7 +46,20 @@ WRITE_PARTS = {
 
 MOVE_PARTS = {"Move", "Assign", "Move_Bool", "Move_Word", "Move_DWord", "Move_Real"}
 CALL_PARTS = {"Call", "CallPart"}
-INSTANCE_BOX_PARTS = {"CTU", "CTD", "CTUD", "TON", "TOF", "TP", "R_TRIG", "F_TRIG", "P_TRIG"}
+INSTANCE_BOX_PARTS = {
+    "CTU",
+    "CTD",
+    "CTUD",
+    "TON",
+    "TOF",
+    "TP",
+    "TONR",
+    "SR",
+    "RS",
+    "R_TRIG",
+    "F_TRIG",
+    "P_TRIG",
+}
 #: Move / Call / timer-counter pins that write an IdentCon target
 WRITE_PINS = {
     "out",
@@ -422,7 +436,7 @@ def _classify_part_io(
     # Coil / Move / Call / box outputs → WRITES
     for part in network.parts.values():
         write_accesses: list[Access] = []
-        if part.name in {"Coil", "NegCoil", "NotCoil", "Set", "Reset", "Save"}:
+        if canon_part(part.name) in {"Coil", "NegCoil", "NotCoil", "Set", "Reset", "Save"}:
             operand = _pin_source_access(network, part.uuid, "operand") or part.accesses.get("operand")
             if operand is not None:
                 write_accesses.append(operand)
@@ -443,7 +457,7 @@ def _classify_part_io(
                     acc = _access_bound_to_pin(network, part.uuid, pin)
                     if acc is not None:
                         write_accesses.append(acc)
-        elif part.name in INSTANCE_BOX_PARTS:
+        elif canon_part(part.name) in INSTANCE_BOX_PARTS:
             for pin in ("CV", "Q", "QU", "QD", "ET"):
                 acc = _access_bound_to_pin(network, part.uuid, pin)
                 if acc is not None:
@@ -550,6 +564,7 @@ def build_knowledge_graph(project: PlcProject) -> PlcKnowledgeGraph:
             protected=block.is_protected(),
             interface_only=block.is_interface_only(),
             body_available=block.has_program_body(),
+            safety=bool(block.is_safety),
         )
         kg.add_edge(project_id, block_id, "CONTAINS")
 

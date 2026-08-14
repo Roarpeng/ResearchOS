@@ -43,7 +43,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--result-dir",
         default="",
-        help="Write ResearchOS_PLC_Result package (converted_scl/plc_ir/kg/reports)",
+        help=(
+            "Write ResearchOS_PLC_Result package "
+            "(converted_scl/plc_ir/kg/reports including coverage.json)"
+        ),
     )
     parser.add_argument(
         "--out",
@@ -130,6 +133,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     if result.get("result_dir"):
         print(f"- Result package: `{result['result_dir']}`")
+        print("- Coverage: `reports/coverage.json` (Part/TODO histogram + F-block flags)")
+    coverage = result.get("coverage") or {}
+    if coverage:
+        print(
+            f"- Coverage: todo_rate={coverage.get('todo_rate', 0):.1%} "
+            f"todos={coverage.get('todo_count', 0)} "
+            f"safety={coverage.get('safety_block_count', 0)}"
+        )
     print()
 
     for name, source in scl_sources.items():
@@ -165,6 +176,19 @@ def main(argv: list[str] | None = None) -> int:
         "result_dir": result.get("result_dir") or "",
         "import": result.get("import"),
         "conversion_report": conversion,
+        "coverage_summary": {
+            k: coverage.get(k)
+            for k in (
+                "todo_rate",
+                "todo_count",
+                "converted",
+                "parsed",
+                "protected",
+                "interface_only",
+                "safety_block_count",
+            )
+            if coverage
+        },
         "kg_nodes": len(kg.nodes),
         "kg_edges": len(kg.edges),
         "scl_sources": len(scl_sources),

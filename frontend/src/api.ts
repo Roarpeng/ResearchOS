@@ -224,12 +224,22 @@ export type KnowledgeCanvasPayload = {
   edges?: Array<Record<string, unknown>>;
 };
 
+export type PlcCitation = {
+  block?: string;
+  network?: string;
+  evidence?: string;
+  edge_type?: string;
+  target?: string;
+  snippet?: string;
+};
+
 export type ChatTurnResult = {
   task: ReturnType<typeof unwrapTask> & { id?: string };
   assistant_message: string;
   route: string;
   plc_job_id?: string | null;
   knowledge_canvas?: KnowledgeCanvasPayload;
+  citations?: PlcCitation[];
 };
 
 export async function postChatTurn(options: {
@@ -287,6 +297,7 @@ export async function postChatTurn(options: {
     route: data.route,
     plc_job_id: data.plc_job_id,
     knowledge_canvas: data.knowledge_canvas,
+    citations: data.citations || [],
     task: unwrapTask({ data: taskRaw, ok: true }),
   };
 }
@@ -317,6 +328,24 @@ export function connectResearchStream(
 
 /* ---- PLC Intelligence feature ---- */
 
+export type PlcCoverage = {
+  todo_rate?: number;
+  todo_count?: number;
+  instruction_count?: number;
+  converted?: number;
+  parsed?: number;
+  protected?: number;
+  interface_only?: number;
+  unknown?: number;
+  total_blocks?: number;
+  safety_block_count?: number;
+  language_histogram?: Record<string, number>;
+  part_histogram?: Record<string, number>;
+  todo_histogram?: Record<string, number>;
+  top_untranslated_parts?: Array<{ name?: string; count?: number }>;
+  safety_blocks?: string[];
+};
+
 export type PlcJobSummary = {
   id: string;
   status: string;
@@ -327,6 +356,7 @@ export type PlcJobSummary = {
   summary?: Record<string, unknown>;
   error?: string | null;
   export_ready?: boolean;
+  coverage?: PlcCoverage | null;
 };
 
 export type PlcJobDetail = PlcJobSummary & {
@@ -366,8 +396,15 @@ export type PlcJobDetail = PlcJobSummary & {
     protected?: boolean;
     interface_only?: boolean;
     body_available?: boolean;
+    is_safety?: boolean;
   }>;
-  chat?: Array<{ role: string; content: string; block_name?: string | null }>;
+  chat?: Array<{
+    role: string;
+    content: string;
+    block_name?: string | null;
+    citations?: PlcCitation[];
+  }>;
+  coverage?: PlcCoverage;
   report?: string;
   changeset?: Record<string, unknown> | null;
   writeback?: Record<string, unknown> | null;
@@ -490,7 +527,12 @@ export async function chatPlcJob(
       block_name: blockName || null,
     }),
   });
-  return parseJson<{ role: string; content: string; block_name?: string | null }>(res);
+  return parseJson<{
+    role: string;
+    content: string;
+    block_name?: string | null;
+    citations?: PlcCitation[];
+  }>(res);
 }
 
 export async function analyzePlcJob(jobId: string, blockName?: string) {

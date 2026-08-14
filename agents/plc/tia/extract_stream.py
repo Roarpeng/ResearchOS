@@ -133,8 +133,10 @@ class ExportJournalExtractor:
                 "no PLC blocks or tag tables recognized — check Openness export layout"
             )
         from agents.plc.tia.enrich import enrich_project_interfaces
+        from agents.plc.tia.safety import apply_safety_flags
 
         enrich_project_interfaces(self.project)
+        apply_safety_flags(self.project)
         return self.project
 
     def close(self) -> None:

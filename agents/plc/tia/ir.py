@@ -120,6 +120,30 @@ class AssignStmt:
 
 
 @dataclass
+class GraphStep:
+    """One S7-GRAPH step (SCL may only be a commented sequence)."""
+
+    name: str
+    number: int = 0
+    uuid: str = ""
+    actions: list[str] = field(default_factory=list)
+    comment: str = ""
+
+
+@dataclass
+class GraphTransition:
+    """One S7-GRAPH transition between steps."""
+
+    name: str
+    number: int = 0
+    uuid: str = ""
+    source_step: str = ""
+    target_step: str = ""
+    condition: str = ""
+    comment: str = ""
+
+
+@dataclass
 class FoldedNetwork:
     network_id: str = ""
     title: str = ""
@@ -195,6 +219,8 @@ class Network:
     wires: list[Wire] = field(default_factory=list)
     source_text: str = ""  # SCL/STL body when the unit is textual
     folded: FoldedNetwork | None = None
+    graph_steps: list[GraphStep] = field(default_factory=list)
+    graph_transitions: list[GraphTransition] = field(default_factory=list)
 
     def accesses(self) -> list[Access]:
         out: list[Access] = list(self.access_parts.values())
@@ -216,6 +242,7 @@ class Block:
     source_text: str = ""  # original SCL/STL body when language is textual
     attributes: dict[str, str] = field(default_factory=dict)
     source_file: str = ""  # path to original SimaticML XML export
+    is_safety: bool = False  # F-OB / F-FB / F-FC / F-DB — never mixed into std scan
 
     def interface_section(self, section: InterfaceSection) -> list[Variable]:
         return [v for v in self.interface if v.section == section]
@@ -258,6 +285,18 @@ class Block:
 
 
 @dataclass
+class HardwareDevice:
+    """Best-effort device / rack / Profinet row from Openness HW XML."""
+
+    name: str
+    device_type: str = ""
+    address: str = ""
+    slot: str = ""
+    comment: str = ""
+    source_file: str = ""
+
+
+@dataclass
 class Tag:
     name: str
     data_type: str = ""
@@ -281,6 +320,7 @@ class PlcProject:
     blocks: dict[str, Block] = field(default_factory=dict)
     tag_tables: dict[str, TagTable] = field(default_factory=dict)
     extraction_notes: list[str] = field(default_factory=list)
+    hardware: list[HardwareDevice] = field(default_factory=list)
 
     def add_block(self, block: Block) -> None:
         self.blocks[block.name] = block
@@ -291,4 +331,6 @@ class PlcProject:
             counts[block.block_type.value] = counts.get(block.block_type.value, 0) + 1
         counts["TagTables"] = len(self.tag_tables)
         counts["Networks"] = sum(len(b.networks) for b in self.blocks.values())
+        counts["SafetyBlocks"] = sum(1 for b in self.blocks.values() if b.is_safety)
+        counts["Hardware"] = len(self.hardware)
         return counts

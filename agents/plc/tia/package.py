@@ -168,6 +168,15 @@ def write_result_package(
     (reports / "conversion_report.json").write_text(
         json.dumps(conversion, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    from agents.plc.tia.coverage import build_coverage_report, coverage_markdown
+
+    coverage = build_coverage_report(
+        project, scl_sources, timings=(extra_meta or {}).get("timings")
+    )
+    (reports / "coverage.json").write_text(
+        json.dumps(coverage, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    (reports / "coverage.md").write_text(coverage_markdown(coverage), encoding="utf-8")
     meta = {
         "project_name": project.name,
         "source_path": project.source_path,
@@ -185,6 +194,19 @@ def write_result_package(
                 "tag_tables",
             )
             if k in conversion
+        },
+        "coverage_summary": {
+            k: coverage[k]
+            for k in (
+                "todo_rate",
+                "todo_count",
+                "converted",
+                "parsed",
+                "protected",
+                "interface_only",
+                "safety_block_count",
+            )
+            if k in coverage
         },
     }
     (root / "manifest.json").write_text(

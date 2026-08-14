@@ -825,9 +825,16 @@ researchos-tia-cli --project Machine.ap19 --result-dir .\ResearchOS_PLC_Result
 | Level 3 `.apxx` via Openness auto-export | **Implemented** (`importer` + `ExportProject.ps1`) |
 | Level 3 pure binary `.apxx` without TIA | Not supported (encrypted internal DB) |
 | PLC-IR + Knowledge Graph + SCL | **Implemented** |
-| `ResearchOS_PLC_Result` package | **Implemented** (`package.py`) |
-| Block status parsed/converted/protected/unknown | **Implemented** |
-| Full STL/GRAPH/timer coverage | Partial (TODO markers for gaps) |
+| `ResearchOS_PLC_Result` package | **Implemented** (`package.py`) — includes `reports/coverage.json` |
+| Block status parsed/converted/protected/interface_only/unknown | **Implemented** |
+| LAD Part coverage (TON/CTU/Move/Set-Reset/compare/jump/Call ENO) | **Implemented** (leftovers named `TODO[Part]`) |
+| Native SCL passthrough / STL A-AN-O-ON-=-S-R-CU-TON / GRAPH steps | **Implemented** (GRAPH is commented sequence, not executable) |
+| Safety F-block flag | **Implemented** (`Block.is_safety`, never mixed into standard OB scan) |
+| Chat evidence citations | **Implemented** (`chat_retrieve.answer_query_pack`) |
+| HITL writeback | **Implemented** (optimize → confirm → Openness archive `.zap`) |
+| Full STL rare ops / executable GRAPH / complete hardware | Remaining TODOs |
+
+Chat cites KG edges (`CALLS`/`READS`/`WRITES`) plus SCL snippets; it does not invent CALLs.
 
 MCP: `plc.project.analyze` (one-shot), `plc.tia.analyze` (export folder only).
 

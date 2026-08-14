@@ -21,21 +21,22 @@ from agents.plc.tia.ir import (
     PlcProject,
 )
 from agents.plc.tia.flgnet_fold import stmt_to_scl
-
-COMPARE_OPS = {
-    "Eq": "=",
-    "Ne": "<>",
-    "Gt": ">",
-    "Ge": ">=",
-    "Lt": "<",
-    "Le": "<=",
-}
+from agents.plc.tia.parts import (
+    BOX_PARTS,
+    BRANCH_PARTS,
+    CALL_PARTS,
+    COIL_PARTS,
+    COMPARE_OPS,
+    CONVERT_PARTS,
+    JUMP_PARTS,
+    MOVE_PARTS,
+    MUX_PARTS,
+    canon_part,
+    format_todo,
+)
 
 #: Parts whose "out" pin produces a boolean RLO that can drive a wire.
 RLO_OUTPUT_PARTS = {"Contact", "NegContact", "NotContact", "ContactNeg"} | set(COMPARE_OPS)
-
-#: Contact-like parts produce a boolean expression from their "in" pin.
-BRANCH_PARTS = {"Contact", "NegContact", "NotContact", "Compare", "Eq", "Ne", "Gt", "Ge", "Lt", "Le"}
 
 
 def _paren(expr: str) -> str:
@@ -147,7 +148,7 @@ class NetworkTranslator:
         return " OR ".join(_paren(e) for e in exprs)
 
     def _part_out_expr(self, part: Part) -> str:
-        name = part.name
+        name = canon_part(part.name) or part.name
         if name in {"Contact", "NegContact", "NotContact", "ContactNeg"}:
             # contact out = (in value) AND operand ; negated variants invert
             in_expr = self._value_at_pin(part.uuid, "in")
@@ -193,12 +194,12 @@ class NetworkTranslator:
         cond = self._value_at_pin(part.uuid, "in")
         if part.name == "NegCoil":
             self.statements.append(f"{target} := NOT ({cond});")
-        elif part.name == "Set":
+        elif canon_part(part.name) == "Set":
             if cond == "TRUE":
                 self.statements.append(f"{target} := TRUE;")
             else:
                 self.statements.append(f"IF {cond} THEN {target} := TRUE; END_IF;")
-        elif part.name == "Reset":
+        elif canon_part(part.name) == "Reset":
             if cond == "TRUE":
                 self.statements.append(f"{target} := FALSE;")
             else:
@@ -220,7 +221,7 @@ class NetworkTranslator:
         )
         params: list[str] = []
         seen: set[str] = set()
-        skip = {"in", "operand", "db", "instance", "en", "eno", "EN", "ENO", "Instance"}
+        skip = {"in", "operand", "db", "instance", "en", "EN", "Instance"}
         out_pins = {"Q", "QU", "QD", "OUT", "OUT1", "CV", "ET", "ENO", "RET_VAL"}
 
         for pin, acc in part.accesses.items():
@@ -269,7 +270,7 @@ class NetworkTranslator:
             else part.name
         )
         params: list[str] = []
-        for pin in ("CU", "CD", "R", "LD", "IN", "CLK"):
+        for pin in ("CU", "CD", "R", "R1", "S", "S1", "LD", "IN", "CLK"):
             if part.accesses.get(pin) is not None and not self._wires_to_pin(part.uuid, pin):
                 params.append(f"{pin} := {part.accesses[pin].as_scl()}")
                 continue
@@ -303,28 +304,30 @@ class NetworkTranslator:
             return [line for line in self.network.source_text.splitlines() if line.strip()]
 
         folded_statements = iter(self.network.folded.statements) if self.network.folded else iter(())
-        box_parts = {"CTU", "CTD", "CTUD", "TON", "TOF", "TP", "R_TRIG", "F_TRIG", "P_TRIG"}
         for part in self.network.parts.values():
-            name = part.name
-            if name in {"Coil", "NegCoil", "Set", "Reset", "Save"}:
+            self._visited.clear()
+            name = canon_part(part.name)
+            if name in COIL_PARTS:
                 folded = next(folded_statements, None)
                 if folded is not None:
                     self.statements.append(stmt_to_scl(folded))
                 else:
                     self._emit_coil(part)
-            elif name in {"Move", "Assign"} or (name or "").startswith("Move"):
+            elif name in MOVE_PARTS or (part.name or "").startswith("Move"):
                 folded = next(folded_statements, None)
                 if folded is not None and getattr(folded, "kind", "") == "move":
                     self.statements.append(stmt_to_scl(folded))
                 else:
                     self._emit_move(part)
-            elif name in box_parts:
+            elif name in BOX_PARTS | CONVERT_PARTS | MUX_PARTS | JUMP_PARTS:
                 folded = next(folded_statements, None)
                 if folded is not None and getattr(folded, "kind", "") == "call":
                     self.statements.append(stmt_to_scl(folded))
-                else:
+                elif name in BOX_PARTS:
                     self._emit_box_call(part)
-            elif name in {"Call"} or "Call" in (part.template_values or {}) or "calledBlock" in (
+                else:
+                    self.statements.append(stmt_to_scl(folded) if folded is not None else format_todo(part))
+            elif name in CALL_PARTS or "Call" in (part.template_values or {}) or "calledBlock" in (
                 part.template_values or {}
             ):
                 folded = next(folded_statements, None)
@@ -335,10 +338,7 @@ class NetworkTranslator:
             elif name in BRANCH_PARTS:
                 continue  # consumed by downstream coils / moves
             else:
-                self.statements.append(
-                    f"(* TODO[{name or 'unknown'}]: instruction not auto-translated; "
-                    f"translate from SimaticML Part UId={part.uuid} *)"
-                )
+                self.statements.append(format_todo(part))
         if not self.statements:
             self.statements.append("(* empty network *)")
         return self.statements
@@ -556,6 +556,14 @@ def translate_block_to_scl(block: Block) -> str:
         lines.append(interface)
     lines.append("BEGIN")
 
+    lang_u = (block.programming_language or "").upper()
+    if lang_u in {"SCL", "STL"} and (block.source_text or "").strip() and not block.networks:
+        # Native textual body — pass through, do not re-translate.
+        lines.append(block.source_text.strip())
+        lines.append("")
+        lines.append(end_kw)
+        return "\n".join(lines)
+
     for idx, network in enumerate(block.networks, start=1):
         translator = NetworkTranslator(block, network)
         statements = translator.translate()
@@ -577,8 +585,10 @@ def translate_block_to_scl(block: Block) -> str:
             lang = (network.programming_language or "").upper()
             if lang == "STL":
                 lines.append(
-                    "    // 含义：本网络为 StatementList/STL 导出重建（CALL 盒等），等效 SCL"
+                    "    // 含义：本网络为 StatementList/STL 导出重建（CALL / 布尔指令），等效 SCL"
                 )
+            elif lang == "GRAPH" or getattr(network, "graph_steps", None):
+                lines.append("    // 含义：S7-GRAPH 步序/转换（注释序列，非可执行 GRAPH）")
             else:
                 lines.append(
                     "    // 含义：本网络为 StructuredText（SCL）原文重建，非 LAD 折叠"

@@ -186,6 +186,7 @@ async def chat_plc_job(
         job, role="user", content=body.message, block_name=body.block_name
     )
     answer = plc.answer_block_chat(job, body.message, body.block_name)
+    citations = list(job.pop("_last_citations", None) or [])
     lower = body.message.lower()
     if any(k in body.message for k in ("注释", "依赖", "导入")) or any(
         k in lower for k in ("comment", "depends", "import")
@@ -200,12 +201,13 @@ async def chat_plc_job(
         except Exception as exc:  # noqa: BLE001
             logger.warning("changeset propose skipped: %s", exc)
     plc.append_chat_turn(
-        job, role="assistant", content=answer, block_name=body.block_name
+        job, role="assistant", content=answer, block_name=body.block_name, citations=citations
     )
     turn = PlcChatTurn(
         role="assistant",
         content=answer,
         block_name=body.block_name,
+        citations=citations,
         created_at=job["chat"][-1]["created_at"],
     )
     return ApiResponse(ok=True, data=turn, request_id=request_id)
