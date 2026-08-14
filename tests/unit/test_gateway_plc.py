@@ -218,6 +218,30 @@ def test_plc_propose_and_writeback_kg_only(client: TestClient, tmp_path: Path) -
             fake_ap.unlink()
 
 
+def test_plc_optimize_endpoint(client: TestClient) -> None:
+    create = client.post(
+        "/api/v1/plc/jobs",
+        json={"path": str(FIXTURE_DIR), "project_name": "opt", "publish_graph": False},
+        headers={"X-API-Key": "ros_ak_test_key"},
+    )
+    assert create.status_code == 202, create.text
+    job_id = create.json()["data"]["id"]
+    opt = client.post(
+        f"/api/v1/plc/jobs/{job_id}/optimize",
+        json={"message": "优化工程逻辑"},
+        headers={"X-API-Key": "ros_ak_test_key"},
+    )
+    assert opt.status_code == 200, opt.text
+    data = opt.json()["data"]
+    assert "changeset" in data
+    assert "ops" in data
+    detail = client.get(
+        f"/api/v1/plc/jobs/{job_id}",
+        headers={"X-API-Key": "ros_ak_test_key"},
+    ).json()["data"]
+    assert detail.get("changeset")
+
+
 def test_plc_upload_zip_slip_rejected(client: TestClient) -> None:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:

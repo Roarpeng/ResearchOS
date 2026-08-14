@@ -416,9 +416,20 @@ def folded_to_dict(folded: FoldedNetwork) -> dict:
 
 def attach_folded(project: PlcProject) -> PlcProject:
     """Attach folded expressions to every project network and return the project."""
-    for block in project.blocks.values():
-        for network in block.networks:
-            network.folded = fold_network(network)
+    jobs: list[tuple[str, int]] = [
+        (block.name, idx)
+        for block in project.blocks.values()
+        for idx, _network in enumerate(block.networks)
+    ]
+
+    def _fold_job(item: tuple[str, int]):
+        name, idx = item
+        return name, idx, fold_network(project.blocks[name].networks[idx])
+
+    from agents.plc.tia.parallel import map_parallel
+
+    for name, idx, folded in map_parallel(_fold_job, jobs, min_items=8):
+        project.blocks[name].networks[idx].folded = folded
     return project
 
 

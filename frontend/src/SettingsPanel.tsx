@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import {
   createKnowledgeSpace,
   fetchAgentWorkspace,
-  fetchKnowledgeGraph,
+  fetchKnowledgeChunks,
   fetchKnowledgeStats,
   installMcpFromHub,
   installSkillFromHub,
@@ -17,6 +17,8 @@ import {
   type AgentWorkspaceSettings,
   type HubMcpItem,
   type HubSkillItem,
+  type KnowledgeChunk,
+  type KnowledgeDocument,
   type KnowledgeSpace,
   type KnowledgeStats,
   type McpServerItem,
@@ -24,13 +26,12 @@ import {
 } from "./api";
 import LlmSettingsPanel from "./LlmSettingsPanel";
 
-type TabId = "llm" | "knowledge" | "tools" | "mcp";
+type TabId = "llm" | "knowledge" | "more";
 
 const TABS: Array<{ id: TabId; label: string }> = [
-  { id: "llm", label: "LLM" },
+  { id: "llm", label: "模型" },
   { id: "knowledge", label: "知识库" },
-  { id: "tools", label: "Agent 工具" },
-  { id: "mcp", label: "MCP / Skill" },
+  { id: "more", label: "更多" },
 ];
 
 export default function SettingsPanel() {
@@ -53,55 +54,88 @@ export default function SettingsPanel() {
       <div className="settings-body">
         {tab === "llm" ? <LlmSettingsPanel /> : null}
         {tab === "knowledge" ? <KnowledgeSettingsPanel /> : null}
-        {tab === "tools" ? <AgentToolsPanel /> : null}
-        {tab === "mcp" ? <McpSkillPanel /> : null}
+        {tab === "more" ? <MoreSettingsPanel /> : null}
       </div>
     </div>
   );
 }
 
+type RecallHit = {
+  citation_id: string;
+  score: number;
+  text: string;
+  source_id: string;
+  metadata?: { channels?: string[]; chunk_id?: string };
+};
+
 function KnowledgeSettingsPanel() {
   const [spaces, setSpaces] = useState<KnowledgeSpace[]>([]);
   const [activeId, setActiveId] = useState("");
-  const [name, setName] = useState("默认知识库");
-  const [desc, setDesc] = useState("");
+  const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [stats, setStats] = useState<KnowledgeStats | null>(null);
-  const [graphHint, setGraphHint] = useState("");
+  const [selectedDocId, setSelectedDocId] = useState("");
+  const [chunks, setChunks] = useState<KnowledgeChunk[]>([]);
+  const [chunkNote, setChunkNote] = useState("");
   const [searchQ, setSearchQ] = useState("");
-  const [searchHits, setSearchHits] = useState<
-    Array<{ citation_id: string; score: number; text: string; source_id: string }>
-  >([]);
+  const [recallMode, setRecallMode] = useState<"vector" | "hybrid">("vector");
+  const [searchHits, setSearchHits] = useState<RecallHit[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
+
+  const docs: KnowledgeDocument[] = (() => {
+    const fromSpace = spaces.find((s) => s.id === activeId)?.documents || [];
+    if (fromSpace.length) return fromSpace;
+    return (stats?.documents || []).map((d) => ({
+      id: d.id,
+      title: d.title,
+      filename: d.filename,
+      status: d.status,
+      chunk_count: d.chunk_count,
+    }));
+  })();
+
+  async function loadChunks(spaceId: string, docId: string) {
+    if (!spaceId) return;
+    try {
+      const res = await fetchKnowledgeChunks(spaceId, docId || undefined, 80);
+      setChunks(res.chunks || []);
+      const withVec = (res.chunks || []).filter((c) => c.has_vector).length;
+      setChunkNote(
+        res.count
+          ? `${res.count} 条分块${withVec ? ` · ${withVec} 条已向量化` : " · 尚无向量（检查向量模型）"}`
+          : "暂无分块",
+      );
+    } catch (err) {
+      setChunks([]);
+      setChunkNote(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   async function refreshStats(id: string) {
     if (!id) return;
     try {
       const s = await fetchKnowledgeStats(id);
       setStats(s);
-      const g = await fetchKnowledgeGraph(id);
-      const n = (g.nodes || []).length;
-      const e = (g.edges || []).length;
-      setGraphHint(`图谱快照：${n} 实体 / ${e} 关系`);
     } catch {
       /* ignore */
     }
   }
 
-  async function load() {
+  async function load(nextId?: string) {
     setBusy(true);
     try {
       let list = await listKnowledgeSpaces();
       if (!list.length) {
-        const created = await createKnowledgeSpace("默认知识库", "解析→分块→向量/BM25/图谱→对话召回");
+        const created = await createKnowledgeSpace("默认知识库");
         list = [created];
       }
       setSpaces(list);
-      const id = activeId || list[0]?.id || "";
+      const id = nextId || activeId || list[0]?.id || "";
       setActiveId(id);
       await refreshStats(id);
-      setStatus(`流水线：解析 → 语义分块 → 实体抽取 → Hybrid(RRF) 召回`);
+      await loadChunks(id, selectedDocId);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err));
     } finally {
@@ -115,20 +149,26 @@ function KnowledgeSettingsPanel() {
   }, []);
 
   useEffect(() => {
-    if (activeId) void refreshStats(activeId);
-  }, [activeId]);
+    if (!activeId) return;
+    void refreshStats(activeId);
+    void loadChunks(activeId, selectedDocId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, selectedDocId]);
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
     setBusy(true);
     try {
-      const space = await createKnowledgeSpace(name.trim(), desc.trim() || undefined);
+      const space = await createKnowledgeSpace(name.trim());
       setSpaces((prev) => [space, ...prev]);
       setActiveId(space.id);
+      setSelectedDocId("");
       setName("");
-      setDesc("");
+      setCreating(false);
       setStatus(`已创建 ${space.name}`);
+      await refreshStats(space.id);
+      await loadChunks(space.id, "");
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err));
     } finally {
@@ -142,11 +182,10 @@ function KnowledgeSettingsPanel() {
     setBusy(true);
     try {
       const res = await uploadKnowledgeDocument(activeId, file);
-      setStatus(
-        `入库完成：${res.title || file.name} · ${res.status} · chunks ${res.chunk_count} · entities ${res.entity_count}`,
-      );
+      setStatus(`已入库 ${res.title || file.name} · ${res.chunk_count} 分块`);
       setFile(null);
-      await load();
+      setSelectedDocId(res.id);
+      await load(activeId);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err));
     } finally {
@@ -159,8 +198,9 @@ function KnowledgeSettingsPanel() {
     setBusy(true);
     try {
       const r = await rebuildKnowledgeSpace(activeId);
-      setStatus(`索引已重建：${r.chunk_count} chunks` + (r.warnings?.length ? `（${r.warnings[0]}）` : ""));
+      setStatus(`索引已重建：${r.chunk_count} 分块` + (r.warnings?.length ? `（${r.warnings[0]}）` : ""));
       await refreshStats(activeId);
+      await loadChunks(activeId, selectedDocId);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err));
     } finally {
@@ -173,9 +213,9 @@ function KnowledgeSettingsPanel() {
     if (!searchQ.trim() || !activeId) return;
     setBusy(true);
     try {
-      const res = await searchKnowledge(searchQ.trim(), [activeId], 6);
+      const res = await searchKnowledge(searchQ.trim(), [activeId], 6, recallMode);
       setSearchHits(res.hits || []);
-      setStatus(res.message || `召回 ${res.hits?.length || 0} 条`);
+      setStatus(res.message || `${recallMode === "vector" ? "向量" : "混合"}召回 ${res.hits?.length || 0} 条`);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err));
     } finally {
@@ -184,47 +224,54 @@ function KnowledgeSettingsPanel() {
   }
 
   const active = spaces.find((s) => s.id === activeId) || spaces[0];
+  const selectedChunk = chunks[0];
 
   return (
-    <div className="settings-section">
+    <div className="settings-section kb-layout">
       <div className="panel settings-panel-block">
-        <div className="panel-head">
-          <h2>知识空间</h2>
-        </div>
-        <p className="hint">文档解析 → 分块/嵌入 → 图谱抽取 → 对话 Hybrid 召回（向量+BM25+图 RRF）。</p>
-        <form onSubmit={onCreate}>
-          <div className="field">
-            <label htmlFor="kb-name">名称</label>
-            <input id="kb-name" value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="kb-desc">说明</label>
-            <input id="kb-desc" value={desc} onChange={(e) => setDesc(e.target.value)} />
-          </div>
-          <div className="actions">
-            <button className="btn btn-primary" type="submit" disabled={busy || !name.trim()}>
-              创建
-            </button>
-            <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => void load()}>
-              刷新
-            </button>
-          </div>
-        </form>
-        <div className="field" style={{ marginTop: "0.75rem" }}>
-          <label htmlFor="kb-space">当前空间</label>
-          <select id="kb-space" value={active?.id || ""} onChange={(e) => setActiveId(e.target.value)}>
+        <div className="kb-toolbar">
+          <select
+            id="kb-space"
+            aria-label="知识空间"
+            value={active?.id || ""}
+            onChange={(e) => {
+              setActiveId(e.target.value);
+              setSelectedDocId("");
+              setSearchHits([]);
+            }}
+          >
             {spaces.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.name}（{s.document_count} 份）
+                {s.name}
               </option>
             ))}
           </select>
+          {creating ? (
+            <form className="kb-create" onSubmit={onCreate}>
+              <input
+                autoFocus
+                placeholder="新空间名称"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+              <button className="btn btn-primary" type="submit" disabled={busy || !name.trim()}>
+                创建
+              </button>
+              <button className="btn btn-ghost" type="button" onClick={() => setCreating(false)}>
+                取消
+              </button>
+            </form>
+          ) : (
+            <button className="btn btn-ghost" type="button" onClick={() => setCreating(true)}>
+              新建
+            </button>
+          )}
         </div>
         {stats ? (
           <p className="hint">
-            文档 {stats.document_count} · 分块 {stats.chunk_count} · 实体 {stats.entity_count} · 关系{" "}
-            {stats.relation_count}
-            {graphHint ? ` · ${graphHint}` : ""}
+            {stats.document_count} 份文本 · {stats.chunk_count} 分块
+            {stats.channels?.vector ? " · 向量已就绪" : ""}
+            {stats.entity_count ? ` · ${stats.entity_count} 实体` : ""}
           </p>
         ) : null}
         <form className="upload-row" onSubmit={onUpload}>
@@ -234,35 +281,102 @@ function KnowledgeSettingsPanel() {
             onChange={(e) => setFile(e.target.files?.[0] || null)}
           />
           <button className="btn btn-primary" type="submit" disabled={busy || !file || !active}>
-            上传并建图
+            上传
           </button>
           <button className="btn btn-ghost" type="button" disabled={busy || !active} onClick={() => void onRebuild()}>
             重建索引
           </button>
         </form>
-        <ul className="settings-list">
-          {(active?.documents || stats?.documents || []).length === 0 ? (
-            <li className="muted">暂无资料 — 上传后自动解析并入图</li>
-          ) : (
-            (active?.documents || []).map((d) => (
-              <li key={d.id}>
-                <strong>{d.title || d.filename || d.id}</strong>
-                <span className="muted">
-                  {d.status}
-                  {d.chunk_count ? ` · ${d.chunk_count} chunks` : ""}
-                </span>
+
+        <div className="kb-split">
+          <div className="kb-docs">
+            <h3 className="settings-subhead">文本</h3>
+            <ul className="settings-list kb-doc-list">
+              <li>
+                <button
+                  type="button"
+                  className={selectedDocId === "" ? "kb-doc on" : "kb-doc"}
+                  onClick={() => setSelectedDocId("")}
+                >
+                  <strong>全部</strong>
+                  <span className="muted">{stats?.chunk_count || 0} 分块</span>
+                </button>
               </li>
-            ))
-          )}
-        </ul>
+              {docs.length === 0 ? (
+                <li className="muted">暂无文本，上传后自动分块并向量化</li>
+              ) : (
+                docs.map((d) => (
+                  <li key={d.id}>
+                    <button
+                      type="button"
+                      className={selectedDocId === d.id ? "kb-doc on" : "kb-doc"}
+                      onClick={() => setSelectedDocId(d.id)}
+                    >
+                      <strong>{d.title || d.filename || d.id}</strong>
+                      <span className="muted">
+                        {d.chunk_count ? `${d.chunk_count} 分块` : d.status || ""}
+                      </span>
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
+          <div className="kb-chunks">
+            <h3 className="settings-subhead">向量结果</h3>
+            <p className="hint">{chunkNote || "点左侧文本查看分块与向量"}</p>
+            <ul className="settings-list kb-chunk-list">
+              {chunks.length === 0 ? (
+                <li className="muted">无分块</li>
+              ) : (
+                chunks.map((c) => (
+                  <li key={c.chunk_id} className="kb-chunk">
+                    <div className="kb-chunk-meta">
+                      <strong>{c.section_type || c.chunk_id.slice(0, 12)}</strong>
+                      <span className={`llm-slot-flag${c.has_vector ? " on" : ""}`}>
+                        {c.has_vector ? `向量 ${c.dim}d` : "无向量"}
+                      </span>
+                    </div>
+                    {c.has_vector && c.vector_preview?.length ? (
+                      <code className="kb-vector">
+                        [{c.vector_preview.map((n) => n.toFixed(3)).join(", ")}
+                        {(c.dim || 0) > (c.vector_preview.length || 0) ? ", …" : ""}]
+                      </code>
+                    ) : null}
+                    <p className="kb-chunk-text">{c.text}</p>
+                  </li>
+                ))
+              )}
+            </ul>
+            {selectedChunk && !selectedChunk.has_vector ? (
+              <p className="hint">未向量化：到「模型」页配置向量模型并点重建索引。</p>
+            ) : null}
+          </div>
+        </div>
       </div>
 
       <section className="panel settings-panel-block">
         <div className="panel-head">
-          <h2>召回试探</h2>
+          <h2>召回测试</h2>
         </div>
-        <p className="hint">模拟对话回复前的知识库召回（Hybrid RRF）。</p>
-        <form className="settings-add-grid" onSubmit={onSearch}>
+        <p className="hint">用当前空间测向量相似度；混合会叠加 BM25 / 图谱。</p>
+        <div className="kb-mode" role="group" aria-label="召回方式">
+          <button
+            type="button"
+            className={recallMode === "vector" ? "on" : ""}
+            onClick={() => setRecallMode("vector")}
+          >
+            向量
+          </button>
+          <button
+            type="button"
+            className={recallMode === "hybrid" ? "on" : ""}
+            onClick={() => setRecallMode("hybrid")}
+          >
+            混合
+          </button>
+        </div>
+        <form className="settings-add-grid kb-recall" onSubmit={onSearch}>
           <input
             placeholder="输入问题，例如：扭矩规格"
             value={searchQ}
@@ -277,10 +391,14 @@ function KnowledgeSettingsPanel() {
             <li className="muted">尚无命中</li>
           ) : (
             searchHits.map((h) => (
-              <li key={`${h.citation_id}-${h.score}`}>
+              <li key={`${h.citation_id}-${h.score}`} className="kb-hit">
                 <span>
-                  <strong>{h.source_id}</strong>
-                  <span className="muted"> · {h.score.toFixed(3)}</span>
+                  <strong>{h.source_id || h.metadata?.chunk_id || "hit"}</strong>
+                  <span className="muted">
+                    {" "}
+                    · {h.score.toFixed(3)}
+                    {h.metadata?.channels?.length ? ` · ${h.metadata.channels.join("+")}` : ""}
+                  </span>
                   <div className="muted">{h.text}</div>
                 </span>
               </li>
@@ -289,6 +407,15 @@ function KnowledgeSettingsPanel() {
         </ul>
         <p className="status-line">{status}</p>
       </section>
+    </div>
+  );
+}
+
+function MoreSettingsPanel() {
+  return (
+    <div className="settings-section single">
+      <AgentToolsPanel />
+      <McpSkillPanel />
     </div>
   );
 }
@@ -347,8 +474,7 @@ function AgentToolsPanel() {
   }
 
   return (
-    <div className="settings-section single">
-      <section className="panel settings-panel-block">
+    <section className="panel settings-panel-block">
         <div className="panel-head">
           <h2>Agent 工具</h2>
         </div>
@@ -406,7 +532,6 @@ function AgentToolsPanel() {
         </ul>
         <p className="status-line">{status}</p>
       </section>
-    </div>
   );
 }
 
@@ -484,7 +609,7 @@ function McpSkillPanel() {
   const skills = data?.skills || [];
 
   return (
-    <div className="settings-section">
+    <>
       <section className="panel settings-panel-block">
         <div className="panel-head">
           <h2>MCP Hub</h2>
@@ -666,6 +791,6 @@ function McpSkillPanel() {
           {status}
         </p>
       </section>
-    </div>
+    </>
   );
 }

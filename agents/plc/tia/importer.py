@@ -12,13 +12,18 @@ User-facing contract:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import shutil
 import subprocess
 import tempfile
+import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from agents.plc.tia.timings import merge_timings, timed_step
 
 APXX_SUFFIXES = {".ap17", ".ap18", ".ap19", ".ap20", ".apxx"}
 
@@ -125,6 +130,9 @@ class ImportResult:
     project_path: Path | None = None
     tia_version: str = ""
     notes: list[str] | None = None
+    timings: dict[str, int] = field(default_factory=dict)
+    # Pre-parsed IR when XML parse overlapped Openness export (or cache-hit extract).
+    project: object | None = None
 
     def __post_init__(self) -> None:
         if self.notes is None:
@@ -162,6 +170,139 @@ def _infer_tia_version(project_path: Path, explicit: str = "") -> str:
     return "V17"
 
 
+def export_cache_enabled() -> bool:
+    """Default ON — disable with RESEARCHOS_TIA_EXPORT_CACHE=0."""
+    raw = os.getenv("RESEARCHOS_TIA_EXPORT_CACHE")
+    if raw is None or not str(raw).strip():
+        return True
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def export_cache_root() -> Path:
+    """Stable cache root under PLC_WORK_DIR or repo ``.researchos/plc_export_cache``."""
+    work = os.getenv("PLC_WORK_DIR", "").strip()
+    if work:
+        return Path(work).expanduser().resolve() / "plc_export_cache"
+    root = Path(__file__).resolve().parents[3]
+    return root / ".researchos" / "plc_export_cache"
+
+
+def _file_head_tail_digest(path: Path, *, chunk: int = 65536) -> str:
+    """Cheap content fingerprint: size-independent head/tail SHA-256 prefix."""
+    hasher = hashlib.sha256()
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        hasher.update(handle.read(chunk))
+        if size > chunk:
+            handle.seek(max(0, size - chunk))
+            hasher.update(handle.read(chunk))
+    return hasher.hexdigest()[:16]
+
+
+def _sibling_tree_fingerprint(sibling: Path) -> str:
+    """Relative file names + sizes (no mtimes/paths) so unzip-to-temp still hits cache."""
+    entries: list[str] = []
+    if not sibling.is_dir():
+        return ""
+    for dirpath, dirnames, filenames in os.walk(sibling):
+        dirnames.sort()
+        rel_dir = os.path.relpath(dirpath, sibling).replace("\\", "/")
+        for name in sorted(filenames):
+            fp = Path(dirpath) / name
+            try:
+                size = fp.stat().st_size
+            except OSError:
+                continue
+            rel = name if rel_dir in {".", ""} else f"{rel_dir}/{name}"
+            entries.append(f"{rel}:{size}")
+    return "\n".join(entries)
+
+
+def export_cache_key(project_path: str | Path) -> str:
+    """Path-independent fingerprint: apxx name+size+head/tail + sibling names/sizes.
+
+    Chat unzip extracts to a new temp dir each time; absolute path / mtime would
+    miss the cache even when the Siemens tree is identical.
+    """
+    project = Path(project_path).expanduser().resolve()
+    st = project.stat()
+    parts = [
+        project.name.lower(),
+        str(st.st_size),
+        _file_head_tail_digest(project),
+    ]
+    sibling = project.parent / project.stem
+    if sibling.is_dir():
+        parts.append(_sibling_tree_fingerprint(sibling))
+    digest = hashlib.sha256("|".join(parts).encode("utf-8", errors="replace")).hexdigest()
+    return digest[:40]
+
+
+def _copy_tree_contents(src: Path, dest: Path) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    for item in src.iterdir():
+        target = dest / item.name
+        if item.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(item, target)
+        else:
+            shutil.copy2(item, target)
+
+
+def try_restore_export_cache(project_path: str | Path, export_dir: Path) -> tuple[bool, str, int]:
+    """Copy cached SimaticML exports into ``export_dir`` on hit.
+
+    Returns (hit, cache_key, lookup_ms).
+    """
+    t0 = time.monotonic()
+    key = export_cache_key(project_path)
+    cached = export_cache_root() / key
+    hit = False
+    if cached.is_dir() and has_simaticml_exports(cached):
+        _copy_tree_contents(cached, Path(export_dir))
+        hit = has_simaticml_exports(Path(export_dir))
+    lookup_ms = int((time.monotonic() - t0) * 1000)
+    return hit, key, lookup_ms
+
+
+def store_export_cache(project_path: str | Path, export_dir: Path) -> str | None:
+    """Persist a successful export under the cache key. Returns key or None."""
+    export_dir = Path(export_dir)
+    if not has_simaticml_exports(export_dir):
+        return None
+    key = export_cache_key(project_path)
+    dest = export_cache_root() / key
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    _copy_tree_contents(export_dir, dest)
+    return key
+
+
+def _attach_parsed(
+    parsed_out: list | None,
+    export_dir: Path,
+    *,
+    project_name: str,
+    timings: dict[str, int],
+    notes: list[str],
+    extractor=None,
+) -> None:
+    """Optionally stash PLC-IR so the pipeline can skip a second extract pass."""
+    if parsed_out is None:
+        return
+    if extractor is not None:
+        with timed_step(timings, "extract_overlap_ms"):
+            parsed_out.append(extractor.finalize())
+        notes.append("XML parse overlapped Openness export (journal + thread pool)")
+        return
+    from agents.plc.tia.simaticml import extract_project
+
+    with timed_step(timings, "extract_ms"):
+        parsed_out.append(extract_project(export_dir, project_name=project_name))
+
+
 def export_apxx_via_openness(
     project_path: str | Path,
     *,
@@ -169,16 +310,20 @@ def export_apxx_via_openness(
     tia_version: str = "",
     plc_name: str = "",
     timeout_s: int = 600,
-) -> tuple[Path, list[str]]:
+    parsed_out: list | None = None,
+) -> tuple[Path, list[str], dict[str, int]]:
     """Export a .apxx via Openness.
 
     Preference order:
-    1. C# TiaOpenness.Server CLI (`RESEARCHOS_TIA_OPENNESS=cli|auto`, default auto)
-    2. PowerShell industrial/tia_adapter/ExportProject.ps1
+    1. Export cache hit (same apxx fingerprint) — skip Openness
+    2. C# TiaOpenness.Server CLI (`RESEARCHOS_TIA_OPENNESS=cli|auto`, default auto)
+    3. PowerShell industrial/tia_adapter/ExportProject.ps1
 
-    Requires TIA Portal + Openness on this machine. Returns (export_dir, notes).
+    Requires TIA Portal + Openness on this machine (cache miss).
+    Returns (export_dir, notes, timings_ms).
     """
-    project = Path(project_path).expanduser().resolve()
+    original = Path(project_path).expanduser().resolve()
+    project = original
     if not project.is_file():
         raise FileNotFoundError(f"TIA project not found: {project}")
     if project.suffix.lower() not in APXX_SUFFIXES:
@@ -186,36 +331,82 @@ def export_apxx_via_openness(
     if not is_complete_tia_project(project):
         raise ValueError(incomplete_apxx_guidance(project))
 
-    # Stage a full tree copy so Openness never sees a lone .apxx in upload temp.
-    try:
-        project = stage_tia_project_tree(project)
-        notes_stage = [f"staged complete TIA project tree for Openness: {project.parent}"]
-    except ValueError:
-        raise
-    except Exception as exc:  # noqa: BLE001 — fall back to in-place open if copy fails
-        notes_stage = [f"project staging skipped ({exc}); opening in place: {project}"]
+    timings: dict[str, int] = {}
+    notes: list[str] = []
 
     out = Path(export_dir).expanduser() if export_dir else Path(
         tempfile.mkdtemp(prefix="researchos_tia_export_")
     )
     out.mkdir(parents=True, exist_ok=True)
-    version = _infer_tia_version(project, tia_version)
+
+    if export_cache_enabled():
+        hit, cache_key, hit_ms = try_restore_export_cache(original, out)
+        if hit:
+            timings["openness_cache_hit"] = 1
+            timings["openness_cache_hit_ms"] = hit_ms
+            timings["openness_cli_ms"] = 0
+            notes.append(
+                f"Openness export cache HIT key={cache_key[:12]} "
+                f"({hit_ms}ms); skipped Openness"
+            )
+            _attach_parsed(
+                parsed_out, out, project_name=original.stem, timings=timings, notes=notes
+            )
+            return out, notes, timings
+        notes.append(f"Openness export cache MISS key={cache_key[:12]}")
+    else:
+        notes.append("Openness export cache disabled (RESEARCHOS_TIA_EXPORT_CACHE=0)")
+
+    # Stage a full tree copy so Openness never sees a lone .apxx in upload temp.
+    try:
+        with timed_step(timings, "stage_copy_ms"):
+            project = stage_tia_project_tree(project)
+        notes.append(f"staged complete TIA project tree for Openness: {project.parent}")
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — fall back to in-place open if copy fails
+        notes.append(f"project staging skipped ({exc}); opening in place: {project}")
+
+    version = _infer_tia_version(original, tia_version)
 
     mode = os.getenv("RESEARCHOS_TIA_OPENNESS", "auto").strip().lower() or "auto"
-    notes: list[str] = list(notes_stage)
     if mode in {"cli", "mcp", "csharp", "auto"}:
+        extractor = None
         try:
+            from agents.plc.tia.extract_stream import ExportJournalExtractor
             from agents.plc.tia.openness_cli import export_project_via_openness_cli
 
-            path, cli_notes = export_project_via_openness_cli(
+            on_event = None
+            if parsed_out is not None:
+                extractor = ExportJournalExtractor(out, project_name=original.stem)
+                on_event = extractor.submit_journal
+
+            path, cli_notes, cli_timings = export_project_via_openness_cli(
                 project,
                 export_dir=out,
                 tia_version=version,
                 plc_name=plc_name,
                 timeout_s=timeout_s,
+                on_export_event=on_event,
             )
-            return path, [*notes, *cli_notes]
+            timings = merge_timings(timings, cli_timings)
+            notes.extend(cli_notes)
+            if export_cache_enabled():
+                stored = store_export_cache(original, path)
+                if stored:
+                    notes.append(f"Openness export cache STORED key={stored[:12]}")
+            _attach_parsed(
+                parsed_out,
+                path,
+                project_name=original.stem,
+                timings=timings,
+                notes=notes,
+                extractor=extractor,
+            )
+            return path, notes, timings
         except Exception:
+            if extractor is not None:
+                extractor.close()
             if mode != "auto":
                 raise
             # fall through to PowerShell
@@ -241,13 +432,14 @@ def export_apxx_via_openness(
     if plc_name:
         cmd.extend(["-PlcName", plc_name])
 
-    completed = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout_s,
-        check=False,
-    )
+    with timed_step(timings, "openness_export_ms"):
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
         from agents.plc.tia.openness_cli import format_openness_failure
@@ -260,7 +452,14 @@ def export_apxx_via_openness(
             )
         )
     notes.append(f"exported via Openness PowerShell from {project}")
-    return out, notes
+    if export_cache_enabled():
+        stored = store_export_cache(original, out)
+        if stored:
+            notes.append(f"Openness export cache STORED key={stored[:12]}")
+    _attach_parsed(
+        parsed_out, out, project_name=original.stem, timings=timings, notes=notes
+    )
+    return out, notes, timings
 
 
 def _safe_extract_zip(archive: Path, dest: Path) -> None:
@@ -410,6 +609,18 @@ def extract_tia_archive(archive: str | Path, *, dest: str | Path | None = None) 
     return picked
 
 
+def extract_tia_archive_timed(
+    archive: str | Path,
+    *,
+    dest: str | Path | None = None,
+) -> tuple[Path, dict[str, int]]:
+    """Like ``extract_tia_archive`` but also returns ``{unzip_ms: …}``."""
+    timings: dict[str, int] = {}
+    with timed_step(timings, "unzip_ms"):
+        picked = extract_tia_archive(archive, dest=dest)
+    return picked, timings
+
+
 def resolve_project_input(
     path: str | Path,
     *,
@@ -428,7 +639,7 @@ def resolve_project_input(
     p = Path(path).expanduser().resolve()
     kind = classify_input(p)
     if kind == "archive":
-        extracted = extract_tia_archive(p)
+        extracted, unzip_timings = extract_tia_archive_timed(p)
         try:
             nested = resolve_project_input(
                 extracted,
@@ -464,6 +675,7 @@ def resolve_project_input(
             raise
         nested.notes = list(nested.notes or [])
         nested.notes.insert(0, f"extracted Siemens archive {p.name} → {extracted}")
+        nested.timings = merge_timings(unzip_timings, nested.timings)
         return nested
     if kind == "export_dir":
         # Raw TIA project folders (from .zap) often contain ConversionLog/GSD XML + .apxx.
@@ -502,11 +714,13 @@ def resolve_project_input(
         if not is_complete_tia_project(p):
             raise ValueError(incomplete_apxx_guidance(p))
         try:
-            out, export_notes = export_apxx_via_openness(
+            parsed: list = []
+            out, export_notes, export_timings = export_apxx_via_openness(
                 p,
                 export_dir=export_dir,
                 tia_version=tia_version,
                 plc_name=plc_name,
+                parsed_out=parsed,
             )
         except Exception as exc:
             from agents.plc.tia.openness_cli import format_openness_failure, is_license_error
@@ -532,6 +746,8 @@ def resolve_project_input(
             project_path=p,
             tia_version=_infer_tia_version(p, tia_version),
             notes=notes,
+            timings=dict(export_timings or {}),
+            project=parsed[0] if parsed else None,
         )
     raise FileNotFoundError(
         f"Unsupported PLC input: {p}. Provide a .zap/.zap19 archive, "

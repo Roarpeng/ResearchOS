@@ -21,13 +21,14 @@ Siemens **项目归档**扩展名为 `.zap16` / `.zap19` / `.zap20` 等（有时
 
 ```text
 .zap → 解压 .ap19 → Openness export XML → PLC-IR / 逻辑图 / 知识图谱
-    → 对话确认 changeset → Openness import+save → Archive → 下载新 .zap
+    → 优化提案（analyst→changeset）→ HITL 确认 → Openness import+save → Archive → 下载新 .zap
 ```
 
 **许可证前置：** Automation License Manager 中需有与 Portal 匹配的 **STEP 7 Basic**（或对应 STEP 7 / TIA）许可证。Openness 能打开工程但 Export/Import 报 `Necessary license 'STEP 7 Basic' is missing` 时，先激活许可证再重试；系统会优先显示许可证错误，而不是「没有 SimaticML」。
 
 API：
 
+- 优化提案：`POST /api/v1/plc/jobs/{id}/optimize`（死块标注 + 可写块头注释 XML 暂存；不解密 Know-how）
 - 写回：`POST /api/v1/plc/jobs/{id}/writeback`（默认 `archive_zap=true`，`project_path` 可省略，用 ingest 记下的 `job.project_path`）
 - 下载归档：`GET /api/v1/plc/jobs/{id}/zap`
 
@@ -77,14 +78,16 @@ flowchart LR
 
 ## 单机局域网（推荐验收拓扑）
 
-**一键启动（推荐）：** 仓库根目录 `Start-ResearchOS.cmd Hybrid`（数据面 Docker + 本机 Gateway/Frontend + Openness CLI 就绪）。普通全栈用 `Start-ResearchOS.cmd`。详见 [`deploy/README.md`](../deploy/README.md)。
+**一键启动（推荐）：** `Start-ResearchOS.cmd` — **Docker 全栈**（nginx 前端 + Gateway + 数据面）；仅 Openness CLI 留在 Windows。详见 [`deploy/README.md`](../deploy/README.md)。
 
-同一台 Windows（手动）：
+需要 Gateway **进程**直接调用 Openness 处理 `.ap19` 时：`Start-ResearchOS.cmd HostGateway`（前端仍为 Docker nginx）。
 
-1. **Docker Desktop** 起数据面（至少 neo4j + minio；可全量 default compose）
-2. **本机 Gateway**（`uv run researchos-gateway`）以便直接调用 Openness CLI 处理 `.ap19`
-3. **本机 Frontend**（`cd frontend && npm run dev`，默认端口 **5173**；若改 3000 亦可）
-4. 局域网同事访问 `http://<本机IP>:5173`（同时放行 Gateway `:8000`，并设置 `CORS_ORIGINS`）
+同一台 Windows：
+
+1. **Docker Desktop** 全栈（`Start-ResearchOS.cmd`）
+2. 日常 PLC：上传 **`.zap` / SimaticML XML**（容器 Gateway 即可）
+3. `.ap19` 路径解析：`HostGateway`，或先在 Windows 上 Openness 导出 XML 再上传
+4. 局域网同事访问 `http://<本机IP>:5173`（放行 Gateway `:8000`，并设置 `CORS_ORIGINS`）
 
 ### Compose profile `plc`
 
@@ -121,6 +124,8 @@ dotnet build TiaOpenness.sln -c Release
 | `NEO4J_URI` / `NEO4J_PASSWORD` | 图谱发布（可选；未设则内存图） |
 
 **Openness 组**：用户须属于 “Siemens TIA Openness”；加组后需**重新登录** Windows，令牌才会生效。
+
+**Openness 防火墙弹窗（每次点同意）：** 点 **Yes** 只允许这一次；点 **Yes to all** 才写入注册表。`Start-ResearchOS.cmd` / `Register-TiaOpennessWhitelist.ps1` 会把当前 `TiaOpenness.Server.exe` 的路径 + UTC 修改时间 + SHA256 写入 `HKLM\SOFTWARE\Siemens\Automation\Openness\<ver>\Whitelist\... \Entry`。exe 一重建哈希就变，启动脚本会再写一次（需一次 UAC）。之后入库应不再弹窗。
 
 ### 局域网访问
 

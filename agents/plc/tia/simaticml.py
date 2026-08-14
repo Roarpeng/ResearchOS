@@ -13,6 +13,7 @@ Supported document types:
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 
 from agents.plc.tia.ir import (
@@ -30,6 +31,7 @@ from agents.plc.tia.ir import (
     Wire,
     WireEndpoint,
 )
+from agents.plc.tia.parallel import map_parallel
 
 _SECTION_MAP = {
     "Input": InterfaceSection.INPUT,
@@ -863,11 +865,68 @@ def parse_tag_table_xml(path: Path) -> TagTable | None:
 # Project extraction
 # ---------------------------------------------------------------------------
 
+@dataclass
+class XmlParseResult:
+    """One export XML classified as block, tag table, skip, or error."""
+
+    kind: str  # "block" | "table" | "skip" | "error"
+    rel: str
+    block: Block | None = None
+    table: TagTable | None = None
+    note: str = ""
+
+
+def parse_export_xml(xml_file: Path, export_path: Path) -> XmlParseResult:
+    """Parse a single Openness XML into a block or tag table (thread-safe per file)."""
+    try:
+        rel = str(xml_file.relative_to(export_path))
+    except ValueError:
+        rel = str(xml_file)
+    try:
+        block = parse_block_xml(xml_file)
+        if block is not None:
+            return XmlParseResult(kind="block", rel=rel, block=block)
+    except ET.ParseError as exc:
+        return XmlParseResult(kind="error", rel=rel, note=f"parse error in {rel}: {exc}")
+    except Exception as exc:  # noqa: BLE001 — keep pipeline advisory
+        return XmlParseResult(kind="error", rel=rel, note=f"block parse failed in {rel}: {exc}")
+    try:
+        table = parse_tag_table_xml(xml_file)
+        if table is not None:
+            return XmlParseResult(kind="table", rel=rel, table=table)
+    except ET.ParseError as exc:
+        return XmlParseResult(kind="error", rel=rel, note=f"tag table parse error in {rel}: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        return XmlParseResult(kind="error", rel=rel, note=f"tag table parse failed in {rel}: {exc}")
+    return XmlParseResult(kind="skip", rel=rel)
+
+
+def merge_parse_results(project: PlcProject, results: list[XmlParseResult]) -> None:
+    """Fold parse results into ``project`` on the calling thread (dict writes)."""
+    skipped: list[str] = []
+    for item in results:
+        if item.kind == "block" and item.block is not None:
+            project.add_block(item.block)
+        elif item.kind == "table" and item.table is not None:
+            project.tag_tables[item.table.name] = item.table
+        elif item.kind == "error" and item.note:
+            project.extraction_notes.append(item.note)
+        elif item.kind == "skip":
+            skipped.append(item.rel)
+    if skipped:
+        preview = ", ".join(skipped[:8])
+        more = f" (+{len(skipped) - 8} more)" if len(skipped) > 8 else ""
+        project.extraction_notes.append(
+            f"unrecognized XML skipped ({len(skipped)}): {preview}{more}"
+        )
+
+
 def extract_project(export_dir: str | Path, *, project_name: str = "") -> PlcProject:
     """Scan an Openness export directory and build PLC-IR.
 
     Expected layout (flexible): any number of *.xml files exported via
     `PlcBlock.Export(..., ExportOptions.WithDefaults)` and tag tables.
+    Independent XML files are parsed on a thread pool; IR merge stays serial.
     """
     from agents.plc.tia.enrich import enrich_project_interfaces
 
@@ -877,44 +936,18 @@ def extract_project(export_dir: str | Path, *, project_name: str = "") -> PlcPro
         project.extraction_notes.append(f"export directory not found: {export_path}")
         return project
 
-    xml_files = sorted(export_path.rglob("*.xml"))
+    xml_files = sorted(p for p in export_path.rglob("*.xml") if p.is_file())
     if not xml_files:
         project.extraction_notes.append("no XML exports found")
         return project
 
-    skipped: list[str] = []
-    for xml_file in xml_files:
-        rel = str(xml_file.relative_to(export_path))
-        try:
-            block = parse_block_xml(xml_file)
-            if block is not None:
-                project.add_block(block)
-                continue
-        except ET.ParseError as exc:
-            project.extraction_notes.append(f"parse error in {rel}: {exc}")
-            continue
-        except Exception as exc:  # noqa: BLE001 — keep pipeline advisory
-            project.extraction_notes.append(f"block parse failed in {rel}: {exc}")
-            continue
-        try:
-            table = parse_tag_table_xml(xml_file)
-            if table is not None:
-                project.tag_tables[table.name] = table
-                continue
-        except ET.ParseError as exc:
-            project.extraction_notes.append(f"tag table parse error in {rel}: {exc}")
-            continue
-        except Exception as exc:  # noqa: BLE001
-            project.extraction_notes.append(f"tag table parse failed in {rel}: {exc}")
-            continue
-        skipped.append(rel)
+    results = map_parallel(
+        lambda xml_file: parse_export_xml(xml_file, export_path),
+        xml_files,
+        min_items=4,
+    )
+    merge_parse_results(project, results)
 
-    if skipped:
-        preview = ", ".join(skipped[:8])
-        more = f" (+{len(skipped) - 8} more)" if len(skipped) > 8 else ""
-        project.extraction_notes.append(
-            f"unrecognized XML skipped ({len(skipped)}): {preview}{more}"
-        )
     if not project.blocks and not project.tag_tables:
         project.extraction_notes.append(
             "no PLC blocks or tag tables recognized — check Openness export layout"

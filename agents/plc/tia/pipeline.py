@@ -25,6 +25,7 @@ from agents.plc.tia.kg import PlcKnowledgeGraph, build_knowledge_graph
 from agents.plc.tia.package import build_conversion_report, write_result_package
 from agents.plc.tia.scl import convert_project_to_scl
 from agents.plc.tia.simaticml import extract_project
+from agents.plc.tia.timings import merge_timings, timed_step
 
 
 def analyze_tia_exports(
@@ -32,31 +33,50 @@ def analyze_tia_exports(
     *,
     project_name: str = "",
     publish_graph: bool = False,
+    project: PlcProject | None = None,
 ) -> dict[str, Any]:
     """Offline path: parse Openness exports, build KG, convert to SCL.
 
     When `publish_graph=True`, also upsert PLC nodes/edges into the configured
     KnowledgeGraph backend (Neo4j if NEO4J_* is set, else in-memory).
+
+    Pass a pre-parsed ``project`` (journal overlap / cache-hit extract) to skip
+    a second XML walk. KG still waits until every block is present.
     """
-    project = attach_folded(extract_project(export_dir, project_name=project_name))
-    kg = build_knowledge_graph(project)
-    scl_sources = convert_project_to_scl(project)
-    report = interpretation_report(project, kg)
-    conversion = build_conversion_report(project, scl_sources)
+    timings: dict[str, int] = {}
+    if project is None:
+        with timed_step(timings, "extract_ms"):
+            project = extract_project(export_dir, project_name=project_name)
+    else:
+        timings["extract_ms"] = 0
+        timings["extract_overlapped"] = 1
+    with timed_step(timings, "fold_attach_ms"):
+        project = attach_folded(project)
+    with timed_step(timings, "kg_ms"):
+        kg = build_knowledge_graph(project)
+    with timed_step(timings, "scl_ms"):
+        scl_sources = convert_project_to_scl(project)
+    with timed_step(timings, "report_ms"):
+        report = interpretation_report(project, kg)
+        conversion = build_conversion_report(project, scl_sources)
+    with timed_step(timings, "fold_serialize_ms"):
+        folded = fold_project(project)
     result: dict[str, Any] = {
         "project": project,
-        "folded_logic": fold_project(project),
+        "folded_logic": folded,
         "knowledge_graph": kg,
         "scl_sources": scl_sources,
         "report": report,
         "conversion_report": conversion,
+        "timings": timings,
     }
     if publish_graph:
         from agents.plc.tia.neo4j_publish import publish_plc_knowledge_graph
 
-        result["graph_publish"] = publish_plc_knowledge_graph(
-            kg, project_name=project.name or project_name or "plc_project"
-        )
+        with timed_step(timings, "neo4j_ms"):
+            result["graph_publish"] = publish_plc_knowledge_graph(
+                kg, project_name=project.name or project_name or "plc_project"
+            )
     return result
 
 
@@ -76,13 +96,18 @@ def analyze_plc_project(
     `.apxx` requires TIA Portal Openness on this host (C# CLI or PowerShell adapter).
     Export folders and single SimaticML `.xml` files are fully offline.
     """
-    imported = resolve_project_input(
-        path,
-        export_dir=export_dir or None,
-        tia_version=tia_version,
-        plc_name=plc_name,
-        auto_export=auto_export,
-    )
+    timings: dict[str, int] = {}
+    with timed_step(timings, "resolve_wall_ms"):
+        imported = resolve_project_input(
+            path,
+            export_dir=export_dir or None,
+            tia_version=tia_version,
+            plc_name=plc_name,
+            auto_export=auto_export,
+        )
+    # Fine-grained import steps (unzip / stage / openness) — not added into resolve_wall_ms
+    timings = merge_timings(timings, imported.timings)
+
     name = project_name or (
         imported.project_path.stem if imported.project_path else imported.export_dir.name
     )
@@ -90,7 +115,9 @@ def analyze_plc_project(
         str(imported.export_dir),
         project_name=name,
         publish_graph=publish_graph,
+        project=imported.project if isinstance(imported.project, PlcProject) else None,
     )
+    timings = merge_timings(timings, analyzed.get("timings"))
     project: PlcProject = analyzed["project"]
     for note in imported.notes or []:
         project.extraction_notes.append(note)
@@ -100,25 +127,27 @@ def analyze_plc_project(
         project.source_path = str(imported.project_path)
 
     # Refresh report/conversion after notes mutation
-    analyzed["report"] = interpretation_report(project, analyzed["knowledge_graph"])
-    analyzed["conversion_report"] = build_conversion_report(
-        project, analyzed["scl_sources"]
-    )
+    with timed_step(timings, "report_refresh_ms"):
+        analyzed["report"] = interpretation_report(project, analyzed["knowledge_graph"])
+        analyzed["conversion_report"] = build_conversion_report(
+            project, analyzed["scl_sources"]
+        )
 
     package_root = ""
     if result_dir:
-        conversion = write_result_package(
-            result_dir,
-            project=project,
-            knowledge_graph=analyzed["knowledge_graph"],
-            scl_sources=analyzed["scl_sources"],
-            report_md=analyzed["report"],
-            extra_meta={
-                "source_kind": imported.source_kind,
-                "export_dir": str(imported.export_dir),
-                "tia_version": imported.tia_version,
-            },
-        )
+        with timed_step(timings, "package_ms"):
+            conversion = write_result_package(
+                result_dir,
+                project=project,
+                knowledge_graph=analyzed["knowledge_graph"],
+                scl_sources=analyzed["scl_sources"],
+                report_md=analyzed["report"],
+                extra_meta={
+                    "source_kind": imported.source_kind,
+                    "export_dir": str(imported.export_dir),
+                    "tia_version": imported.tia_version,
+                },
+            )
         analyzed["conversion_report"] = conversion
         package_root = str(Path(result_dir).resolve())
 
@@ -127,8 +156,10 @@ def analyze_plc_project(
         "export_dir": str(imported.export_dir),
         "project_path": str(imported.project_path) if imported.project_path else "",
         "tia_version": imported.tia_version,
+        "timings": dict(imported.timings or {}),
     }
     analyzed["result_dir"] = package_root
+    analyzed["timings"] = timings
     return analyzed
 
 

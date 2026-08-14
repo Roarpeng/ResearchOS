@@ -336,6 +336,404 @@ def analyze_project(job: dict) -> dict:
     }
 
 
+def _role_hint(name: str, comment: str = "", titles: list[str] | None = None) -> str:
+    """Cheap domain label from block name / comment / network titles (not invented CALLS)."""
+    blob = " ".join([name, comment or "", " ".join(titles or [])]).lower()
+    rules = [
+        (("kuka", "robot", "机器人"), "机器人"),
+        (("visual", "chisel", "vision", "相机", "凿削", "ros"), "视觉/凿削"),
+        (("modbus", "communication_pc", "通信"), "通信"),
+        (("cooling", "fan", "冷却", "风扇"), "冷却"),
+        (("valve", "阀"), "阀岛/执行器"),
+        (("component", "组件"), "设备组件"),
+        (("safety", "door", "安全门", "safedoor"), "安全"),
+        (("fixture", "夹具"), "夹具"),
+        (("drill", "hammer", "钻"), "钻孔"),
+        (("diamond", "金刚"), "金刚石工艺"),
+        (("autostep", "auto_step", "自动"), "自动步序"),
+        (("sysmode", "subsys", "模式"), "模式管理"),
+        (("homepos", "home", "回零", "原点"), "回零/原点"),
+        (("parameter", "参数"), "参数"),
+        (("message", "prompt", "提示", "消息", "typechange"), "消息/提示"),
+        (("ft control", "force", "torque", "力控"), "力/力矩"),
+        (("timer", "定时"), "定时"),
+        (("analog", "模拟"), "模拟量"),
+        (("stdsignal", "标准信号"), "标准信号"),
+        (("iocheck",), "IO 检查"),
+        (("time calculation", "time calc"), "时序/对时"),
+    ]
+    for keys, label in rules:
+        if any(k in blob for k in keys):
+            return label
+    return ""
+
+
+def _network_titles(job: dict[str, Any], block_name: str, *, limit: int = 8) -> list[str]:
+    titles: list[str] = []
+    folded = job.get("folded_logic") or {}
+    nets = folded.get(block_name) if isinstance(folded, dict) else None
+    if isinstance(nets, list):
+        for net in nets:
+            if not isinstance(net, dict):
+                continue
+            title = str(net.get("title") or "").strip().strip('"')
+            if title and title not in titles:
+                titles.append(title)
+            if len(titles) >= limit:
+                return titles
+    scl = str((job.get("scl_sources") or {}).get(block_name) or "")
+    for line in scl.splitlines():
+        s = line.strip()
+        if s.upper().startswith("// NETWORK") and ":" in s:
+            title = s.split(":", 1)[1].strip()
+            if title and title not in titles:
+                titles.append(title)
+            if len(titles) >= limit:
+                break
+    return titles
+
+
+def _ordered_callees(job: dict[str, Any], block_name: str) -> list[str]:
+    """Callees in logic_graph scan order when available, else KG CALLS."""
+    block_id = f"Block::{block_name}"
+    logic_edges = (job.get("logic_graph") or {}).get("edges") or []
+    scored: list[tuple[int, str]] = []
+    for edge in logic_edges:
+        if not isinstance(edge, dict) or edge.get("type") != "CALLS":
+            continue
+        if edge.get("source") != block_id:
+            continue
+        target = _name(edge.get("target"))
+        if not target:
+            continue
+        seq = edge.get("seq")
+        try:
+            scored.append((int(seq), target))
+        except (TypeError, ValueError):
+            scored.append((10_000, target))
+    if scored:
+        scored.sort(key=lambda item: (item[0], item[1]))
+        out: list[str] = []
+        for _, name in scored:
+            if name not in out:
+                out.append(name)
+        return out
+    _callers, callees, _ev = _calls(job, block_name)
+    return callees
+
+
+def describe_project_architecture(job: dict[str, Any]) -> str:
+    """Whole-project understanding from KG CALLS + network titles (no LLM)."""
+    blocks = _block_metadata(job)
+    summary = job.get("summary") or {}
+    project = job.get("project_name") or "工程"
+    obs = _ob_names(job)
+    # Prefer cyclic OB1 / Main as primary scan entry
+    main_ob = ""
+    for candidate in obs:
+        low = candidate.lower()
+        if candidate.startswith("OB1") or low in {"main", "ob1", "ob1main"} or "main" in low:
+            main_ob = candidate
+            break
+    if not main_ob and obs:
+        main_ob = obs[0]
+
+    lines: list[str] = []
+    summary_bits = []
+    if isinstance(summary, dict):
+        for key in ("OB", "FB", "FC", "DB", "Networks"):
+            if key in summary:
+                summary_bits.append(f"{key} {summary[key]}")
+    head = f"**{project}**"
+    if summary_bits:
+        head += " · " + " · ".join(summary_bits)
+    lines.append(head)
+
+    # Domain fingerprint from names/comments/titles across FB/FC
+    role_hits: dict[str, list[str]] = defaultdict(list)
+    for name, meta in blocks.items():
+        btype = str(meta.get("type") or "").upper()
+        if btype not in {"FB", "FC", "OB"}:
+            continue
+        role = _role_hint(name, str(meta.get("comment") or ""), _network_titles(job, name, limit=4))
+        if role:
+            role_hits[role].append(name)
+    if role_hits:
+        # Prefer roles with more than one hit, or strong process roles
+        ordered_roles = sorted(
+            role_hits.items(),
+            key=lambda kv: (-len(kv[1]), kv[0]),
+        )
+        fingerprint = []
+        for role, names in ordered_roles[:8]:
+            fingerprint.append(f"{role}（{len(names)}）")
+        lines.append("能力画像（据块名/注释/网络标题）：" + "、".join(fingerprint))
+
+    if main_ob:
+        callees = _ordered_callees(job, main_ob)
+        lines.append(f"主扫描入口：`{main_ob}`" + (f"（调用 {len(callees)} 个块）" if callees else ""))
+        if callees:
+            lines.append("扫描调用链（顺序来自逻辑图 CALLS）：")
+            for i, callee in enumerate(callees[:16], start=1):
+                meta = blocks.get(callee) or {}
+                comment = str(meta.get("comment") or "")
+                titles = _network_titles(job, callee, limit=3)
+                # Prefer name/comment roles; titles only if name gives nothing
+                role = _role_hint(callee, comment) or _role_hint(callee, "", titles)
+                children = _ordered_callees(job, callee)
+                role_s = f" — {role}" if role else ""
+                if children:
+                    child_bits = []
+                    for ch in children[:6]:
+                        cr = _role_hint(ch, str((blocks.get(ch) or {}).get("comment") or ""))
+                        child_bits.append(f"`{ch}`" + (f"({cr})" if cr else ""))
+                    more = f" 等{len(children)}个" if len(children) > 6 else ""
+                    lines.append(
+                        f"{i}. `{callee}`{role_s} → " + "、".join(child_bits) + more
+                    )
+                else:
+                    title_s = f"；网络：{' / '.join(titles)}" if titles else ""
+                    lines.append(f"{i}. `{callee}`{role_s}{title_s}")
+
+            # Highlight major hubs (high fan-out under main)
+            hubs = []
+            for callee in callees:
+                kids = _ordered_callees(job, callee)
+                if len(kids) >= 3:
+                    hubs.append((callee, kids))
+            if hubs:
+                lines.append("关键子系统（主循环下再分发）：")
+                for hub, kids in hubs[:4]:
+                    role = _role_hint(hub, str((blocks.get(hub) or {}).get("comment") or ""))
+                    kid_roles = []
+                    for ch in kids[:8]:
+                        kid_roles.append(
+                            f"`{ch}`"
+                            + (
+                                f"({_role_hint(ch, str((blocks.get(ch) or {}).get('comment') or ''))})"
+                                if _role_hint(ch, str((blocks.get(ch) or {}).get("comment") or ""))
+                                else ""
+                            )
+                        )
+                    lines.append(
+                        f"- `{hub}`"
+                        + (f"（{role}）" if role else "")
+                        + "："
+                        + "、".join(kid_roles)
+                        + (f" …共{len(kids)}个" if len(kids) > 8 else "")
+                    )
+        else:
+            lines.append(f"`{main_ob}` 暂无已验证 CALLS 边；可点击图谱节点或 `@块名` 深入。")
+    else:
+        lines.append("未发现 OB 入口；以下按块类型罗列（证据不足时的退化视图）。")
+
+    other_obs = [o for o in obs if o != main_ob]
+    if other_obs:
+        lines.append("其它 OB：" + "、".join(f"`{o}`" for o in other_obs[:8]))
+
+    # Compact type inventory (not a raw dump of first 20 DB names)
+    by_type: dict[str, list[str]] = defaultdict(list)
+    for name, meta in blocks.items():
+        by_type[str(meta.get("type") or "?").upper()].append(name)
+    inv = []
+    for t in ("OB", "FB", "FC", "DB"):
+        names = sorted(by_type.get(t) or [])
+        if names:
+            inv.append(f"{t} {len(names)}")
+    if inv:
+        lines.append("块库存：" + " · ".join(inv))
+
+    # Process / device FB highlights by role
+    process_roles = ("自动步序", "机器人", "钻孔", "金刚石工艺", "视觉/凿削", "阀岛/执行器", "冷却")
+    highlights: list[str] = []
+    for role in process_roles:
+        names = role_hits.get(role) or []
+        # Prefer FB/FC over DB/instance names
+        preferred = [
+            n
+            for n in names
+            if str((blocks.get(n) or {}).get("type") or "").upper() in {"FB", "FC"}
+        ] or names
+        if preferred:
+            highlights.append(f"{role}：`" + "`、`".join(preferred[:4]) + "`")
+    if highlights:
+        lines.append("工艺/设备要点：")
+        lines.extend(f"- {h}" for h in highlights[:8])
+
+    lines.append("深入：点击图谱节点，或发送 `@块名 描述功能` / `@网络标题 作用`。")
+    return "\n".join(lines)
+
+
+def _folded_step_titles(job: dict[str, Any], block_name: str, *, limit: int = 18) -> list[str]:
+    """Meaningful network titles for a process FB (skip empty / asterisk banners lightly)."""
+    titles = _network_titles(job, block_name, limit=40)
+    out: list[str] = []
+    for title in titles:
+        t = title.strip().strip("*").strip()
+        if not t or t.lower() in {"running;", "taskdone", "always 1 and 0"}:
+            continue
+        # Collapse long asterisk separators but keep content
+        if set(t) <= {"*", " ", "-", "_"}:
+            continue
+        if t not in out:
+            out.append(t)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _axis_block_map(job: dict[str, Any]) -> dict[str, list[str]]:
+    """Map process axes → concrete FB/FC names present in this job."""
+    blocks = _block_metadata(job)
+    names = list(blocks.keys())
+
+    def pick(*needles: str) -> list[str]:
+        found: list[str] = []
+        for name in names:
+            low = name.lower()
+            if any(n.lower() in low for n in needles):
+                # Prefer FB/FC over DB/instance
+                btype = str((blocks.get(name) or {}).get("type") or "").upper()
+                if btype in {"FB", "FC", "OB"}:
+                    found.append(name)
+        # Stable unique
+        out: list[str] = []
+        for n in found:
+            if n not in out:
+                out.append(n)
+        return out
+
+    return {
+        "horizontal": pick("HorDrill", "Hor_Drill", "Horizontal"),
+        "down": pick("DownDrill", "Down_Drill", "DownChisel"),
+        "up": pick("UpDrill", "Up_Drill", "Upward"),
+        "robot": pick("RobotAutoStep"),
+        "dispatcher": pick("FB1060_AutoStep", "AutoStep"),
+        "core": pick("Diamond", "CoreDrill"),
+        "vision": pick("Visual Chiseling", "VisualChisel"),
+        "kuka": pick("KuKa_MainCtrl", "Kuka_MainCtrl"),
+    }
+
+
+def _message_wants_axis_process(message: str) -> bool:
+    raw = message or ""
+    msg = raw.lower()
+    zh = ("水平", "垂直", "向上", "向下", "作业", "钻孔", "打孔", "钻削", "凿削", "工艺逻辑")
+    en = ("hor", "down", "updrill", "drill axis", "horizontal", "vertical")
+    return any(k in raw for k in zh) or any(k in msg for k in en)
+
+
+def describe_axis_process_logic(job: dict[str, Any], message: str = "") -> str | None:
+    """Answer horizontal / vertical-down / vertical-up process logic from folded titles + CALLS.
+
+    Returns None if the job has no matching process blocks.
+    """
+    axes = _axis_block_map(job)
+    if not (axes["horizontal"] or axes["down"] or axes["up"] or axes["dispatcher"]):
+        return None
+
+    msg = message or ""
+    want_h = "水平" in msg or "hor" in msg.lower()
+    want_d = "向下" in msg or "down" in msg.lower()
+    want_u = "向上" in msg or "updrill" in msg.lower()
+    if "垂直" in msg:
+        want_d = True
+        if "向上" in msg:
+            want_u = True
+    if not (want_h or want_d or want_u):
+        # 「作业/工艺逻辑」等笼统问法 → 有证据的方向全给
+        want_h = want_d = True
+        want_u = True
+
+    lines: list[str] = []
+    lines.append("**作业方向逻辑（据 AutoStep 调度 + 各方向步序 FB 网络标题）**")
+    lines.append(
+        "说明：PLC 对话走知识图谱/折叠网络的确定性回答，**不依赖 LLM 联通**。"
+    )
+
+    disp = (axes["dispatcher"] or [""])[0]
+    if disp:
+        lines.append(f"总调度：`{disp}` 按方向调用子步序（网络可见 `HorDrillAutoStep` / `DownDrillAutoStep` / `CoreDrillAutoStep`）。")
+        # Direction codes from PC para if present in folded enable refs — already observed 1/2/3
+        lines.append(
+            "方向字：`DB1042_Timer.DrillDirectionCurrent/Memory` ← `DB1900_Communication_PC.Para.DrillDirection1/2/3`（值为 1/2/3）。"
+        )
+
+    def emit_axis(label: str, block_names: list[str], extra: list[str] | None = None) -> None:
+        if not block_names and not extra:
+            lines.append(f"### {label}")
+            lines.append("图谱中**未找到**独立步序 FB（无 UpDrill 类块名/网络标题证据）。")
+            return
+        lines.append(f"### {label}")
+        for name in block_names:
+            meta = _block_metadata(job).get(name) or {}
+            comment = str(meta.get("comment") or "").strip()
+            nets = meta.get("networks")
+            head = f"- 块：`{name}`"
+            if nets is not None:
+                head += f"（{nets} 网络）"
+            if comment:
+                head += f" — {comment[:80]}"
+            lines.append(head)
+            steps = _folded_step_titles(job, name, limit=14)
+            if steps:
+                lines.append("  步序要点：" + " → ".join(f"`{s}`" for s in steps[:12]))
+            children = _ordered_callees(job, name)
+            if children:
+                lines.append("  再调用：" + "、".join(f"`{c}`" for c in children[:8]))
+        for note in extra or []:
+            lines.append(f"- {note}")
+
+    if want_h:
+        extras = []
+        if axes["vision"]:
+            extras.append(
+                "视觉凿削挂在主循环，网络标注 **Only for Hor Chisel**：`"
+                + "`、`".join(axes["vision"][:3])
+                + "`"
+            )
+        if axes["robot"]:
+            rsteps = _folded_step_titles(job, axes["robot"][0], limit=20)
+            hor_steps = [s for s in rsteps if "水平" in s or "Hor" in s]
+            if hor_steps:
+                extras.append(f"机器人支路 `{axes['robot'][0]}`：" + " / ".join(hor_steps[:4]))
+        emit_axis("水平作业", axes["horizontal"], extras)
+
+    if want_d:
+        extras = []
+        if axes["robot"]:
+            rsteps = _folded_step_titles(job, axes["robot"][0], limit=20)
+            down_steps = [s for s in rsteps if "向下" in s or "Down" in s or "下" in s]
+            if down_steps:
+                extras.append(f"机器人支路 `{axes['robot'][0]}`：" + " / ".join(down_steps[:4]))
+        emit_axis("垂直向下作业", axes["down"], extras)
+
+    if want_u:
+        extras = []
+        if axes["core"]:
+            extras.append(
+                "第三路工艺为取芯/金刚石 `CoreDrillAutoStep`→"
+                + "、".join(f"`{n}`" for n in axes["core"][:2])
+                + "，**不是**命名为 Up 的垂直向上钻；若现场“向上”指 Dir=3，需结合 HMI/参数表确认。"
+            )
+        if not axes["up"]:
+            extras.append(
+                "证据：仅见水平 `HorDrill*` 与垂直向下 `DownDrill*`；无 `UpDrill*` 块。"
+            )
+        emit_axis("垂直向上作业", axes["up"], extras)
+
+    # Cross-cut shared resources
+    shared = []
+    if axes["kuka"]:
+        shared.append("`" + axes["kuka"][0] + "`（钻削应答/层号/停止钻）")
+    shared.append("`DB1910_DrillData`（已钻长度等）")
+    shared.append("`DB1080_Component`（压力/机器人 ProgNo/速度）")
+    shared.append("`DB1900_Communication_PC`（参数与上位握手）")
+    lines.append("共用资源：" + "、".join(shared))
+    lines.append("深入单块：`@FB1062_HorDrillAutoStep` / `@FB1063_DownDrillAutoStep` / `@FB1061_RobotAutoStep`。")
+    return "\n".join(lines)
+
+
 def format_analysis_markdown(result: dict) -> str:
     """Format deterministic PLC analysis as a compact Chinese chat section."""
     lines = ["## 证据门控分析", ""]

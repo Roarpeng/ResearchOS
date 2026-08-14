@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile, status
 
 from gateway.app.deps import PrincipalDep, RequestIdDep
 from gateway.app.schemas.chat import ChatTurnResponse
@@ -27,6 +27,7 @@ async def post_chat_turn(
     request: Request,
     principal: PrincipalDep,
     request_id: RequestIdDep,
+    background: BackgroundTasks,
     message: str = Form(default=""),
     task_id: str | None = Form(default=None),
     mode: str = Form(default="deep"),
@@ -61,6 +62,7 @@ async def post_chat_turn(
             block_name=block_name or None,
             canvas_edges_json=canvas_edges,
             canvas_positions_json=canvas_positions,
+            background=background,
         )
     except ValueError as exc:
         raise HTTPException(

@@ -424,3 +424,91 @@ def test_protected_block_skipped_from_scl(tmp_path):
     assert not (out / "converted_scl" / "FB_Secret.scl").exists()
     assert (out / "original" / "protected_blocks" / "FB_Secret.xml").exists()
     assert (out / "converted_scl" / "FB_Open.scl").exists()
+
+
+def test_interface_only_fb_io_calls_and_call_param_enrichment():
+    """Body-locked FB keeps open I/O; CALLS + CallInfo params enrich missing pins."""
+    from agents.plc.tia.ir import (
+        Block,
+        BlockType,
+        InterfaceSection,
+        Network,
+        Part,
+        PlcProject,
+        Variable,
+    )
+    from agents.plc.tia.kg import build_knowledge_graph
+    from agents.plc.tia.package import classify_block
+    from agents.plc.tia.scl import convert_project_to_scl
+
+    locked = Block(
+        name="FB_Locked",
+        block_type=BlockType.FB,
+        programming_language="LAD",
+        interface=[
+            Variable(name="Enable", section=InterfaceSection.INPUT, data_type="Bool"),
+            Variable(name="Done", section=InterfaceSection.OUTPUT, data_type="Bool"),
+            Variable(name="PT", section=InterfaceSection.INPUT, data_type="Time"),
+            Variable(name="PT", section=InterfaceSection.STATIC, data_type="Time"),
+        ],
+        networks=[],
+        attributes={},  # no KnowHow tag — still interface-only by body absence
+    )
+    assert locked.is_interface_only() is True
+    assert locked.is_protected() is False
+
+    caller = Block(
+        name="OB1Main",
+        block_type=BlockType.OB,
+        programming_language="LAD",
+        networks=[
+            Network(
+                id="1",
+                title="call locked",
+                parts={
+                    "1": Part(
+                        name="Call",
+                        part_type="Call",
+                        uuid="1",
+                        template_values={
+                            "Call": "FB_Locked",
+                            "BlockType": "FB",
+                            "InstanceDB": "FB_Locked_DB",
+                            "__sec__Enable": "Input",
+                            "__type__Enable": "Bool",
+                            "__sec__Done": "Output",
+                            "__type__Done": "Bool",
+                            "__sec__ExtraIn": "Input",
+                            "__type__ExtraIn": "Int",
+                        },
+                    )
+                },
+            )
+        ],
+    )
+    project = PlcProject(name="IfaceOnlyDemo")
+    project.add_block(locked)
+    project.add_block(caller)
+
+    scl = convert_project_to_scl(project)
+    assert "FB_Locked" not in scl
+    assert classify_block(locked, None)["status"] == "interface_only"
+
+    kg = build_knowledge_graph(project)
+    node = kg.nodes["Block::FB_Locked"]
+    assert node.props.get("interface_only") is True
+    assert node.props.get("body_available") is False
+
+    # Homonym Input/Static PT both present
+    assert "Variable::FB_Locked::Input::PT" in kg.nodes
+    assert "Variable::FB_Locked::Static::PT" in kg.nodes
+    assert "Variable::FB_Locked::Input::Enable" in kg.nodes
+
+    assert "OB1Main" in kg.callers_of("FB_Locked")
+    assert any(
+        e.type == "CALLS" and e.source == "Block::OB1Main" and e.target == "Block::FB_Locked"
+        for e in kg.edges
+    )
+    # Call-site pin not already on FB interface → inferred HAS_INTERFACE
+    assert "Variable::FB_Locked::Input::ExtraIn" in kg.nodes
+    assert any(v.name == "ExtraIn" for v in locked.interface)

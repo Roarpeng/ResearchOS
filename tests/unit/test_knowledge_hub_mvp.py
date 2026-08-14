@@ -101,6 +101,34 @@ def test_knowledge_ingest_stats_search(client: TestClient) -> None:
     assert search.status_code == 200, search.text
     assert "retrieved" in (search.json()["data"].get("message") or "")
 
+    chunks = client.get(f"/api/v1/knowledge/spaces/{kb_id}/chunks", params={"limit": 20})
+    assert chunks.status_code == 200, chunks.text
+    chunk_body = chunks.json()["data"]
+    assert chunk_body["count"] >= 1
+    first = chunk_body["chunks"][0]
+    assert first.get("text")
+    assert "has_vector" in first
+
+    by_doc = client.get(
+        f"/api/v1/knowledge/spaces/{kb_id}/chunks",
+        params={"doc_id": body["id"], "limit": 20},
+    )
+    assert by_doc.status_code == 200
+    assert by_doc.json()["data"]["count"] >= 1
+
+    vector_search = client.post(
+        "/api/v1/knowledge/search",
+        json={
+            "query": "torque RS-200",
+            "knowledge_space_ids": [kb_id],
+            "top_k": 5,
+            "mode": "vector",
+        },
+    )
+    assert vector_search.status_code == 200, vector_search.text
+    vmsg = vector_search.json()["data"].get("message") or ""
+    assert "vector" in vmsg.lower() or "retrieved" in vmsg
+
     rebuild = client.post(f"/api/v1/knowledge/spaces/{kb_id}/rebuild")
     assert rebuild.status_code == 200
     assert rebuild.json()["data"]["ok"] is True

@@ -52,7 +52,7 @@ public static class Program
     /// One-shot CLI for Python importer / CI (avoids holding an MCP stdio session).
     /// Examples:
     ///   TiaOpenness.Server.exe --cli status
-    ///   TiaOpenness.Server.exe --cli export-project --project C:\p\x.ap19 --export-dir C:\out
+    ///   TiaOpenness.Server.exe --cli export-project --project C:\p\x.ap19 --export-dir C:\out [--skip-compile]
     ///   TiaOpenness.Server.exe --cli import-block --project C:\p\x.ap19 --xml C:\b.xml
     /// </summary>
     private static int RunCli(string[] args)
@@ -60,7 +60,7 @@ public static class Program
         if (args.Length == 0)
         {
             Console.Error.WriteLine(
-                "Usage: --cli status | export-project --project <ap19> --export-dir <dir> [--plc name] [--version V19] | " +
+                "Usage: --cli status | export-project --project <ap19> --export-dir <dir> [--plc name] [--version V19] [--skip-compile] | " +
                 "import-block --project <ap19> --xml <file> [--plc name] [--no-overwrite] [--version V19] | " +
                 "archive-project --project <ap19> --out-dir <dir> [--name file.zap19] [--version V19]");
             return 2;
@@ -102,17 +102,22 @@ public static class Program
                 }
 
                 opts.TryGetValue("plc", out var plc);
+                var skipCompile = IsTruthyFlag(opts, "skip-compile")
+                    || IsTruthyEnv("TIA_EXPORT_SKIP_COMPILE");
+                var openSw = System.Diagnostics.Stopwatch.StartNew();
                 var opened = projects.OpenProject(project, plc, withoutUi: true);
+                openSw.Stop();
                 if (!opened.Ok)
                 {
                     Console.WriteLine(JsonSerializer.Serialize(opened, JsonDefaults.Options));
                     return 3;
                 }
 
-                var exported = blocks.ExportAllBlocks(exportDir);
+                var exported = blocks.ExportAllBlocks(exportDir, skipCompile);
                 var payload = new
                 {
                     ok = exported.Ok,
+                    openMs = openSw.ElapsedMilliseconds,
                     project = opened,
                     export = exported,
                 };
@@ -227,6 +232,27 @@ public static class Program
             map[key] = value;
         }
         return map;
+    }
+
+    private static bool IsTruthyFlag(Dictionary<string, string> opts, string key)
+    {
+        if (!opts.TryGetValue(key, out var raw) || string.IsNullOrWhiteSpace(raw)) return false;
+        return IsTruthy(raw);
+    }
+
+    private static bool IsTruthyEnv(string name)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        return !string.IsNullOrWhiteSpace(raw) && IsTruthy(raw);
+    }
+
+    private static bool IsTruthy(string raw)
+    {
+        var v = raw.Trim();
+        return v.Equals("1", StringComparison.OrdinalIgnoreCase)
+            || v.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || v.Equals("yes", StringComparison.OrdinalIgnoreCase)
+            || v.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
 }
 

@@ -254,19 +254,26 @@ def write_import_bundle(
 ) -> list[Path]:
     """Stage XML + metadata for Openness import.
 
-    MVP: copy XML as-is; write ``comments.json`` for ``set_block_comment``
-    instead of fragile SimaticML Comment/Title patching. Always writes
-    ``changeset.json``. Returns absolute paths of staged XML files.
+    ``source_xml_paths`` is a **lookup pool** to resolve block→XML for comments.
+    Only matched / explicitly ``stage_xml_import`` files are copied (not the whole pool),
+    unless the changeset has no comment/stage ops (legacy: stage the pool as-is).
+    Applies header Comment patches into SimaticML when possible.
     """
+    from agents.plc.tia.optimize import write_optimize_plan
+    from agents.plc.tia.xml_patch import (
+        match_xml_for_block,
+        patch_block_header_comment,
+        read_block_name_from_xml,
+    )
+
     bundle = Path(dir).expanduser().resolve()
     bundle.mkdir(parents=True, exist_ok=True)
 
     comments: dict[str, str] = {}
+    patch_by_xml: dict[str, str] = {}
     staged: list[Path] = []
     wanted: list[Path] = []
-
-    for p in source_xml_paths or []:
-        wanted.append(Path(p).expanduser())
+    lookup = [Path(p).expanduser() for p in (source_xml_paths or [])]
 
     for op in changeset.ops:
         if op.kind == "set_block_comment":
@@ -277,6 +284,29 @@ def write_import_bundle(
             xp = op.payload.get("xml_path")
             if xp:
                 wanted.append(Path(str(xp)).expanduser())
+            patch = op.payload.get("patch_comment")
+            name = str(op.payload.get("block_name") or "")
+            if patch and xp:
+                patch_by_xml[str(Path(str(xp)).expanduser().resolve())] = str(patch)
+            if patch and name:
+                comments.setdefault(name, str(patch))
+
+    pool = list(wanted) + lookup
+    for name, comment in comments.items():
+        matched = match_xml_for_block(name, pool)
+        if matched is None:
+            continue
+        key = str(matched.resolve())
+        patch_by_xml.setdefault(key, comment)
+        if not any(
+            Path(w).is_file() and Path(w).resolve() == matched.resolve() for w in wanted
+        ):
+            wanted.append(matched)
+
+    # Legacy: no comment/stage ops → stage entire provided pool
+    has_xml_ops = any(o.kind in {"set_block_comment", "stage_xml_import"} for o in changeset.ops)
+    if not wanted and not has_xml_ops and lookup:
+        wanted = list(lookup)
 
     seen: set[str] = set()
     for src in wanted:
@@ -287,7 +317,18 @@ def write_import_bundle(
             continue
         seen.add(key)
         dest = bundle / src.name
-        shutil.copy2(src, dest)
+        comment = patch_by_xml.get(key)
+        if not comment:
+            # try by parsed block name
+            try:
+                bname = read_block_name_from_xml(src)
+            except Exception:  # noqa: BLE001
+                bname = src.stem
+            comment = comments.get(bname) or comments.get(src.stem)
+        if comment:
+            patch_block_header_comment(src, comment, dest=dest)
+        else:
+            shutil.copy2(src, dest)
         staged.append(dest)
 
     (bundle / "changeset.json").write_text(
@@ -303,4 +344,5 @@ def write_import_bundle(
         json.dumps([str(p) for p in staged], ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    write_optimize_plan(bundle, changeset)
     return staged

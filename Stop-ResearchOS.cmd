@@ -3,16 +3,16 @@ setlocal
 cd /d "%~dp0"
 title ResearchOS Stop
 echo.
-echo  正在停止 ResearchOS…
+echo  Stopping ResearchOS...
 echo.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Stop-ResearchOS.ps1" %*
 set ERR=%ERRORLEVEL%
 echo.
 if %ERR% neq 0 (
-  echo 停止过程有错误，退出码 %ERR%。
+  echo Stop reported errors, exit code %ERR%.
   pause
   exit /b %ERR%
 )
-echo 按任意键关闭…
+echo Press any key to close...
 pause >nul
 endlocal

@@ -20,6 +20,7 @@ from gateway.app.schemas.plc import (
     PlcJobCreatePath,
     PlcJobDetail,
     PlcJobSummary,
+    PlcOptimizeRequest,
     PlcProposeChangeRequest,
     PlcWritebackRequest,
 )
@@ -292,7 +293,41 @@ async def propose_plc_changes(
             detail={"code": "PLC_JOB_NOT_READY", "message": "Job not ready"},
         )
     cs = plc.propose_job_changeset(job, body.message, body.block_name)
-    return ApiResponse(ok=True, data=cs, request_id=request_id)
+    payload = dict(cs) if isinstance(cs, dict) else {}
+    payload["optimize_plan"] = job.get("optimize_plan") or ""
+    return ApiResponse(ok=True, data=payload, request_id=request_id)
+
+
+@router.post("/jobs/{job_id}/optimize", response_model=ApiResponse[dict])
+async def optimize_plc_job(
+    job_id: str,
+    body: PlcOptimizeRequest,
+    principal: PrincipalDep,
+    request_id: RequestIdDep,
+) -> ApiResponse[dict]:
+    """Evidence-gated optimize proposal → changeset (HITL before writeback/zap)."""
+    _ = principal
+    job = plc.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "PLC_JOB_NOT_FOUND", "message": "PLC job not found"},
+        )
+    if job.get("status") != "ready":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "PLC_JOB_NOT_READY", "message": "Job not ready"},
+        )
+    cs = plc.propose_job_optimize(job, block_name=body.block_name, message=body.message)
+    return ApiResponse(
+        ok=True,
+        data={
+            "changeset": cs,
+            "optimize_plan": job.get("optimize_plan") or "",
+            "ops": len(cs.get("ops") or []) if isinstance(cs, dict) else 0,
+        },
+        request_id=request_id,
+    )
 
 
 @router.post("/jobs/{job_id}/writeback", response_model=ApiResponse[dict])

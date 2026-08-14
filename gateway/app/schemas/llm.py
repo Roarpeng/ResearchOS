@@ -1,4 +1,4 @@
-"""LLM settings schemas — five fixed slots (3 chat + embed + rerank)."""
+"""LLM settings schemas — up to 3 slots per kind (chat / embed / rerank)."""
 
 from __future__ import annotations
 
@@ -28,6 +28,8 @@ class LlmSlotStatus(BaseModel):
     base_url: str = ""
     default_model: str = ""
     default_base_url: str = ""
+    primary: bool = False
+    removable: bool = False
 
 
 class LlmSlotUpdate(BaseModel):
@@ -44,9 +46,9 @@ class LlmAgentBinding(BaseModel):
 
     research: str = "chat_a"
     planner: str = "chat_a"
-    researcher: str = "chat_b"
-    writer: str = "chat_c"
-    plc: str = "chat_b"
+    researcher: str = "chat_a"
+    writer: str = "chat_a"
+    plc: str = "chat_a"
     embed: str = "embed"
     rerank: str = "rerank"
 
@@ -68,6 +70,32 @@ class LlmSettingsUpdate(BaseModel):
         default=None,
         description="Map of slot id → {api_key?, model?, base_url?}",
     )
+    add_slot: SlotKind | None = Field(
+        default=None,
+        description="Enable the next spare slot of this kind (chat/embed/rerank)",
+    )
+    remove_slot: str | None = Field(
+        default=None,
+        description="Disable a non-primary slot",
+    )
     # legacy aliases
     providers: dict[str, LlmSlotUpdate] | None = None
     provider_keys: dict[str, str] | None = None
+
+
+class LlmSlotTestRequest(BaseModel):
+    slot_id: str = Field(..., description="chat_a|chat_b|chat_c|embed|embed_b|embed_c|rerank|rerank_b|rerank_c")
+    api_key: str | None = Field(default=None, description="Optional draft key (else saved/env)")
+    model: str | None = None
+    base_url: str | None = None
+
+
+class LlmSlotTestResult(BaseModel):
+    ok: bool
+    slot_id: str
+    kind: str
+    model: str = ""
+    base_url: str = ""
+    latency_ms: int = 0
+    message: str = ""
+    detail: str | None = None

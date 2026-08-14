@@ -15,7 +15,6 @@ from uuid import uuid4
 
 from gateway.app.config import Settings, get_settings
 from gateway.app.services import store as mem
-from agents.plc.tia.xml_understand import enrich_kg_calls_from_xml_files
 
 logger = logging.getLogger("researchos.gateway.plc")
 
@@ -221,6 +220,8 @@ def refresh_logic_graph(job: dict[str, Any]) -> dict[str, Any]:
             import os
 
             use_llm = bool(os.getenv("LITELLM_BASE_URL"))
+            from agents.plc.tia.xml_understand import enrich_kg_calls_from_xml_files
+
             kg = enrich_kg_calls_from_xml_files(
                 kg,
                 xml_paths=xmls[:200],
@@ -238,6 +239,7 @@ def _block_list(project: Any) -> list[dict[str, Any]]:
         interface = getattr(block, "interface", None) or []
         inputs: list[str] = []
         outputs: list[str] = []
+        inouts: list[str] = []
         statics: list[str] = []
         members: list[str] = []
         for v in interface:
@@ -254,6 +256,8 @@ def _block_list(project: Any) -> list[dict[str, Any]]:
                 inputs.append(label)
             elif sec == "Output":
                 outputs.append(label)
+            elif sec == "InOut":
+                inouts.append(label)
             elif sec == "Static":
                 statics.append(f"{label} : {dtype}" if dtype else label)
         attrs = getattr(block, "attributes", None) or {}
@@ -263,6 +267,9 @@ def _block_list(project: Any) -> list[dict[str, Any]]:
             or str(attrs.get("OfBlock") or "").strip()
             or None
         )
+        is_protected = bool(getattr(block, "is_protected", lambda: False)())
+        is_iface_only = bool(getattr(block, "is_interface_only", lambda: False)())
+        body_ok = bool(getattr(block, "has_program_body", lambda: True)())
         blocks.append(
             {
                 "name": name,
@@ -273,9 +280,13 @@ def _block_list(project: Any) -> list[dict[str, Any]]:
                 "comment": (getattr(block, "header_comment", None) or "")[:240],
                 "inputs": inputs,
                 "outputs": outputs,
+                "inouts": inouts,
                 "statics": statics,
                 "members": members,
                 "instance_of": instance_of,
+                "protected": is_protected,
+                "interface_only": is_iface_only,
+                "body_available": body_ok,
             }
         )
     blocks.sort(key=lambda b: (b.get("type") or "", b.get("name") or ""))
@@ -315,8 +326,10 @@ def create_job_record(
         "openness_export_dir": None,
         "changeset": None,
         "writeback": None,
+        "optimize_plan": "",
         "source_xmls": [],
         "progress": [],
+        "timings": {},
         "error": None,
         "created_at": now,
         "updated_at": now,
@@ -356,17 +369,57 @@ def _append_progress(
     *,
     detail: str = "",
     status: str = "done",
-) -> None:
-    job.setdefault("progress", []).append(
-        {
-            "step": step,
-            "title": title,
-            "detail": detail,
-            "status": status,
-            "at": _now().isoformat(),
-        }
-    )
+    duration_ms: int | None = None,
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "step": step,
+        "title": title,
+        "detail": detail,
+        "status": status,
+        "at": _now().isoformat(),
+    }
+    if duration_ms is not None:
+        entry["duration_ms"] = int(duration_ms)
+    job.setdefault("progress", []).append(entry)
     job["updated_at"] = _now()
+    return entry
+
+
+def _start_progress(
+    job: dict[str, Any],
+    step: str,
+    title: str,
+    *,
+    detail: str = "",
+) -> dict[str, Any]:
+    import time
+
+    entry = _append_progress(job, step, title, detail=detail, status="running")
+    entry["_t0"] = time.monotonic()
+    return entry
+
+
+def _finish_progress(
+    job: dict[str, Any],
+    *,
+    detail: str | None = None,
+    status: str = "done",
+) -> int:
+    import time
+
+    progress = job.get("progress") or []
+    if not progress:
+        return 0
+    entry = progress[-1]
+    t0 = entry.pop("_t0", None)
+    duration_ms = int((time.monotonic() - t0) * 1000) if isinstance(t0, (int, float)) else 0
+    entry["duration_ms"] = duration_ms
+    entry["status"] = status
+    entry["at"] = _now().isoformat()
+    if detail is not None:
+        entry["detail"] = detail
+    job["updated_at"] = _now()
+    return duration_ms
 
 
 def run_ingest_job(
@@ -378,19 +431,24 @@ def run_ingest_job(
     result_root: str | None = None,
 ) -> dict[str, Any]:
     """Synchronously run plc.tia.ingest pipeline into the job record."""
+    import time
+
+    from agents.plc.tia.timings import timings_summary
+
     job = get_job(job_id)
     if job is None:
         raise KeyError(job_id)
 
     job["status"] = "running"
     job["progress"] = []
+    job["timings"] = {}
     job["updated_at"] = _now()
-    _append_progress(
+    t_all = time.monotonic()
+    _start_progress(
         job,
         "detect",
         "检测工程输入",
         detail=str(job.get("source_path") or ""),
-        status="running",
     )
 
     settings = get_settings()
@@ -398,96 +456,173 @@ def run_ingest_job(
     work.mkdir(parents=True, exist_ok=True)
 
     try:
-        from agents.plc.tia import analyze_plc_project
+        from agents.plc.tia.importer import resolve_project_input
         from agents.plc.tia.package import write_result_package
+        from agents.plc.tia.pipeline import analyze_tia_exports, interpretation_report
+        from agents.plc.tia.timings import merge_timings
 
-        job["progress"][-1]["status"] = "done"
-        _append_progress(
+        _finish_progress(job)
+        _start_progress(
             job,
             "resolve",
             "解析输入（.zap / .apxx / XML）",
             detail="必要时调用 TIA Openness 导出 SimaticML",
-            status="running",
         )
-        result = analyze_plc_project(
+        t_resolve = time.monotonic()
+        imported = resolve_project_input(
             job["source_path"],
-            project_name=job.get("project_name") or "",
-            result_dir=str(work / "package"),
-            plc_name=plc_name,
             tia_version=tia_version,
-            publish_graph=publish_graph,
+            plc_name=plc_name,
+            auto_export=True,
         )
-        project = result["project"]
-        kg = result["knowledge_graph"].to_json()
-        imp = result.get("import") or {}
-        job["progress"][-1]["status"] = "done"
-        job["progress"][-1]["detail"] = (
-            f"source_kind={imp.get('source_kind') or 'export'}; "
-            f"export_dir={imp.get('export_dir') or ''}"
+        resolve_wall_ms = int((time.monotonic() - t_resolve) * 1000)
+        pipeline_timings: dict[str, int] = merge_timings(
+            {"resolve_wall_ms": resolve_wall_ms},
+            imported.timings,
+        )
+        resolve_detail = (
+            f"source_kind={imported.source_kind}; export_dir={imported.export_dir}"
         )[:240]
-        if imp.get("project_path"):
-            job["project_path"] = str(imp["project_path"])
+        fine = {
+            k: pipeline_timings[k]
+            for k in (
+                "unzip_ms",
+                "stage_copy_ms",
+                "openness_cli_ms",
+                "openness_open_ms",
+                "openness_compile_ms",
+                "openness_list_ms",
+                "openness_blocks_export_ms",
+                "openness_export_ms",
+                "openness_skip_compile_ms",
+                "openness_compile_retry_ms",
+                "openness_cache_hit_ms",
+                "openness_cache_hit",
+                "resolve_wall_ms",
+            )
+            if k in pipeline_timings
+        }
+        if fine:
+            resolve_detail = (resolve_detail + " | " + timings_summary(fine)).strip(" |")[:400]
+        _finish_progress(job, detail=resolve_detail)
+
+        if imported.project_path:
+            job["project_path"] = str(imported.project_path)
         elif Path(str(job["source_path"])).suffix.lower() in {
             ".ap17", ".ap18", ".ap19", ".ap20", ".apxx",
         }:
             job["project_path"] = str(Path(str(job["source_path"])).resolve())
-        if imp.get("export_dir"):
-            job["openness_export_dir"] = str(imp["export_dir"])
+        job["openness_export_dir"] = str(imported.export_dir)
 
-        _append_progress(job, "ir", "构建 PLC-IR / 程序块", status="running")
+        name = job.get("project_name") or (
+            imported.project_path.stem
+            if imported.project_path
+            else imported.export_dir.name
+        )
+        _start_progress(job, "ir", "构建 PLC-IR / 知识图谱 / SCL")
+        result = analyze_tia_exports(
+            str(imported.export_dir),
+            project_name=name,
+            publish_graph=publish_graph,
+        )
+        pipeline_timings = merge_timings(pipeline_timings, result.get("timings"))
+        project = result["project"]
+        for note in imported.notes or []:
+            project.extraction_notes.append(note)
+        if imported.tia_version:
+            project.tia_version = imported.tia_version
+        if imported.project_path:
+            project.source_path = str(imported.project_path)
+
+        t_pkg = time.monotonic()
+        write_result_package(
+            str(work / "package"),
+            project=project,
+            knowledge_graph=result["knowledge_graph"],
+            scl_sources=result.get("scl_sources") or {},
+            report_md=interpretation_report(project, result["knowledge_graph"]),
+            extra_meta={
+                "source_kind": imported.source_kind,
+                "export_dir": str(imported.export_dir),
+                "tia_version": imported.tia_version,
+            },
+        )
+        pipeline_timings["package_ms"] = int((time.monotonic() - t_pkg) * 1000)
+
+        kg = result["knowledge_graph"].to_json()
         job["project_name"] = project.name
         job["summary"] = project.summary()
         job["extraction_notes"] = list(project.extraction_notes or [])
         job["knowledge_graph"] = kg
         job["scl_sources"] = result.get("scl_sources") or {}
-        if result.get("folded_logic"):
-            job["folded_logic"] = result["folded_logic"]
-        job["report"] = result.get("report") or ""
+        job["folded_logic"] = result.get("folded_logic") or {}
+        job["report"] = interpretation_report(project, result["knowledge_graph"])
         job["graph_publish"] = result.get("graph_publish")
         job["blocks"] = _block_list(project)
-        job["export_dir"] = result.get("result_dir") or str(work / "package")
-        job["export_ready"] = bool(job["export_dir"] and Path(job["export_dir"]).is_dir())
+        job["export_dir"] = str(work / "package")
+        job["export_ready"] = True
+        ir_bits = {
+            k: pipeline_timings[k]
+            for k in (
+                "extract_ms",
+                "fold_attach_ms",
+                "kg_ms",
+                "scl_ms",
+                "fold_serialize_ms",
+                "package_ms",
+                "neo4j_ms",
+                "report_ms",
+            )
+            if k in pipeline_timings
+        }
+        _finish_progress(
+            job,
+            detail=(
+                f"块数={len(job['blocks'])}"
+                + (f" | {timings_summary(ir_bits)}" if ir_bits else "")
+            )[:400],
+        )
+
         # Prefer Openness export XMLs for write-back staging
         xml_root = job.get("openness_export_dir") or job["source_path"]
         job["source_xmls"] = _collect_source_xmls(str(xml_root))
         # XML CallInfo + optional LLM (evidence-gated) — never title/SCL heuristics
         import os
 
+        from agents.plc.tia.xml_understand import enrich_kg_calls_from_xml_files
+
+        _start_progress(
+            job,
+            "enrich",
+            "XML CallInfo 补全 CALLS",
+            detail=f"xmls={len(job['source_xmls'] or [])}",
+        )
+        t_enrich = time.monotonic()
         kg = enrich_kg_calls_from_xml_files(
             kg,
             xml_paths=job["source_xmls"] or [],
             known_blocks={str(b.get("name")) for b in job["blocks"] if b.get("name")},
             use_llm=bool(os.getenv("LITELLM_BASE_URL")),
         )
+        enrich_ms = int((time.monotonic() - t_enrich) * 1000)
+        pipeline_timings["enrich_ms"] = enrich_ms
         job["knowledge_graph"] = kg
-        job["logic_graph"] = _logic_graph_from_kg(kg)
-        job["progress"][-1]["status"] = "done"
-        job["progress"][-1]["detail"] = f"块数={len(job['blocks'])}"
+        _finish_progress(job, detail=f"edges={len(kg.get('edges') or [])}; enrich_ms={enrich_ms}")
 
-        _append_progress(
+        _start_progress(job, "graph", "生成逻辑图")
+        t_logic = time.monotonic()
+        job["logic_graph"] = _logic_graph_from_kg(kg)
+        logic_ms = int((time.monotonic() - t_logic) * 1000)
+        pipeline_timings["logic_graph_ms"] = logic_ms
+        _finish_progress(
             job,
-            "graph",
-            "生成逻辑图与知识图谱",
             detail=(
                 f"KG nodes={len(kg.get('nodes') or [])}, "
                 f"edges={len(kg.get('edges') or [])}; "
-                f"logic edges={len((job.get('logic_graph') or {}).get('edges') or [])}"
-            ),
-            status="done",
+                f"logic edges={len((job.get('logic_graph') or {}).get('edges') or [])}; "
+                f"logic_graph_ms={logic_ms}"
+            )[:400],
         )
-        # Ensure package exists even if analyze skipped empty result_dir edge cases
-        if not job["export_ready"]:
-            write_result_package(
-                str(work / "package"),
-                project=project,
-                knowledge_graph=result["knowledge_graph"],
-                scl_sources=job["scl_sources"],
-                report_md=job["report"],
-            )
-            job["export_dir"] = str(work / "package")
-            job["export_ready"] = True
-            if not job["source_xmls"]:
-                job["source_xmls"] = _collect_source_xmls(str(xml_root))
         # Empty IR after ingesting a raw .zap/.apxx tree is a hard failure, not "ready".
         if not job["blocks"]:
             from agents.plc.tia.importer import (
@@ -518,14 +653,36 @@ def run_ingest_job(
                 "未识别到任何 PLC 程序块或标签表，无法生成逻辑图/知识图谱。"
                 + (f" 备注: {notes}" if notes else " 请上传 Openness 导出的 Blocks XML 或含 Blocks 的 ZIP。")
             )
-        _append_progress(job, "ready", "解析完成，可对话确认与写回", status="done")
+        total_ms = int((time.monotonic() - t_all) * 1000)
+        pipeline_timings["total_ms"] = total_ms
+        job["timings"] = pipeline_timings
+        _append_progress(
+            job,
+            "ready",
+            "解析完成，可对话确认与写回",
+            status="done",
+            duration_ms=total_ms,
+            detail=timings_summary(pipeline_timings)[:400],
+        )
+        logger.info(
+            "PLC ingest timings job_id=%s %s",
+            job_id,
+            timings_summary(pipeline_timings),
+        )
         job["status"] = "ready"
         job["error"] = None
     except Exception as exc:  # noqa: BLE001 — surface to API
         logger.exception("PLC ingest failed job_id=%s", job_id)
         job["status"] = "failed"
         job["error"] = str(exc)
+        # Close any running progress step
+        if (job.get("progress") or []) and job["progress"][-1].get("status") == "running":
+            _finish_progress(job, detail=str(exc)[:240], status="failed")
         _append_progress(job, "failed", "解析失败", detail=str(exc)[:400], status="failed")
+        job["timings"] = {
+            **dict(job.get("timings") or {}),
+            "total_ms": int((time.monotonic() - t_all) * 1000),
+        }
     job["updated_at"] = _now()
     return job
 
@@ -546,12 +703,40 @@ def propose_job_changeset(
 ) -> dict[str, Any]:
     from agents.plc.tia.changeset import propose_changeset_from_message
 
+    text = (message or "").strip()
+    # Route optimization intents to evidence-gated optimizer (not bare「反写」alone)
+    if any(k in text for k in ("优化", "optimize", "死块", "dead block")) or (
+        ("反写" in text or "writeback" in text.lower())
+        and any(k in text for k in ("优化", "逻辑", "工程", "项目"))
+    ):
+        return propose_job_optimize(job, block_name=block_name, message=text)
+
     cs = propose_changeset_from_message(
         message,
         block_name=block_name or "",
         job_context={"project_name": job.get("project_name"), "blocks": job.get("blocks")},
     )
     job["changeset"] = cs.to_dict()
+    job["updated_at"] = _now()
+    return job["changeset"]
+
+
+def propose_job_optimize(
+    job: dict[str, Any],
+    *,
+    block_name: str | None = None,
+    message: str = "",
+) -> dict[str, Any]:
+    """Propose safe optimization changeset (analyst → annotate/comment/stage XML)."""
+    from agents.plc.tia.optimize import propose_optimization_changeset
+
+    _ = message
+    cs = propose_optimization_changeset(job, focus_block=block_name or None)
+    job["changeset"] = cs.to_dict()
+    job["optimize_plan"] = next(
+        (n[len("optimize_plan:") :] for n in cs.notes if str(n).startswith("optimize_plan:")),
+        "",
+    )
     job["updated_at"] = _now()
     return job["changeset"]
 
@@ -573,13 +758,15 @@ def confirm_job_writeback(
 
     settings = get_settings()
     resolved_project = (project_path or job.get("project_path") or "").strip()
-    if not resolved_project:
+    target: Path | None = None
+    if resolved_project:
+        target = resolve_allowed_path(resolved_project, settings)
+        if target.suffix.lower() not in {".ap17", ".ap18", ".ap19", ".ap20", ".apxx"}:
+            raise ValueError(f"Write-back target must be a TIA .apxx project, got {target.suffix}")
+    elif execute_openness_import:
         raise ValueError(
             "project_path required: pass in request or ingest from .zap/.apxx so job.project_path is set"
         )
-    target = resolve_allowed_path(resolved_project, settings)
-    if target.suffix.lower() not in {".ap17", ".ap18", ".ap19", ".ap20", ".apxx"}:
-        raise ValueError(f"Write-back target must be a TIA .apxx project, got {target.suffix}")
 
     raw_cs = job.get("changeset")
     if not raw_cs:
@@ -587,7 +774,7 @@ def confirm_job_writeback(
     cs = PlcChangeSet.from_dict(raw_cs)
 
     result: dict[str, Any] = {
-        "project_path": str(target),
+        "project_path": str(target) if target else None,
         "changeset_id": cs.id,
         "kg_applied": False,
         "openness": None,
@@ -611,16 +798,25 @@ def confirm_job_writeback(
         result["kg_applied"] = True
 
     export_root = job.get("export_dir") or tempfile.mkdtemp(prefix="ros_plc_wb_")
-    sources = list(xml_paths or []) or list(job.get("source_xmls") or [])
-    # Also pick staged xml from changeset ops
-    for op in cs.ops:
-        if op.kind == "stage_xml_import" and op.payload.get("xml_path"):
-            sources.append(str(op.payload["xml_path"]))
+    staged_ops = [op for op in cs.ops if op.kind == "stage_xml_import"]
+    comment_ops = [op for op in cs.ops if op.kind == "set_block_comment"]
+    if xml_paths:
+        sources = list(xml_paths)
+    elif staged_ops or comment_ops:
+        # Lookup pool for comment→XML resolve; bundle only stages matched files
+        sources = list(job.get("source_xmls") or [])
+        for op in staged_ops:
+            if op.payload.get("xml_path"):
+                sources.append(str(op.payload["xml_path"]))
+    else:
+        sources = list(job.get("source_xmls") or [])
 
     bundle = prepare_writeback(export_root, cs, sources)
     result["bundle_dir"] = str(bundle)
 
     if execute_openness_import:
+        if target is None:
+            raise ValueError("project_path required for Openness import")
         if not list(bundle.glob("*.xml")):
             raise ValueError(
                 "No XML staged for Openness import. Provide xml_paths or ingest from .xml first."
@@ -717,6 +913,326 @@ def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path) -> None:
     zf.extractall(dest)
 
 
+def _strip_at_hint(message: str) -> str:
+    """Extract `@…` mention body without trailing Chinese question phrases."""
+    import re
+
+    msg = message or ""
+    at = re.search(r"@(.+)", msg)
+    if not at:
+        return ""
+    remainder = at.group(1).strip()
+    for sep in (
+        " 这个",
+        " 请描述",
+        " 描述",
+        " 有什么",
+        " 做什么",
+        " 作用",
+        "？",
+        "?",
+        "\n",
+        "。",
+        "，",
+    ):
+        idx = remainder.find(sep)
+        if idx > 0:
+            remainder = remainder[:idx].strip()
+            break
+    return remainder.strip().strip("@").strip()
+
+
+def _normalize_fb_type_name(raw: str) -> str:
+    """Strip quotes from SimaticML data_type like `\"FB5009_AnalOut\"`."""
+    s = (raw or "").strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in {'"', "'"}:
+        s = s[1:-1].strip()
+    return s
+
+
+def _lookup_instance_entity(job: dict[str, Any], query: str) -> dict[str, Any] | None:
+    """Resolve multi-instance / external DB name from KG (not job.blocks).
+
+    Returns evidence-only dict:
+      name, parents, type_block, uses_callers, instance_of, variables, kg_block, evidence[]
+    """
+    q = (query or "").strip().strip("@").strip()
+    if not q:
+        return None
+    kg = job.get("knowledge_graph") or {}
+    nodes = list(kg.get("nodes") or [])
+    edges = list(kg.get("edges") or [])
+    ql = q.lower()
+
+    variables: list[dict[str, Any]] = []
+    for n in nodes:
+        if n.get("type") != "Variable":
+            continue
+        props = n.get("props") if isinstance(n.get("props"), dict) else {}
+        vname = str(props.get("name") or "")
+        if vname.lower() != ql:
+            continue
+        # id: Variable::Parent::Name  or  Variable::Parent::Section::Name
+        parts = str(n.get("id") or "").split("::")
+        parent = parts[1] if len(parts) >= 3 else ""
+        variables.append(
+            {
+                "id": n.get("id"),
+                "name": vname,
+                "parent": parent,
+                "section": props.get("section"),
+                "data_type": props.get("data_type"),
+                "comment": props.get("comment") or "",
+            }
+        )
+
+    kg_block = None
+    for n in nodes:
+        if n.get("type") != "Block":
+            continue
+        props = n.get("props") if isinstance(n.get("props"), dict) else {}
+        bname = str(props.get("name") or str(n.get("id") or "").split("::")[-1])
+        if bname.lower() != ql:
+            continue
+        kg_block = {"id": n.get("id"), "props": props}
+        break
+
+    if not variables and kg_block is None:
+        return None
+
+    bid = f"Block::{q}"
+    # Prefer exact casing from KG
+    if kg_block:
+        q = str((kg_block.get("props") or {}).get("name") or q)
+        bid = str(kg_block.get("id") or bid)
+    elif variables:
+        q = str(variables[0].get("name") or q)
+        # keep query casing from variable name
+        for v in variables:
+            if str(v.get("name")):
+                q = str(v["name"])
+                break
+
+    uses_callers: list[dict[str, Any]] = []
+    instance_of: list[str] = []
+    evidence: list[str] = []
+    for e in edges:
+        et = str(e.get("type") or "")
+        src = str(e.get("source") or "")
+        tgt = str(e.get("target") or "")
+        props = e.get("props") if isinstance(e.get("props"), dict) else {}
+        if et == "USES" and (tgt == bid or tgt.endswith(f"::{q}")):
+            caller = src.split("::", 1)[-1] if "::" in src else src
+            uses_callers.append(
+                {
+                    "caller": caller,
+                    "evidence": props.get("evidence") or "",
+                    "network": props.get("network") or "",
+                }
+            )
+            ev = props.get("evidence") or "USES"
+            net = props.get("network") or ""
+            evidence.append(f"USES {caller}→{q}" + (f" ({ev})" if ev else "") + (f" @ {net}" if net else ""))
+        if et == "INSTANCE_OF" and (src == bid or src.endswith(f"::{q}")):
+            typ = tgt.split("::", 1)[-1] if "::" in tgt else tgt
+            if typ and typ not in instance_of:
+                instance_of.append(typ)
+                evidence.append(f"INSTANCE_OF {q}→{typ}")
+
+    type_block = instance_of[0] if instance_of else ""
+    if not type_block:
+        for v in variables:
+            dt = _normalize_fb_type_name(str(v.get("data_type") or ""))
+            if dt.upper().startswith("FB") or dt.upper().startswith("FC"):
+                type_block = dt
+                evidence.append(
+                    f"Variable {v.get('parent')}::{q} data_type={v.get('data_type')}"
+                )
+                break
+
+    parents = sorted({str(v.get("parent") or "") for v in variables if v.get("parent")})
+    if not parents:
+        parents = sorted({c["caller"] for c in uses_callers if c.get("caller")})
+
+    # Only treat as instance if we have Variable and/or external/USES/INSTANCE_OF evidence
+    props = (kg_block or {}).get("props") or {}
+    is_external = bool(props.get("external"))
+    if not variables and not uses_callers and not instance_of and not is_external:
+        return None
+
+    return {
+        "kind": "instance",
+        "name": q,
+        "parents": parents,
+        "type_block": type_block,
+        "instance_of": instance_of,
+        "uses_callers": uses_callers,
+        "variables": variables,
+        "kg_block": kg_block,
+        "evidence": evidence,
+    }
+
+
+def _describe_instance_from_kg(job: dict[str, Any], entity: dict[str, Any]) -> str:
+    """Evidence-gated description of a multi-instance / external instance node."""
+    name = str(entity.get("name") or "")
+    type_block = str(entity.get("type_block") or "")
+    parents = list(entity.get("parents") or [])
+    variables = list(entity.get("variables") or [])
+    uses_callers = list(entity.get("uses_callers") or [])
+    instance_of = list(entity.get("instance_of") or [])
+    evidence = list(entity.get("evidence") or [])
+    kg_block = entity.get("kg_block") if isinstance(entity.get("kg_block"), dict) else None
+    blocks = {
+        str(b["name"]): b
+        for b in (job.get("blocks") or [])
+        if isinstance(b, dict) and b.get("name")
+    }
+
+    lines: list[str] = [
+        f"**`{name}`**（多实例成员 / 实例数据，非独立程序块）",
+        "",
+        "说明：该名称出现在知识图谱中，但**不在**工程 Blocks 导出列表中的独立 OB/FB/FC/DB。"
+        "以下仅依据图谱边与接口节点，不推断未导出的内部逻辑。",
+        "",
+        "### 图谱定位",
+    ]
+    if kg_block:
+        props = kg_block.get("props") or {}
+        bits = [
+            f"节点 `{kg_block.get('id')}`",
+            f"标记 block_type=`{props.get('block_type')}`" if props.get("block_type") else "",
+            "external=true" if props.get("external") else "",
+        ]
+        lines.append("- " + "；".join(b for b in bits if b))
+    for v in variables[:6]:
+        dt = v.get("data_type")
+        sec = v.get("section")
+        parent = v.get("parent")
+        lines.append(
+            f"- 接口变量 `{v.get('id') or f'Variable::{parent}::{name}'}`"
+            + (f"：section=`{sec}`" if sec else "")
+            + (f"，data_type=`{dt}`" if dt else "")
+        )
+    if parents:
+        lines.append(f"- 所属父块：{', '.join(f'`{p}`' for p in parents)}")
+
+    lines.append("")
+    lines.append("### 类型与实例关系（边证据）")
+    if instance_of:
+        for t in instance_of:
+            lines.append(f"- `INSTANCE_OF`：`{name}` → **`{t}`**")
+    elif type_block:
+        lines.append(f"- 类型（来自变量 data_type）：**`{type_block}`**")
+    else:
+        lines.append("- 图谱中**未找到** `INSTANCE_OF` 或可解析的 FB/FC data_type（无法断言类型块）。")
+
+    if uses_callers:
+        lines.append("- 调用/使用关系 `USES`：")
+        for c in uses_callers[:8]:
+            extra = []
+            if c.get("evidence"):
+                extra.append(str(c["evidence"]))
+            if c.get("network"):
+                extra.append(str(c["network"]))
+            suffix = f"（{'；'.join(extra)}）" if extra else ""
+            lines.append(f"  - `{c.get('caller')}` → `{name}`{suffix}")
+    else:
+        lines.append("- 未找到指向该实例的 `USES` 边。")
+
+    # Type FB from IR — only facts from job.blocks / folded / IO
+    type_name = type_block or (instance_of[0] if instance_of else "")
+    if type_name and type_name in blocks:
+        lines.append("")
+        lines.append(f"### 类型块 `{type_name}`（PLC-IR 证据）")
+        b = blocks[type_name]
+        meta = " · ".join(
+            p
+            for p in [
+                str(b.get("type") or ""),
+                f"编号 {b.get('number')}" if b.get("number") is not None else "",
+                str(b.get("language") or ""),
+                f"{b.get('networks')} 网络" if b.get("networks") is not None else "",
+            ]
+            if p
+        )
+        if meta:
+            lines.append(f"- 元数据：{meta}")
+        if b.get("comment"):
+            lines.append(f"- 注释：{b.get('comment')}")
+        lines.extend(_describe_block_function(job, type_name, b))
+        lines.extend(_block_assoc_lines(job, type_name))
+    elif type_name:
+        lines.append("")
+        lines.append(f"### 类型块 `{type_name}`")
+        lines.append(
+            f"- 图谱指向 `{type_name}`，但当前 job 的 Blocks/IR 中**没有**该块的接口与网络正文，"
+            "故不描述其内部逻辑。"
+        )
+
+    if evidence:
+        lines.append("")
+        lines.append("### 依据摘要")
+        for e in evidence[:12]:
+            lines.append(f"- `{e}`")
+
+    lines.append("")
+    lines.append(
+        "若需查看父块整体逻辑，请点击或 `@` "
+        + (" / ".join(f"`{p}`" for p in parents[:3]) if parents else "父级 FB/DB")
+        + "。"
+    )
+    return "\n".join(lines)
+
+
+def _match_block_query(job: dict[str, Any], blocks: dict[str, Any], query: str) -> str:
+    """Resolve a free-text query to a block name (exact / prefix / comment / network title)."""
+    q = (query or "").strip().strip("@").strip()
+    if not q or not blocks:
+        return ""
+    if q in blocks:
+        return q
+    ql = q.lower()
+    for name in blocks:
+        if name.lower() == ql:
+            return name
+    # Longest name contained in query, or query contained in name
+    contained = [n for n in blocks if n.lower() in ql or ql in n.lower()]
+    if len(contained) == 1:
+        return contained[0]
+    if contained:
+        return max(contained, key=len)
+    # Block comment / title
+    for name, b in blocks.items():
+        comment = str(b.get("comment") or "")
+        if comment and (ql in comment.lower() or comment.lower() in ql):
+            return name
+    # SCL / folded network titles (often human-readable like "A Station CoolingFan")
+    scl_sources = job.get("scl_sources") or {}
+    for name, scl in scl_sources.items():
+        if name not in blocks:
+            continue
+        for title in _network_titles_from_scl(str(scl or "")):
+            tl = title.lower()
+            if ql in tl or tl in ql:
+                return name
+    folded = job.get("folded_logic") or {}
+    if isinstance(folded, dict):
+        for name, nets in folded.items():
+            if name not in blocks or not isinstance(nets, list):
+                continue
+            for net in nets:
+                if not isinstance(net, dict):
+                    continue
+                title = str(net.get("title") or "").strip()
+                if not title:
+                    continue
+                tl = title.lower()
+                if ql in tl or tl in ql:
+                    return name
+    return ""
+
+
 def _resolve_block_focus(
     job: dict[str, Any],
     message: str,
@@ -732,30 +1248,37 @@ def _resolve_block_focus(
     }
     if not blocks:
         return ""
-    if block_name and block_name in blocks:
-        return block_name
-    # Exact match ignoring case
+
     if block_name:
-        for name in blocks:
-            if name.lower() == block_name.lower():
-                return name
+        hit = _match_block_query(job, blocks, block_name)
+        if hit:
+            return hit
+
     msg = message or ""
-    # @BlockName mention (from UI deep-dive)
-    at = re.search(r"@([A-Za-z_][\w]*)", msg)
-    if at:
-        mentioned = at.group(1)
-        if mentioned in blocks:
-            return mentioned
-        for name in blocks:
-            if name.lower() == mentioned.lower():
-                return name
-    # Prefer longer names; short names (<=2) require word boundaries
+    remainder = _strip_at_hint(msg)
+    if remainder:
+        # Prefer longest known block name as prefix of the mention
+        for name in sorted(blocks.keys(), key=len, reverse=True):
+            if remainder.lower().startswith(name.lower()):
+                tail = remainder[len(name) :]
+                if not tail or not tail[0].isalnum():
+                    return name
+        hit = _match_block_query(job, blocks, remainder)
+        if hit:
+            return hit
+
+    # Bare name / comment / title inside the message (longer names first)
     for name in sorted(blocks.keys(), key=len, reverse=True):
         if len(name) <= 2:
             if re.search(rf"(?<!\w){re.escape(name)}(?!\w)", msg, flags=re.IGNORECASE):
                 return name
         elif name.lower() in msg.lower():
             return name
+
+    # Last resort: match comment/title against whole message
+    hit = _match_block_query(job, blocks, msg)
+    if hit:
+        return hit
     return ""
 
 
@@ -897,6 +1420,81 @@ def _purpose_from_fold(folded: list[str], reads: list[str], writes: list[str]) -
     return "当前无足够 READS/WRITES 或折叠逻辑可归纳作用。"
 
 
+def _block_network_titles(job: dict[str, Any], block_name: str) -> list[str]:
+    """Human-readable network / step titles from folded_logic then SCL comments."""
+    titles: list[str] = []
+    seen: set[str] = set()
+    folded = job.get("folded_logic") or {}
+    nets = folded.get(block_name) if isinstance(folded, dict) else None
+    if isinstance(nets, list):
+        for net in nets:
+            if not isinstance(net, dict):
+                continue
+            t = str(net.get("title") or "").strip().strip('"')
+            if t and t not in seen:
+                seen.add(t)
+                titles.append(t)
+    for t in _network_titles_from_scl(str((job.get("scl_sources") or {}).get(block_name) or "")):
+        if t and t not in seen:
+            seen.add(t)
+            titles.append(t)
+    return titles[:16]
+
+
+def _call_relation_names(job: dict[str, Any], block_name: str) -> tuple[list[str], list[str]]:
+    """Return (callers, callees) block names from KG CALLS edges."""
+    callers: list[str] = []
+    callees: list[str] = []
+    bid = f"Block::{block_name}"
+    for e in (job.get("knowledge_graph") or {}).get("edges") or []:
+        if not isinstance(e, dict) or e.get("type") != "CALLS":
+            continue
+        src = str(e.get("source") or "")
+        tgt = str(e.get("target") or "")
+        if tgt == bid and src.startswith("Block::"):
+            callers.append(src.split("::", 1)[-1])
+        elif src == bid and tgt.startswith("Block::"):
+            callees.append(tgt.split("::", 1)[-1])
+    return sorted(set(callers)), sorted(set(callees))
+
+
+def _explain_block_understanding(
+    job: dict[str, Any],
+    block_name: str,
+    block: dict[str, Any],
+    *,
+    folded: list[str],
+    reads: list[str],
+    writes: list[str],
+) -> str:
+    """Narrative「理解」line — role in project, not a SCL dump."""
+    comment = str(block.get("comment") or "").strip()
+    titles = _block_network_titles(job, block_name)
+    callers, callees = _call_relation_names(job, block_name)
+    btype = str(block.get("type") or "块")
+    bits: list[str] = [f"`{block_name}` 是工程中的 {btype}"]
+    if comment:
+        bits.append(f"注释为「{comment}」")
+    if callers:
+        bits.append("由 " + "、".join(f"`{c}`" for c in callers[:6]) + " 调用")
+    if callees:
+        bits.append("向下调用 " + "、".join(f"`{c}`" for c in callees[:8]))
+    if titles:
+        bits.append("主要网络/步序：" + " → ".join(titles[:10]))
+    else:
+        fold_purpose = _purpose_from_fold(folded, reads, writes)
+        if fold_purpose and "无足够" not in fold_purpose:
+            bits.append(fold_purpose.rstrip("。"))
+    if reads or writes:
+        io_bits = []
+        if reads:
+            io_bits.append("读 " + "、".join(reads[:6]))
+        if writes:
+            io_bits.append("写 " + "、".join(writes[:6]))
+        bits.append("；".join(io_bits))
+    return "；".join(bits) + "。"
+
+
 def _format_scl_logic_block(statements: list[str]) -> list[str]:
     """Render folded statements as commented SCL fragment (fallback)."""
     if not statements:
@@ -906,7 +1504,7 @@ def _format_scl_logic_block(statements: list[str]) -> list[str]:
     except Exception:  # noqa: BLE001
         explain_scl_statement = lambda _s: ""  # type: ignore[misc, assignment]
     body: list[str] = []
-    for raw in statements[:16]:
+    for raw in statements:
         line = str(raw).strip()
         if line.startswith("[") and "]" in line:
             line = line.split("]", 1)[1].strip()
@@ -918,21 +1516,50 @@ def _format_scl_logic_block(statements: list[str]) -> list[str]:
         if meaning:
             body.append(f"// {meaning}")
         body.append(line)
+        if len(body) >= 24:
+            break
     if not body:
         return []
-    return ["逻辑：", "```scl", *body, "```"]
+    return ["主要逻辑（摘录，含中文说明）：", "```scl", *body, "```"]
 
 
 def _format_block_scl_markdown(job: dict[str, Any], block_name: str) -> list[str]:
-    """Prefer full standard SCL unit (VAR_INPUT…END_VAR + commented body)."""
+    """Full standard SCL unit (VAR_INPUT…END_VAR + commented body) — never truncate."""
     scl = str((job.get("scl_sources") or {}).get(block_name) or "").strip()
     if not scl:
         return []
-    # Keep chat readable; still show complete unit for typical FC/FB sizes
     lines = scl.splitlines()
-    if len(lines) > 120:
-        lines = lines[:120] + ["// …（已截断，完整 SCL 见导出包）"]
-    return ["SCL：", "```scl", *lines, "```"]
+    return ["完整 SCL：", "```scl", *lines, "```"]
+
+
+def _wants_full_scl(message: str) -> bool:
+    msg = message or ""
+    # Canvas deep-dive says「不要…完整 SCL」— that must NOT trigger a dump
+    if re.search(r"不要.{0,16}(完整\s*SCL|粘贴|复述|只贴)", msg):
+        return "展开 SCL" in msg or "贴出 SCL" in msg
+    return any(
+        k in msg
+        for k in ("完整 SCL", "展开 SCL", "全部 SCL", "源码全文", "完整源码", "贴出 SCL", "全部代码")
+    )
+
+
+def _wants_block_explain(message: str) -> bool:
+    msg = message or ""
+    return any(
+        k in msg
+        for k in (
+            "描述",
+            "作用",
+            "理解",
+            "解释",
+            "逻辑",
+            "做什么",
+            "干嘛",
+            "功能",
+            "深入",
+            "分析",
+        )
+    )
 
 
 def _block_assoc_lines(job: dict[str, Any], block_name: str) -> list[str]:
@@ -985,17 +1612,144 @@ def _block_assoc_lines(job: dict[str, Any], block_name: str) -> list[str]:
     return lines
 
 
-def _describe_block_function(job: dict[str, Any], block_name: str, block: dict[str, Any]) -> list[str]:
-    """Concise Chinese description: purpose / IO / logic (Markdown SCL)."""
-    comment = str(block.get("comment") or "").strip()
+def _block_io_lists(
+    job: dict[str, Any], block_name: str, block: dict[str, Any]
+) -> tuple[list[str], list[str], list[str]]:
+    """Merge interface pins + Tag READS/WRITES (iface first)."""
     iface_in = [str(x) for x in (block.get("inputs") or []) if x]
     iface_out = [str(x) for x in (block.get("outputs") or []) if x]
-    statics = [str(x) for x in (block.get("statics") or []) if x]
-    instance_of = str(block.get("instance_of") or "").strip()
+    iface_inout = [str(x) for x in (block.get("inouts") or []) if x]
     reads, writes = _tag_io_for_block(job, block_name)
-    if iface_in or iface_out:
-        reads = iface_in + [r for r in reads if r not in iface_in and not r.startswith("#")]
-        writes = iface_out + [w for w in writes if w not in iface_out and not w.startswith("#")]
+    if iface_in or iface_out or iface_inout:
+        reads = (
+            iface_in
+            + iface_inout
+            + [
+                r
+                for r in reads
+                if r not in iface_in and r not in iface_inout and not r.startswith("#")
+            ]
+        )
+        writes = (
+            iface_out
+            + iface_inout
+            + [
+                w
+                for w in writes
+                if w not in iface_out and w not in iface_inout and not w.startswith("#")
+            ]
+        )
+    return reads, writes, iface_inout
+
+
+def _join_capped(items: list[str], *, limit: int = 6) -> str:
+    if not items:
+        return "—"
+    shown = items[:limit]
+    more = f" 等{len(items)}个" if len(items) > limit else ""
+    return ", ".join(shown) + more
+
+
+def _wants_optimize_hints(message: str) -> bool:
+    msg = message or ""
+    return any(
+        k in msg
+        for k in ("优化", "改进", "风险", "死代码", "不可达", "建议改", "怎么改")
+    )
+
+
+def _wants_signal_trace(message: str) -> bool:
+    msg = message or ""
+    return any(
+        k in msg
+        for k in ("谁读写", "读写这些", "信号读写", "谁读", "谁写", "READS", "WRITES", "信号子图")
+    )
+
+
+def _format_signal_trace(job: dict[str, Any], block_name: str) -> list[str]:
+    """Compact who-reads / who-writes for tags touched by this block."""
+    reads, writes = _tag_io_for_block(job, block_name)
+    tags = list(dict.fromkeys([*reads, *writes]))[:12]
+    if not tags:
+        return ["信号：该块暂无已验证 Tag READS/WRITES 边。"]
+    lines = [f"**信号追踪（`{block_name}`）**"]
+    kg = job.get("knowledge_graph") or {}
+    for tag in tags:
+        tid = f"Tag::{tag}"
+        r_blocks: list[str] = []
+        w_blocks: list[str] = []
+        for e in kg.get("edges") or []:
+            if str(e.get("target") or "") != tid:
+                continue
+            src = str(e.get("source") or "")
+            if not src.startswith("Block::"):
+                continue
+            bname = src.split("::", 1)[-1]
+            if e.get("type") == "READS":
+                r_blocks.append(bname)
+            elif e.get("type") == "WRITES":
+                w_blocks.append(bname)
+        lines.append(
+            f"- `{tag}`：写={_join_capped(sorted(set(w_blocks)), limit=4)}；"
+            f"读={_join_capped(sorted(set(r_blocks)), limit=4)}"
+        )
+    return lines
+
+
+def _format_optimize_hints(job: dict[str, Any], block_name: str | None = None) -> list[str]:
+    """Short actionable hints from evidence-gated analysis (no LLM dump)."""
+    try:
+        from agents.plc.tia.analyst import analyze_block, analyze_project
+
+        result = analyze_block(job, block_name) if block_name else analyze_project(job)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("optimize hints skipped: %s", exc)
+        return ["优化：分析暂不可用。"]
+    findings = result.get("findings") or []
+    lines = [f"**优化提示**" + (f"（`{block_name}`）" if block_name else "（工程）")]
+    actionable = 0
+    for f in findings:
+        sev = str(f.get("severity") or "")
+        if sev not in {"warn", "risk"}:
+            continue
+        msg = str(f.get("message") or "").strip()
+        code = str(f.get("code") or "")
+        if not msg:
+            continue
+        tip = {
+            "DEAD_BLOCK": "核对是否仍需保留，或补上从 OB 的 CALLS。",
+            "UNREACHABLE_FROM_OB": "检查调用链是否缺失 / 仅被注释掉。",
+        }.get(code, "结合调用与 IO 再确认是否可简化。")
+        lines.append(f"- [{sev}] {msg} → {tip}")
+        actionable += 1
+        if actionable >= 5:
+            break
+    if not actionable:
+        lines.append("- 未发现 warn/risk 级发现；可点「优化提案」做逻辑级改写预览。")
+    return lines
+
+
+def _describe_block_function(
+    job: dict[str, Any],
+    block_name: str,
+    block: dict[str, Any],
+    *,
+    include_full_scl: bool = False,
+) -> list[str]:
+    """Concise card: role / IO / calls / ≤5 steps. Full SCL only on demand.
+
+    Target: ≤12 lines so canvas click answers stay scannable.
+    """
+    comment = str(block.get("comment") or "").strip()
+    instance_of = str(block.get("instance_of") or "").strip()
+    interface_only = bool(block.get("interface_only"))
+    protected = bool(block.get("protected"))
+    body_available = block.get("body_available")
+    if body_available is None:
+        body_available = not interface_only and not (
+            protected and int(block.get("networks") or 0) == 0
+        )
+    reads, writes, iface_inout = _block_io_lists(job, block_name, block)
     folded = _folded_logic_lines(job, block_name)
     if not folded:
         scl = (job.get("scl_sources") or {}).get(block_name) or ""
@@ -1007,33 +1761,63 @@ def _describe_block_function(job: dict[str, Any], block_name: str, block: dict[s
             and not ln.strip().startswith("(*")
             and not ln.strip().upper().startswith("NETWORK")
             and "VAR" not in ln.upper().split()[:1]
-        ][:12]
+        ][:8]
 
+    titles = _block_network_titles(job, block_name)
+    callers, callees = _call_relation_names(job, block_name)
     lines: list[str] = []
-    if comment:
-        lines.append(f"注释：{comment}")
-    if instance_of:
-        lines.append(f'实例类型：FB `{instance_of}`')
-    lines.append(f"作用：{_purpose_from_fold(folded, reads, writes)}")
-    lines.append(f"输入：{', '.join(reads) if reads else '（无已验证读取标签）'}")
-    lines.append(f"输出：{', '.join(writes) if writes else '（无已验证写入标签）'}")
-    if statics:
-        lines.append(f"静态/多实例：{', '.join(statics)}")
-    scl_md = _format_block_scl_markdown(job, block_name)
-    if scl_md:
-        lines.extend(scl_md)
+
+    if interface_only or (protected and not body_available):
+        lines.append("状态：接口开放 · 程序体不可用（不臆测内部逻辑）")
+        purpose = comment or "封装功能块；结合接口与上下游调用理解角色。"
+        lines.append(f"理解：{purpose}")
+        lines.append(f"作用：{purpose}")
     else:
-        lines.extend(_format_scl_logic_block(folded))
-    # Instance DB has no networks — surface typed FB logic for engineers
-    if instance_of and instance_of != block_name:
-        fb_scl = _format_block_scl_markdown(job, instance_of)
-        if fb_scl:
-            lines.append(f"类型 FB `{instance_of}` 逻辑：")
-            # drop the leading "SCL：" label from helper
-            if fb_scl and fb_scl[0] == "SCL：":
-                lines.extend(fb_scl[1:])
-            else:
-                lines.extend(fb_scl)
+        understanding = _explain_block_understanding(
+            job, block_name, block, folded=folded, reads=reads, writes=writes
+        )
+        # Keep「理解」to one short clause when possible
+        if len(understanding) > 160:
+            understanding = understanding[:157].rstrip("；。,，") + "…"
+        lines.append(f"理解：{understanding}")
+        lines.append(f"作用：{_purpose_from_fold(folded, reads, writes)}")
+
+    lines.append(f"输入：{_join_capped(reads) if reads else '（无已验证读取）'}")
+    lines.append(f"输出：{_join_capped(writes) if writes else '（无已验证写入）'}")
+    if iface_inout and not (set(iface_inout) <= set(reads) & set(writes)):
+        lines.append(f"InOut：{_join_capped(iface_inout, limit=4)}")
+
+    call_bits: list[str] = []
+    if callers:
+        call_bits.append("被调用：" + _join_capped(callers, limit=4))
+    if callees:
+        call_bits.append("调用：" + _join_capped(callees, limit=4))
+    if call_bits:
+        lines.append("；".join(call_bits))
+    elif instance_of:
+        lines.append(f"实例类型：`{instance_of}`")
+
+    step_titles = titles[:5]
+    if step_titles:
+        lines.append("逻辑：" + " → ".join(step_titles))
+    elif folded:
+        # One-line logic peek (no code fence)
+        peek = folded[0]
+        if len(peek) > 72:
+            peek = peek[:69] + "…"
+        lines.append(f"逻辑：`{peek}`" + (f" 等{len(folded)}条" if len(folded) > 1 else ""))
+
+    for note in _block_risk_notes(job, block_name)[:1]:
+        lines.append(f"注意：{note}")
+
+    if interface_only or (protected and not body_available):
+        lines.append("程序体：不可用（未解密 / 未导出）— 不做 SCL 展开")
+    elif include_full_scl:
+        lines.extend(_format_block_scl_markdown(job, block_name))
+    elif (job.get("scl_sources") or {}).get(block_name):
+        lines.append("_下一步：说「展开 SCL」看完整源码；或问「谁读写这些信号」/「优化建议」。_")
+    else:
+        lines.append("_下一步：可选中画布查看信号子图；或问「优化建议」。_")
     return lines
 
 
@@ -1058,13 +1842,60 @@ def _block_risk_notes(job: dict[str, Any], block_name: str) -> list[str]:
 
 
 def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None) -> str:
-    """Deterministic PLC Q&A from IR/KG — concise content only."""
+    """Understand the user question, retrieve from KG, then answer (LLM if configured)."""
+    import re
+
     blocks = {b["name"]: b for b in job.get("blocks") or [] if isinstance(b, dict) and b.get("name")}
     focus = _resolve_block_focus(job, message, block_name)
+    msg = message or ""
+    hint = (block_name or "").strip() or _strip_at_hint(msg)
+    at = re.search(r"@(.+)", msg)
 
-    lines: list[str] = []
-    if focus and focus in blocks:
+    # Explicit canvas/@ name that is NOT an IR block → multi-instance / external KG entity
+    for candidate in (block_name, hint):
+        cand = (candidate or "").strip()
+        if not cand or cand in blocks:
+            continue
+        inst = _lookup_instance_entity(job, cand)
+        if inst is not None:
+            return _describe_instance_from_kg(job, inst)
+
+    if (at or block_name) and not focus:
+        show = (hint or block_name or "")[:80]
+        lines = [
+            f"未找到与 `@{show}` 匹配的**独立程序块**（Blocks 列表中的 OB/FB/FC/DB 名 / 注释 / 网络标题）。"
+        ]
+        near: list[str] = []
+        ql = show.lower()
+        for n in (job.get("knowledge_graph") or {}).get("nodes") or []:
+            if n.get("type") not in {"Variable", "Block"}:
+                continue
+            props = n.get("props") if isinstance(n.get("props"), dict) else {}
+            nm = str(props.get("name") or "")
+            if nm and ql and (ql in nm.lower() or nm.lower() in ql) and nm not in near:
+                near.append(nm)
+            if len(near) >= 8:
+                break
+        if near:
+            lines.append("图谱中有近似节点（可能是多实例成员）：" + ", ".join(f"`{n}`" for n in near))
+        names = [b["name"] for b in (job.get("blocks") or [])[:12]]
+        if names:
+            lines.append(f"可试独立块：{', '.join(f'`{n}`' for n in names)}")
+        lines.append("也可点击知识图谱节点；多实例成员会按图谱边（USES / INSTANCE_OF / 接口变量）作答。")
+        return "\n".join(lines)
+
+    # Single-block card for explicit @/canvas focus (not multi-topic questions)
+    explicit_one = bool(block_name) or bool(at)
+    multi_topic = any(
+        k in msg for k in ("水平", "垂直", "向上", "向下", "整体", "架构", "比较", "作业", "哪些")
+    )
+    if focus and focus in blocks and explicit_one and not multi_topic:
         b = blocks[focus]
+        include_scl = _wants_full_scl(msg)
+        if _wants_signal_trace(msg) and not include_scl:
+            return "\n".join(_format_signal_trace(job, focus))
+        if _wants_optimize_hints(msg) and not include_scl:
+            return "\n".join(_format_optimize_hints(job, focus))
         meta = " · ".join(
             p
             for p in [
@@ -1075,18 +1906,32 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
             ]
             if p
         )
-        lines.append(f"**`{focus}`**（{meta}）" if meta else f"**`{focus}`**")
-        lines.extend(_describe_block_function(job, focus, b))
-        lines.extend(_block_assoc_lines(job, focus))
-        for note in _block_risk_notes(job, focus):
-            lines.append(f"注意：{note}")
-    else:
-        names = [b["name"] for b in (job.get("blocks") or [])[:20]]
-        lines.append(f"**{job.get('project_name') or '工程'}** · {job.get('summary')}")
-        if names:
-            lines.append(f"块：{', '.join(names)}")
-        lines.append("点击节点或发送 `@块名 描述功能` 可深入单块。")
-    return "\n".join(lines)
+        fact_lines = [f"**`{focus}`**（{meta}）" if meta else f"**`{focus}`**"]
+        fact_lines.extend(
+            _describe_block_function(job, focus, b, include_full_scl=include_scl)
+        )
+        # Concise by default: no LLM essay + evidence appendix on canvas click
+        return "\n".join(fact_lines)
+
+    # Project-level optimize without @block
+    if _wants_optimize_hints(msg) and not at:
+        return "\n".join(_format_optimize_hints(job, None))
+
+    from agents.plc.tia.chat_retrieve import answer_query_with_kg
+
+    history = []
+    chat_turns = list(job.get("chat") or [])
+    for turn in chat_turns[-8:]:
+        if isinstance(turn, dict) and turn.get("content"):
+            history.append(
+                {"role": str(turn.get("role") or "user"), "content": str(turn.get("content"))}
+            )
+    return answer_query_with_kg(
+        job,
+        msg,
+        focus_block=focus or None,
+        chat_history=history,
+    )
 
 
 def analyze_job(job: dict[str, Any], *, block_name: str | None = None) -> dict[str, Any]:

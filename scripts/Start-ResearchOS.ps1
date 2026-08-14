@@ -1,11 +1,15 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  ResearchOS one-click start: Docker Compose + Windows TIA Openness.
+  ResearchOS one-click start: Docker Compose (all services) + Windows TIA Openness CLI ready.
 
 .PARAMETER Mode
-  Full    = full Docker stack + Openness CLI ready
-  Hybrid  = Docker data-plane only + host Gateway/Frontend + Openness (.ap19)
+  Full    = Docker stack including nginx frontend + gateway + data plane (default)
+  Hybrid  = Same as Full (kept for compatibility). Prefer Full.
+
+.PARAMETER HostGateway
+  Extra: stop container gateway and run host Gateway so Openness CLI can process .ap19.
+  Frontend stays Docker nginx. Use only when you need Windows Openness from Gateway.
 
 .PARAMETER SkipDocker
   Skip Docker Desktop / Compose.
@@ -13,8 +17,11 @@
 .PARAMETER SkipOpenness
   Skip Openness build and status check.
 
+.PARAMETER Build
+  Force docker compose --build for the whole stack (needs Docker Hub DNS).
+
 .PARAMETER NoBuild
-  Do not pass --build to compose.
+  Skip the automatic frontend image rebuild on Full start.
 
 .PARAMETER Profiles
   Extra compose profiles (default includes plc).
@@ -24,8 +31,10 @@ param(
     [ValidateSet("Full", "Hybrid")]
     [string] $Mode = "Full",
 
+    [switch] $HostGateway,
     [switch] $SkipDocker,
     [switch] $SkipOpenness,
+    [switch] $Build,
     [switch] $NoBuild,
     [string[]] $Profiles = @("plc"),
     [int] $DockerWaitSeconds = 120
@@ -171,8 +180,110 @@ function Invoke-DockerCompose {
     }
 }
 
+function Rebuild-FrontendImage {
+    Write-Step "Rebuild frontend Docker image from frontend/ sources"
+    $feDir = Join-Path $Root "frontend"
+    $npm = Get-Command npm -ErrorAction SilentlyContinue
+    if (-not $npm) {
+        throw "npm not found; cannot build frontend for Docker overlay"
+    }
+
+    Write-WarnLine "Host build: npm run build (frontend/)"
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        Push-Location $feDir
+        try {
+            & npm.cmd run build 2>&1 | ForEach-Object { Write-Host ("    " + $_) }
+            if ($LASTEXITCODE -ne 0) {
+                throw "npm run build failed (exit $LASTEXITCODE)"
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
+    $distIndex = Join-Path $feDir "dist\index.html"
+    if (-not (Test-Path $distIndex)) {
+        throw "frontend/dist/index.html missing after build"
+    }
+
+    # Prefer overlay onto existing researchos-frontend (no Hub pull). Fall back to full Dockerfile.
+    $hasFe = $false
+    try {
+        $null = & docker image inspect researchos-frontend:latest 2>$null
+        if ($LASTEXITCODE -eq 0) { $hasFe = $true }
+    }
+    catch { $hasFe = $false }
+
+    Push-Location $Root
+    try {
+        if ($hasFe) {
+            Write-WarnLine "docker build overlay (FROM researchos-frontend:latest) — no Hub required"
+            $prev2 = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $out = & docker build -f "frontend\Dockerfile.overlay" -t researchos-frontend:latest . 2>&1
+                $code = $LASTEXITCODE
+                foreach ($line in $out) { Write-Host ("    " + [string]$line) }
+                if ($code -ne 0) {
+                    throw "frontend overlay build failed (exit $code)"
+                }
+            }
+            finally {
+                $ErrorActionPreference = $prev2
+            }
+        }
+        else {
+            Write-WarnLine "No local researchos-frontend image; trying full Dockerfile (needs node/nginx bases)"
+            Push-Location $ComposeDir
+            try {
+                Invoke-DockerCompose -ComposeArgs @(
+                    "--env-file", $EnvFile, "build", "frontend"
+                ) -FailMessage "frontend image build failed"
+            }
+            finally {
+                Pop-Location
+            }
+        }
+        Write-Ok "Frontend image rebuilt from current sources"
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Start-ComposeWithOptionalBuild {
+    param(
+        [string[]] $BaseArgs,
+        [string] $Label
+    )
+    $wantBuild = $Build -and -not $NoBuild
+    if ($wantBuild) {
+        Write-WarnLine "Trying compose --build (requires registry DNS)..."
+        try {
+            Invoke-DockerCompose -ComposeArgs ($BaseArgs + @("--build")) -FailMessage "$Label with --build failed"
+            return
+        }
+        catch {
+            Write-WarnLine "Build failed (often auth.docker.io / Hub DNS). Falling back to existing images..."
+        }
+    }
+    Invoke-DockerCompose -ComposeArgs $BaseArgs -FailMessage "$Label failed (no local images? fix DNS then: Start-ResearchOS.cmd Build)"
+}
+
 function Start-ComposeFull {
     Write-Step ("Start Docker Compose Full; profiles: " + ($Profiles -join ","))
+    # Frontend is a baked nginx image — rebuild from frontend/ so UI matches repo.
+    if (-not $NoBuild) {
+        Rebuild-FrontendImage
+    }
+    else {
+        Write-WarnLine "Skipped frontend rebuild (-NoBuild)"
+    }
     Push-Location $ComposeDir
     try {
         $composeArgs = @("--env-file", $EnvFile)
@@ -180,9 +291,9 @@ function Start-ComposeFull {
             if ($p) { $composeArgs += @("--profile", $p) }
         }
         $composeArgs += @("up", "-d")
-        if (-not $NoBuild) { $composeArgs += "--build" }
-        Invoke-DockerCompose -ComposeArgs $composeArgs -FailMessage "docker compose up failed"
-        Write-Ok "Compose started"
+        Start-ComposeWithOptionalBuild -BaseArgs $composeArgs -Label "docker compose up"
+        Recreate-FrontendContainer
+        Write-Ok "Compose started (frontend recreated from current image)"
     }
     finally {
         Pop-Location
@@ -194,13 +305,18 @@ function Start-ComposeDataPlane {
     Push-Location $ComposeDir
     try {
         $services = @("postgres", "redis", "minio", "qdrant", "neo4j", "litellm")
-        $composeArgs = @("--env-file", $EnvFile, "up", "-d")
-        if (-not $NoBuild) { $composeArgs += "--build" }
-        $composeArgs += $services
-        Invoke-DockerCompose -ComposeArgs $composeArgs -FailMessage "docker compose up (data) failed"
-        $stopOut = & docker compose --env-file $EnvFile stop gateway frontend 2>&1
-        $null = $LASTEXITCODE
-        foreach ($line in $stopOut) { Write-Host ("    " + $line) }
+        $composeArgs = @("--env-file", $EnvFile, "up", "-d") + $services
+        Start-ComposeWithOptionalBuild -BaseArgs $composeArgs -Label "docker compose up (data)"
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $stopOut = & docker compose --env-file $EnvFile stop gateway frontend 2>&1
+            $null = $LASTEXITCODE
+            foreach ($line in $stopOut) { Write-Host ("    " + [string]$line) }
+        }
+        finally {
+            $ErrorActionPreference = $prev
+        }
         Write-Ok "Data-plane up; stopped container gateway/frontend if present"
     }
     finally {
@@ -238,10 +354,38 @@ function Ensure-Openness {
         Write-Ok "Found $exe"
     }
 
+    Write-Step "Siemens Openness firewall whitelist"
+    $whitelistScript = Join-Path $PSScriptRoot "Register-TiaOpennessWhitelist.ps1"
+    if (Test-Path -LiteralPath $whitelistScript) {
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $whitelistScript -Exe $exe
+            $wlCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $prev
+        }
+        if ($wlCode -eq 0) {
+            Write-Ok "Openness firewall whitelist matches current exe (no Siemens Yes/No dialog)"
+        }
+        else {
+            Write-WarnLine "Whitelist not updated (exit $wlCode). Either run scripts\Register-TiaOpennessWhitelist.ps1 as Administrator, or click 'Yes to all' (not Yes) on the Openness prompt once."
+        }
+    }
+    else {
+        Write-WarnLine "Whitelist script missing: $whitelistScript"
+    }
+
     $exeUnix = ($exe -replace "\\", "/")
     Set-EnvFileValue "RESEARCHOS_TIA_OPENNESS_EXE" $exeUnix
-    if ($Mode -eq "Hybrid") {
+    # Docker Linux Gateway cannot exec Windows Openness — keep off in .env for compose.
+    # HostGateway process gets RESEARCHOS_TIA_OPENNESS=cli via Import-DotEnvToProcess override.
+    if ($HostGateway) {
         Set-EnvFileValue "RESEARCHOS_TIA_OPENNESS" "cli"
+    }
+    else {
+        Set-EnvFileValue "RESEARCHOS_TIA_OPENNESS" "off"
     }
 
     Write-Step "Openness CLI status"
@@ -271,17 +415,96 @@ function Ensure-Openness {
     return $exe
 }
 
+function Stop-HostAppPids {
+    Write-Step "Stop leftover host Gateway/Frontend (ports 8000/5173 for Docker)"
+    foreach ($name in @("gateway", "frontend")) {
+        $pidFile = Join-Path $RunDir "$name.pid"
+        if (-not (Test-Path $pidFile)) { continue }
+        $procId = (Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
+        if ($procId -match "^\d+$") {
+            $p = Get-Process -Id ([int]$procId) -ErrorAction SilentlyContinue
+            if ($p) {
+                Write-WarnLine "Stopping host $name PID $procId"
+                Stop-Process -Id ([int]$procId) -Force -ErrorAction SilentlyContinue
+                Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                    Where-Object { $_.ParentProcessId -eq [int]$procId } |
+                    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            }
+        }
+        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Recreate-FrontendContainer {
+    param([switch] $HostGatewayOverride)
+    Write-Step "Recreate frontend container (stop/rm/up --no-deps; avoid Windows force-recreate hang)"
+    Push-Location $ComposeDir
+    try {
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $files = @("-f", "docker-compose.yml")
+            if ($HostGatewayOverride) {
+                $override = Join-Path $ComposeDir "docker-compose.hostgateway.yml"
+                if (Test-Path $override) { $files += @("-f", $override) }
+            }
+            $base = @("--env-file", $EnvFile) + $files
+            foreach ($line in (& docker compose @base stop frontend 2>&1)) {
+                Write-Host ("    " + [string]$line)
+            }
+            foreach ($line in (& docker compose @base rm -f frontend 2>&1)) {
+                Write-Host ("    " + [string]$line)
+            }
+            # Compose v5 on Windows can hang forever on "Starting"; create then docker start.
+            foreach ($line in (& docker compose @base up -d --no-deps --no-build --no-start --pull never frontend 2>&1)) {
+                Write-Host ("    " + [string]$line)
+            }
+            $started = & docker start researchos-frontend-1 2>&1
+            foreach ($line in $started) { Write-Host ("    " + [string]$line) }
+        }
+        finally {
+            $ErrorActionPreference = $prev
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Stop-ComposeGatewayKeepFrontend {
+    Write-Step "Stop Docker gateway only (host Gateway will own :8000; frontend stays nginx)"
+    Push-Location $ComposeDir
+    try {
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $out = & docker compose --env-file $EnvFile stop gateway 2>&1
+            foreach ($line in $out) { Write-Host ("    " + [string]$line) }
+            $override = Join-Path $ComposeDir "docker-compose.hostgateway.yml"
+            if (Test-Path $override) {
+                Write-WarnLine "Recreate frontend so nginx /api reaches host Gateway (gateway:host-gateway)"
+                Recreate-FrontendContainer -HostGatewayOverride
+            }
+        }
+        finally {
+            $ErrorActionPreference = $prev
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Import-DotEnvToProcess {
     $map = Get-EnvMap
     foreach ($k in $map.Keys) {
         [Environment]::SetEnvironmentVariable($k, [string]$map[$k], "Process")
     }
-    if ($Mode -eq "Hybrid") {
-        $exe = Find-OpennessExe
-        if ($exe) {
-            [Environment]::SetEnvironmentVariable("RESEARCHOS_TIA_OPENNESS", "cli", "Process")
-            [Environment]::SetEnvironmentVariable("RESEARCHOS_TIA_OPENNESS_EXE", $exe, "Process")
-        }
+    # Host Gateway path always needs CLI Openness when used
+    $exe = Find-OpennessExe
+    if ($exe) {
+        [Environment]::SetEnvironmentVariable("RESEARCHOS_TIA_OPENNESS", "cli", "Process")
+        [Environment]::SetEnvironmentVariable("RESEARCHOS_TIA_OPENNESS_EXE", $exe, "Process")
     }
 }
 
@@ -343,16 +566,16 @@ function Wait-Http([string] $Url, [int] $Seconds = 90) {
 }
 
 Write-Host "ResearchOS one-click start  Mode=$Mode  Root=$Root" -ForegroundColor White
+if ($Mode -eq "Hybrid" -and -not $HostGateway) {
+    Write-WarnLine "Hybrid is now an alias of Full (all Docker + nginx FE). Use -HostGateway only for .ap19 Openness."
+}
 Ensure-EnvFile
+Stop-HostAppPids
 
 if (-not $SkipDocker) {
     Ensure-DockerDesktop
-    if ($Mode -eq "Hybrid") {
-        Start-ComposeDataPlane
-    }
-    else {
-        Start-ComposeFull
-    }
+    # Always bring up full stack (frontend=nginx). Openness stays on Windows host.
+    Start-ComposeFull
 }
 else {
     Write-WarnLine "Skipped Docker"
@@ -366,33 +589,45 @@ else {
     Write-WarnLine "Skipped Openness"
 }
 
-if ($Mode -eq "Hybrid") {
+if ($HostGateway) {
+    Stop-ComposeGatewayKeepFrontend
     Start-HostGateway
-    Start-HostFrontend
+    Write-Ok "Host Gateway + Docker nginx frontend (Openness CLI enabled on host)"
+}
+else {
+    Write-Ok "Topology: Docker (frontend nginx + gateway + data). Openness = Windows CLI only."
 }
 
 Write-Step "Health check"
 $gw = "http://localhost:8000/api/v1/health/live"
+$fe = "http://localhost:5173/"
 if (Wait-Http $gw 120) {
     Write-Ok "Gateway $gw"
 }
 else {
     Write-WarnLine "Gateway not ready yet: $gw (see Docker logs or .researchos\logs)"
 }
+if (Wait-Http $fe 60) {
+    Write-Ok "Frontend $fe (Docker nginx)"
+}
+else {
+    Write-WarnLine "Frontend not ready yet: $fe"
+}
 
 Write-Host ""
 Write-Host "---------- URLs ----------" -ForegroundColor White
-Write-Host "  Frontend   http://localhost:5173"
+Write-Host "  Frontend   http://localhost:5173   (Docker nginx)"
 Write-Host "  Gateway    http://localhost:8000/api/v1/health/live"
 Write-Host "  Neo4j      http://localhost:7474"
 Write-Host "  MinIO      http://localhost:9001"
 if ($opennessExe) {
     Write-Host "  Openness   $opennessExe"
-    Write-Host "             (on-demand CLI; Hybrid host Gateway uses RESEARCHOS_TIA_OPENNESS=cli)"
+    Write-Host "             (Windows-only CLI; Linux container cannot run it)"
 }
 Write-Host ""
 Write-Host "Stop: Stop-ResearchOS.cmd  or  .\scripts\Stop-ResearchOS.ps1" -ForegroundColor DarkGray
-if ($Mode -eq "Full") {
-    Write-Host "Tip: for .ap19 ingest / writeback, restart with -Mode Hybrid." -ForegroundColor DarkGray
+if (-not $HostGateway) {
+    Write-Host "Tip: .ap19 Openness from Gateway → Start-ResearchOS.cmd HostGateway" -ForegroundColor DarkGray
+    Write-Host "     (or upload .zap / SimaticML XML; those work fully in Docker Gateway)." -ForegroundColor DarkGray
 }
 Write-Host "Done." -ForegroundColor Green

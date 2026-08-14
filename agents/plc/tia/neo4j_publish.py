@@ -6,7 +6,7 @@ from typing import Any
 
 from agents.plc.tia.kg import PlcKnowledgeGraph
 from knowledge.models import Entity, Relation
-from knowledge.retrieval.graph import create_knowledge_graph
+from knowledge.retrieval.graph import create_knowledge_graph, neo4j_safe_properties
 
 
 def plc_kg_to_entities_relations(
@@ -14,7 +14,12 @@ def plc_kg_to_entities_relations(
     *,
     project_key: str,
 ) -> tuple[list[Entity], list[Relation]]:
-    """Map PlcKnowledgeGraph → knowledge Entity/Relation (PLC* types)."""
+    """Map PlcKnowledgeGraph → knowledge Entity/Relation (PLC* types).
+
+    Nested maps (e.g. CALLS ``call_params`` ``{name, data_type, section}``) are
+    JSON-stringified so Neo4j ``SET n += $props`` stays within primitive types.
+    In-memory ``PlcKnowledgeGraph`` is left unchanged.
+    """
     entities: list[Entity] = []
     for node in kg.nodes.values():
         etype = {
@@ -27,7 +32,7 @@ def plc_kg_to_entities_relations(
             "Part": "PLCPart",
         }.get(node.type, f"PLC{node.type}")
         name = str(node.props.get("name") or node.id)
-        props = dict(node.props)
+        props = neo4j_safe_properties(dict(node.props))
         props["plc_node_type"] = node.type
         props["project_key"] = project_key
         entities.append(
@@ -48,7 +53,9 @@ def plc_kg_to_entities_relations(
                 to_key=f"plc:{project_key}:{edge.target}",
                 from_type="PLC",
                 to_type="PLC",
-                properties={**dict(edge.props), "chunk_id": f"plc:{project_key}"},
+                properties=neo4j_safe_properties(
+                    {**dict(edge.props), "chunk_id": f"plc:{project_key}"}
+                ),
             )
         )
     return entities, relations

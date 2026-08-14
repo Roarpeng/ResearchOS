@@ -40,15 +40,28 @@ def _to_jsonable(obj: Any) -> Any:
 
 
 def classify_block(block: Block, scl_source: str | None) -> dict[str, Any]:
-    """Assign Offline Analyzer status: parsed | converted | protected | unknown."""
+    """Assign Offline Analyzer status: parsed | converted | protected | interface_only | unknown."""
     lang = (block.programming_language or "").upper()
     has_logic = bool(block.networks) or bool(block.source_text)
     has_todo = bool(scl_source and "TODO[" in scl_source)
 
-    if block.is_protected():
+    if block.is_interface_only():
+        status = "interface_only"
+        convert = False
+        reason = (
+            "Program body not exported (typical Know-how / library lock); "
+            "Input/Output/Static interface parsed for project understanding"
+            + (" (KnowHowProtection marked)" if block.is_protected() else "")
+        )
+    elif block.is_protected():
         status = "protected"
         convert = False
-        reason = "Know-how / password protection — original kept, no SCL conversion"
+        reason = (
+            "Know-how / password protection — program body unavailable; "
+            "open interface kept for call-graph / I/O understanding"
+            if block.interface
+            else "Know-how / password protection — original kept, no SCL conversion"
+        )
     elif not has_logic and block.block_type.value not in {"DB", "UDT"}:
         status = "unknown"
         convert = False
@@ -74,6 +87,7 @@ def classify_block(block: Block, scl_source: str | None) -> dict[str, Any]:
         "convert": convert,
         "reason": reason,
         "networks": len(block.networks),
+        "interface_members": len(block.interface),
         "source_file": block.source_file,
     }
 
@@ -90,6 +104,7 @@ def build_conversion_report(
         "converted": sum(1 for b in blocks if b["status"] == "converted"),
         "parsed": sum(1 for b in blocks if b["status"] == "parsed"),
         "protected": sum(1 for b in blocks if b["status"] == "protected"),
+        "interface_only": sum(1 for b in blocks if b["status"] == "interface_only"),
         "failed": sum(1 for b in blocks if b["status"] == "unknown"),
         "tag_tables": len(project.tag_tables),
     }
@@ -127,12 +142,13 @@ def write_result_package(
         (converted / f"{_safe_filename(name)}.scl").write_text(source, encoding="utf-8")
 
     for entry in conversion["blocks"]:
-        if entry["status"] != "protected":
+        if entry["status"] not in {"protected", "interface_only"}:
             continue
         block = project.blocks.get(entry["block"])
         dest_base = protected / _safe_filename(entry["block"])
         stub = (
-            f"(* Protected block {entry['block']} — original kept, not converted. "
+            f"(* {entry['status']} block {entry['block']} — "
+            f"interface retained for understanding; body not converted. "
             f"Reason: {entry['reason']} *)\n"
         )
         (dest_base.with_suffix(".txt")).write_text(stub, encoding="utf-8")
@@ -164,9 +180,11 @@ def write_result_package(
                 "converted",
                 "parsed",
                 "protected",
+                "interface_only",
                 "failed",
                 "tag_tables",
             )
+            if k in conversion
         },
     }
     (root / "manifest.json").write_text(

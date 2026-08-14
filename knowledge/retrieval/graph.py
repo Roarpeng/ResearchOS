@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -11,6 +13,43 @@ from knowledge.models import Entity, Relation
 from knowledge.settings import KnowledgeSettings, get_settings
 
 logger = logging.getLogger("researchos.knowledge.graph")
+
+_NEO4J_PRIMITIVES = (str, int, float, bool)
+
+
+def neo4j_safe_properties(props: dict[str, Any] | None) -> dict[str, Any]:
+    """Coerce property maps to Neo4j-legal values (primitives or arrays thereof).
+
+    Nested dicts / lists-of-dicts become JSON strings. ``None`` is omitted.
+    """
+    if not props:
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in props.items():
+        if value is None:
+            continue
+        out[str(key)] = _neo4j_safe_value(value)
+    return out
+
+
+def _neo4j_safe_value(value: Any) -> Any:
+    if isinstance(value, _NEO4J_PRIMITIVES):
+        return value
+    if isinstance(value, Mapping):
+        return json.dumps(dict(value), ensure_ascii=False, default=str)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        items = list(value)
+        if not items:
+            return []
+        if all(isinstance(x, _NEO4J_PRIMITIVES) for x in items) and _neo4j_homogeneous(items):
+            return items
+        return json.dumps(items, ensure_ascii=False, default=str)
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _neo4j_homogeneous(items: list[Any]) -> bool:
+    kinds = {type(x) for x in items}
+    return len(kinds) == 1 or kinds <= {int, float}
 
 
 @dataclass
@@ -179,7 +218,7 @@ class Neo4jKnowledgeGraph:
                     key=e.canonical_key,
                     type=e.type,
                     name=e.name,
-                    props=e.properties,
+                    props=neo4j_safe_properties(e.properties),
                 )
         return len(entities)
 
@@ -196,7 +235,7 @@ class Neo4jKnowledgeGraph:
                     from_key=r.from_key,
                     to_key=r.to_key,
                     rtype=r.type,
-                    props=r.properties,
+                    props=neo4j_safe_properties(r.properties),
                 )
         return len(relations)
 

@@ -71,6 +71,10 @@ tia-openness/
 5. Optional env:
    - `TIA_VERSION` (default `V19`)
    - `TIA_PORTAL_ROOT` (override Portal install path)
+6. **Openness firewall** (the Yes / Yes to all dialog): click **Yes to all** once, or run
+   `.\scripts\Register-TiaOpennessWhitelist.ps1` as Administrator. `Start-ResearchOS`
+   does this after locating the exe. Clicking only **Yes** never persists; rebuilding
+   the exe changes SHA256 and needs a whitelist refresh.
 
 ## Build & test
 

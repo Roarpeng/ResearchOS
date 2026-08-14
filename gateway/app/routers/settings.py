@@ -12,7 +12,12 @@ from pydantic import BaseModel, Field
 from gateway.app.deps import PrincipalDep, RequestIdDep
 from gateway.app.schemas.agent_workspace import AgentWorkspaceSettings, AgentWorkspaceUpdate
 from gateway.app.schemas.common import ApiResponse
-from gateway.app.schemas.llm import LlmSettingsResponse, LlmSettingsUpdate
+from gateway.app.schemas.llm import (
+    LlmSettingsResponse,
+    LlmSettingsUpdate,
+    LlmSlotTestRequest,
+    LlmSlotTestResult,
+)
 from gateway.app.services import agent_workspace_settings as aws
 from gateway.app.services import hub_catalog as hub
 from gateway.app.services import llm_settings as svc
@@ -54,6 +59,36 @@ async def put_llm_settings(
             detail={"code": "LLM_SETTINGS_INVALID", "message": str(exc)},
         ) from exc
     logger.info("llm settings updated by=%s", principal.subject)
+    return ApiResponse(ok=True, data=data, request_id=request_id)
+
+
+@router.post("/llm/test", response_model=ApiResponse[LlmSlotTestResult])
+async def post_llm_slot_test(
+    body: LlmSlotTestRequest,
+    principal: PrincipalDep,
+    request_id: RequestIdDep,
+) -> ApiResponse[LlmSlotTestResult]:
+    """Connectivity probe for one LLM slot (chat/embed/rerank)."""
+    _ = principal
+    try:
+        raw = svc.test_llm_slot(
+            body.slot_id,
+            api_key=body.api_key,
+            model=body.model,
+            base_url=body.base_url,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "LLM_TEST_INVALID", "message": str(exc)},
+        ) from exc
+    data = LlmSlotTestResult.model_validate(raw)
+    logger.info(
+        "llm slot test by=%s slot=%s ok=%s",
+        principal.subject,
+        body.slot_id,
+        data.ok,
+    )
     return ApiResponse(ok=True, data=data, request_id=request_id)
 
 

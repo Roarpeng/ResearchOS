@@ -20,7 +20,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agents.plc.tia.ir import Access, AccessScope, Block, BlockType, Network, PlcProject
+from agents.plc.tia.ir import (
+    Access,
+    AccessScope,
+    Block,
+    BlockType,
+    InterfaceSection,
+    Network,
+    PlcProject,
+    Variable,
+)
 
 #: Parts whose primary Access pin writes state (coils, assignments, resets)
 WRITE_PARTS = {
@@ -204,6 +213,27 @@ def _pin_source_access(network: Network, part_uuid: str, pin: str) -> Access | N
     return None
 
 
+def _call_params_from_templates(template_values: dict[str, str]) -> list[dict[str, str]]:
+    """Openness CallInfo Parameter → name / section / type (for interface enrichment)."""
+    params: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for key, section in template_values.items():
+        if not key.startswith("__sec__"):
+            continue
+        pname = key[7:].strip()
+        if not pname or pname in seen:
+            continue
+        seen.add(pname)
+        params.append(
+            {
+                "name": pname,
+                "section": (section or "").strip(),
+                "data_type": (template_values.get(f"__type__{pname}") or "").strip(),
+            }
+        )
+    return params
+
+
 def _network_block_refs(network: Network) -> list[tuple[str, dict[str, Any]]]:
     """Block calls from this network (FB/FC), with XML-derived evidence props.
 
@@ -218,12 +248,15 @@ def _network_block_refs(network: Network) -> list[tuple[str, dict[str, Any]]]:
             or part.template_values.get("calledBlock")
             or ""
         ).strip().strip('"')
+        call_params = _call_params_from_templates(part.template_values)
         props: dict[str, Any] = {
             "part_uid": part.uuid,
             "block_type": part.template_values.get("BlockType") or "",
             "instance_db": part.template_values.get("InstanceDB") or "",
             "evidence": "xml_call",
         }
+        if call_params:
+            props["call_params"] = call_params
         if called:
             if called not in seen:
                 seen.add(called)
@@ -242,6 +275,90 @@ def _network_block_refs(network: Network) -> list[tuple[str, dict[str, Any]]]:
                 props["instance_db"] = instance.root
                 refs.append((instance.root, props))
     return refs
+
+
+def _variable_node_id(block_name: str, section: str, var_name: str) -> str:
+    """Stable Variable id; include section so Input/Static homonyms do not collide."""
+    sec = (section or "").strip() or "_"
+    return f"Variable::{block_name}::{sec}::{var_name}"
+
+
+def _ensure_interface_variable(
+    kg: PlcKnowledgeGraph,
+    block_name: str,
+    *,
+    var_name: str,
+    section: str,
+    data_type: str = "",
+    comment: str = "",
+    inferred: bool = False,
+) -> str:
+    var_id = _variable_node_id(block_name, section, var_name)
+    if var_id in kg.nodes:
+        return var_id
+    props: dict[str, Any] = {
+        "name": var_name,
+        "section": section,
+        "data_type": data_type,
+        "comment": comment,
+    }
+    if inferred:
+        props["inferred_from"] = "call_site"
+    kg.add_node(var_id, "Variable", **props)
+    kg.add_edge(
+        f"Block::{block_name}",
+        var_id,
+        "HAS_INTERFACE",
+        section=section,
+        **({"evidence": "call_site_parameter"} if inferred else {}),
+    )
+    return var_id
+
+
+def _enrich_interface_from_call_params(
+    kg: PlcKnowledgeGraph,
+    project: PlcProject,
+    callee: str,
+    call_params: list[dict[str, str]],
+) -> None:
+    """Fill missing pins on callees (esp. interface-only / external) from CallInfo."""
+    if not call_params:
+        return
+    known = project.blocks.get(callee)
+    known_names = {v.name for v in known.interface} if known is not None else set()
+    for p in call_params:
+        pname = (p.get("name") or "").strip()
+        if not pname:
+            continue
+        if pname in known_names:
+            continue
+        section = (p.get("section") or "").strip() or "Input"
+        # Skip if any section already has this pin on the graph
+        existing = False
+        for sec_try in (section, "Input", "Output", "InOut", "Static", "_"):
+            if _variable_node_id(callee, sec_try, pname) in kg.nodes:
+                existing = True
+                break
+        if existing:
+            continue
+        _ensure_interface_variable(
+            kg,
+            callee,
+            var_name=pname,
+            section=section,
+            data_type=(p.get("data_type") or "").strip(),
+            inferred=True,
+        )
+        # Keep IR in sync for interface-only blocks that lack this pin
+        if known is not None and known.is_interface_only():
+            try:
+                sec_enum = InterfaceSection(section)
+            except ValueError:
+                sec_enum = InterfaceSection.INPUT
+            known.interface.append(
+                Variable(name=pname, section=sec_enum, data_type=(p.get("data_type") or "").strip())
+            )
+            known_names.add(pname)
 
 
 def _ensure_block_node(
@@ -430,20 +547,21 @@ def build_knowledge_graph(project: PlcProject) -> PlcKnowledgeGraph:
             block_type=block.block_type.value,
             language=block.programming_language,
             comment=block.header_comment,
+            protected=block.is_protected(),
+            interface_only=block.is_interface_only(),
+            body_available=block.has_program_body(),
         )
         kg.add_edge(project_id, block_id, "CONTAINS")
 
         for var in block.interface:
-            var_id = f"Variable::{block.name}::{var.name}"
-            kg.add_node(
-                var_id,
-                "Variable",
-                name=var.name,
+            _ensure_interface_variable(
+                kg,
+                block.name,
+                var_name=var.name,
                 section=var.section.value,
                 data_type=var.data_type,
                 comment=var.comment,
             )
-            kg.add_edge(block_id, var_id, "HAS_INTERFACE", section=var.section.value)
 
     # Networks / calls / IO / USES
     for block in project.blocks.values():
@@ -472,14 +590,31 @@ def build_knowledge_graph(project: PlcProject) -> PlcKnowledgeGraph:
                     callee,
                     block_type=callee_type,
                     external=callee not in project.blocks,
+                    protected=callee_known.is_protected() if callee_known else None,
+                    interface_only=callee_known.is_interface_only() if callee_known else None,
+                    body_available=callee_known.has_program_body() if callee_known else None,
                 )
+                edge_props = {
+                    k: v
+                    for k, v in call_props.items()
+                    if v and k != "call_params"
+                }
+                # Keep call_params even when list (truthy check above drops empty; list is ok)
+                if call_props.get("call_params"):
+                    edge_props["call_params"] = call_props["call_params"]
                 kg.add_edge(
                     block_id,
                     f"Block::{callee}",
                     "CALLS",
                     network=net_id,
                     seq=net_idx,
-                    **{k: v for k, v in call_props.items() if v},
+                    **edge_props,
+                )
+                _enrich_interface_from_call_params(
+                    kg,
+                    project,
+                    callee,
+                    list(call_props.get("call_params") or []),
                 )
                 # FB instance DB: USES + INSTANCE_OF
                 inst = str(call_props.get("instance_db") or "")

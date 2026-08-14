@@ -137,17 +137,26 @@ def format_openness_failure(
     )
 
 
-def openness_cli(
-    *cli_args: str,
-    timeout_s: int = 600,
-) -> dict[str, Any]:
-    """Run `TiaOpenness.Server --cli ...` and parse JSON stdout."""
+def _env_flag(name: str, *, default: bool = True) -> bool:
+    """Parse RESEARCHOS_* env flags; empty uses ``default``."""
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def skip_compile_enabled() -> bool:
+    """Default ON — pass ``--skip-compile`` unless RESEARCHOS_TIA_SKIP_COMPILE=0."""
+    return _env_flag("RESEARCHOS_TIA_SKIP_COMPILE", default=True)
+
+
+def _openness_command(*cli_args: str) -> tuple[list[str], str, bool]:
+    """Return (cmd, cwd, may_retry_without_nobuild)."""
     exe = find_openness_exe()
     csproj = openness_server_project()
     if exe is not None:
-        cmd = [str(exe), "--cli", *cli_args]
-        cwd = str(exe.parent)
-    elif csproj.is_file():
+        return [str(exe), "--cli", *cli_args], str(exe.parent), False
+    if csproj.is_file():
         cmd = [
             "dotnet",
             "run",
@@ -160,48 +169,18 @@ def openness_cli(
             "--cli",
             *cli_args,
         ]
-        # If no-build fails, retry with build
-        cwd = str(repo_root())
-    else:
-        raise FileNotFoundError(
-            "TiaOpenness.Server not found. Build tools/industrial-mcp/tia-openness "
-            "or set RESEARCHOS_TIA_OPENNESS_EXE."
-        )
-
-    completed = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout_s,
-        check=False,
-        cwd=cwd,
+        return cmd, str(repo_root()), True
+    raise FileNotFoundError(
+        "TiaOpenness.Server not found. Build tools/industrial-mcp/tia-openness "
+        "or set RESEARCHOS_TIA_OPENNESS_EXE."
     )
-    if completed.returncode != 0 and exe is None and "--no-build" in cmd:
-        cmd = [
-            "dotnet",
-            "run",
-            "--project",
-            str(csproj),
-            "-c",
-            "Release",
-            "--",
-            "--cli",
-            *cli_args,
-        ]
-        completed = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
-            cwd=cwd,
-        )
 
-    stdout = (completed.stdout or "").strip()
-    stderr = (completed.stderr or "").strip()
+
+def _payload_from_stdio(stdout: str, stderr: str, returncode: int) -> dict[str, Any]:
+    stdout = (stdout or "").strip()
+    stderr = (stderr or "").strip()
     payload: dict[str, Any]
     try:
-        # CLI prints a single JSON object on stdout
         line = stdout.splitlines()[-1] if stdout else "{}"
         payload = json.loads(line)
     except json.JSONDecodeError:
@@ -212,20 +191,146 @@ def openness_cli(
                 "message": stdout or stderr or "empty CLI output",
             },
         }
-
-    if completed.returncode != 0 and payload.get("ok") is not False:
+    if returncode != 0 and payload.get("ok") is not False:
         payload.setdefault("ok", False)
         payload.setdefault(
             "error",
             {
                 "code": "cli_exit",
-                "message": stderr or f"exit {completed.returncode}",
+                "message": stderr or f"exit {returncode}",
             },
         )
-    payload["_exit_code"] = completed.returncode
+    payload["_exit_code"] = returncode
     if stderr:
         payload["_stderr"] = stderr[-2000:]
     return payload
+
+
+def openness_cli(
+    *cli_args: str,
+    timeout_s: int = 600,
+) -> dict[str, Any]:
+    """Run `TiaOpenness.Server --cli ...` and parse JSON stdout."""
+    cmd, cwd, may_retry_build = _openness_command(*cli_args)
+    completed = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
+        check=False,
+        cwd=cwd,
+    )
+    if completed.returncode != 0 and may_retry_build and "--no-build" in cmd:
+        cmd = [a for a in cmd if a != "--no-build"]
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+            cwd=cwd,
+        )
+    return _payload_from_stdio(completed.stdout or "", completed.stderr or "", completed.returncode)
+
+
+def _popen_with_journal(
+    cmd: list[str],
+    cwd: str,
+    journal: Path,
+    on_export_event,
+    timeout_s: int,
+) -> dict[str, Any]:
+    """Run Openness CLI while draining ``_exported.jsonl`` into ``on_export_event``."""
+    import time
+
+    from agents.plc.tia.extract_stream import drain_export_journal
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+    )
+    offset = 0
+    deadline = time.monotonic() + timeout_s
+    try:
+        while proc.poll() is None:
+            if time.monotonic() > deadline:
+                proc.kill()
+                stdout, stderr = proc.communicate(timeout=10)
+                payload = _payload_from_stdio(stdout or "", stderr or "", proc.returncode or 1)
+                payload["ok"] = False
+                payload.setdefault(
+                    "error",
+                    {"code": "cli_timeout", "message": f"Openness CLI timed out after {timeout_s}s"},
+                )
+                return payload
+            offset = drain_export_journal(journal, offset, on_export_event)
+            time.sleep(0.05)
+        stdout, stderr = proc.communicate(timeout=15)
+    except Exception:
+        if proc.poll() is None:
+            proc.kill()
+        raise
+    drain_export_journal(journal, offset, on_export_event)
+    return _payload_from_stdio(stdout or "", stderr or "", proc.returncode or 0)
+
+
+def _merge_cli_phase_timings(
+    timings: dict[str, int],
+    result: dict[str, Any],
+) -> None:
+    """Lift compileMs/listMs/exportMs/openMs from CLI JSON into timings."""
+    export = result.get("export") if isinstance(result.get("export"), dict) else {}
+    project_info = result.get("project") if isinstance(result.get("project"), dict) else {}
+    for src, mapping in (
+        (export, {
+            "compileMs": "openness_compile_ms",
+            "exportMs": "openness_blocks_export_ms",
+            "listMs": "openness_list_ms",
+        }),
+        (project_info, {"openMs": "openness_open_ms"}),
+        (result, {
+            "openMs": "openness_open_ms",
+            "compileMs": "openness_compile_ms",
+            "listMs": "openness_list_ms",
+            "exportMs": "openness_blocks_export_ms",
+        }),
+    ):
+        if not isinstance(src, dict):
+            continue
+        for raw_key, out_key in mapping.items():
+            if raw_key in src and src[raw_key] is not None:
+                try:
+                    timings[out_key] = int(src[raw_key])
+                except (TypeError, ValueError):
+                    pass
+
+
+def _invoke_export_cli(
+    args: list[str],
+    *,
+    export_dir: Path,
+    timeout_s: int,
+    on_export_event,
+) -> dict[str, Any]:
+    """Blocking JSON CLI, or Popen + journal drain when ``on_export_event`` is set."""
+    if on_export_event is None:
+        return openness_cli(*args, timeout_s=timeout_s)
+    cmd, cwd, may_retry_build = _openness_command(*args)
+    journal = export_dir / "_exported.jsonl"
+    result = _popen_with_journal(cmd, cwd, journal, on_export_event, timeout_s)
+    if (
+        not result.get("ok")
+        and may_retry_build
+        and "--no-build" in cmd
+        and int(result.get("_exit_code") or 0) != 0
+    ):
+        on_export_event({"reset": True})
+        cmd = [a for a in cmd if a != "--no-build"]
+        result = _popen_with_journal(cmd, cwd, journal, on_export_event, timeout_s)
+    return result
 
 
 def export_project_via_openness_cli(
@@ -235,11 +340,24 @@ def export_project_via_openness_cli(
     tia_version: str = "",
     plc_name: str = "",
     timeout_s: int = 600,
-) -> tuple[Path, list[str]]:
-    """Export all blocks via C# Openness CLI; returns (export_dir, notes)."""
+    skip_compile: bool | None = None,
+    on_export_event=None,
+) -> tuple[Path, list[str], dict[str, int]]:
+    """Export all blocks via C# Openness CLI; returns (export_dir, notes, timings_ms).
+
+    When skip-compile is enabled (default via RESEARCHOS_TIA_SKIP_COMPILE=1), passes
+    ``--skip-compile``. On inconsistent-blocks failure, retries once with compile.
+
+    ``on_export_event`` receives each ``_exported.jsonl`` object while Export runs
+    so Python can parse XML in parallel with the still-serial Openness Export.
+    """
+    import time
+
     project = Path(project_path).expanduser().resolve()
     out = Path(export_dir).expanduser().resolve()
     out.mkdir(parents=True, exist_ok=True)
+
+    use_skip = skip_compile_enabled() if skip_compile is None else bool(skip_compile)
 
     args = [
         "export-project",
@@ -252,25 +370,86 @@ def export_project_via_openness_cli(
         args.extend(["--version", tia_version])
     if plc_name:
         args.extend(["--plc", plc_name])
+    if use_skip:
+        args.append("--skip-compile")
 
-    result = openness_cli(*args, timeout_s=timeout_s)
     notes: list[str] = []
+    if use_skip:
+        notes.append("Openness skip-compile enabled (RESEARCHOS_TIA_SKIP_COMPILE)")
+
+    t0 = time.monotonic()
+    result = _invoke_export_cli(
+        args, export_dir=out, timeout_s=timeout_s, on_export_event=on_export_event
+    )
+    wall_ms = int((time.monotonic() - t0) * 1000)
+
+    timings: dict[str, int] = {"openness_cli_ms": wall_ms}
+    if use_skip:
+        timings["openness_skip_compile_ms"] = wall_ms
+
+    failure_text = _payload_text(result)
+    retried_with_compile = False
+    if (
+        not result.get("ok")
+        and use_skip
+        and is_inconsistent_export_error(failure_text)
+    ):
+        notes.append(
+            "Openness skip-compile hit inconsistent blocks; "
+            "retrying once with compile enabled"
+        )
+        if on_export_event is not None:
+            on_export_event({"reset": True})
+        retry_args = [a for a in args if a != "--skip-compile"]
+        t1 = time.monotonic()
+        result = _invoke_export_cli(
+            retry_args,
+            export_dir=out,
+            timeout_s=timeout_s,
+            on_export_event=on_export_event,
+        )
+        retry_ms = int((time.monotonic() - t1) * 1000)
+        timings["openness_compile_retry_ms"] = retry_ms
+        timings["openness_cli_ms"] = wall_ms + retry_ms
+        retried_with_compile = True
+        wall_ms = wall_ms + retry_ms
+
+    _merge_cli_phase_timings(timings, result)
+
     export = result.get("export") if isinstance(result.get("export"), dict) else {}
     msg = str((export or {}).get("message") or "").strip()
     if msg:
         notes.append(msg)
-    # Prefer structured counts when present
     exported = (export or {}).get("exportedCount")
     failed = (export or {}).get("failedCount")
     if exported is not None or failed is not None:
         notes.append(
             f"Openness export counts: exported={exported or 0}, failed={failed or 0}"
         )
+    know_how = (export or {}).get("knowHowProtectedCount")
+    if know_how is not None:
+        notes.append(f"Openness know-how protected blocks: {know_how}")
+        try:
+            timings["openness_knowhow_count"] = int(know_how)
+        except (TypeError, ValueError):
+            pass
+    timing_bits = [
+        f"{k}={v}ms"
+        for k, v in timings.items()
+        if k != "openness_cli_ms"
+    ]
+    if timing_bits:
+        notes.append("Openness timings: " + ", ".join(timing_bits))
+    notes.append(f"Openness CLI wall={wall_ms}ms")
+    if retried_with_compile:
+        notes.append(
+            f"Openness compile retry wall={timings.get('openness_compile_retry_ms', 0)}ms"
+        )
     if not result.get("ok"):
         raise RuntimeError(
             format_openness_failure(result, project_path=project, action="export")
         )
-    return out, notes
+    return out, notes, timings
 
 
 def import_block_via_openness_cli(

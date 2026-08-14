@@ -600,13 +600,24 @@ def translate_block_to_scl(block: Block) -> str:
 def convert_project_to_scl(project: PlcProject) -> dict[str, str]:
     """Map block name -> SCL for every *non-protected* translatable block.
 
-    Know-how / password protected blocks are skipped (kept as original only).
+    Know-how / password protected blocks and interface-only exports (no body)
+    are skipped (kept as original only).
     """
     out: dict[str, str] = {}
-    for name, block in project.blocks.items():
-        if block.is_protected():
-            continue
-        out[name] = translate_block_to_scl(block)
+    items = [
+        (name, block)
+        for name, block in project.blocks.items()
+        if not (block.is_protected() or block.is_interface_only())
+    ]
+
+    def _one(item: tuple[str, Block]) -> tuple[str, str]:
+        name, block = item
+        return name, translate_block_to_scl(block)
+
+    from agents.plc.tia.parallel import map_parallel
+
+    for name, scl in map_parallel(_one, items, min_items=8):
+        out[name] = scl
     return out
 
 

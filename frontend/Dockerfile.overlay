@@ -1,0 +1,7 @@
+# Overlay: bake a host-built frontend/dist into the existing ResearchOS frontend image.
+# Use when Docker Hub is unreachable (no pull of node/nginx).
+# Build from repo root after: cd frontend && npm run build
+#   docker build -f frontend/Dockerfile.overlay -t researchos-frontend .
+
+FROM researchos-frontend:latest
+COPY frontend/dist /usr/share/nginx/html

@@ -166,8 +166,8 @@ ResearchOS/
 
 ```bat
 Start-ResearchOS.cmd
-:: .ap19 / 写回工程请用：
-Start-ResearchOS.cmd Hybrid
+:: .ap19 via host Gateway (frontend stays Docker nginx):
+Start-ResearchOS.cmd HostGateway
 Stop-ResearchOS.cmd
 ```
 

@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
+
+from fastapi import BackgroundTasks
 
 from gateway.app.services import knowledge_extract as kx
 from gateway.app.services import plc_jobs as plc
@@ -19,6 +22,8 @@ from gateway.app.services.runtime_client import RuntimeClient
 from gateway.app.services.store import new_task
 
 logger = logging.getLogger("researchos.gateway.chat")
+
+ScheduleIngest = Callable[[Callable[..., Any]], None]
 
 
 def _now() -> datetime:
@@ -52,24 +57,117 @@ def _assistant_from_plc(job: dict[str, Any]) -> str:
         head = f"{kind}解析失败。" if kind else "PLC 解析失败。"
         return f"{head}\n{err}"
 
+    status = str(job.get("status") or "")
+    if status in {"queued", "running"}:
+        return _pending_ingest_message(job)
+
     name = job.get("project_name") or job.get("id")
     blocks = job.get("blocks") or []
     summary = job.get("summary") or {}
-    notes = job.get("extraction_notes") or []
     kind, source_label = _plc_source_kind(job)
-    block_names = [b.get("name") for b in blocks if isinstance(b, dict) and b.get("name")]
-
-    lines: list[str] = [
-        f"已检测为{kind}：{source_label or name}",
+    head = (
+        f"已检测为{kind}：{source_label or name}\n"
         f"工程「{name}」· 程序块 {len(blocks)} 个"
-        + (f"（{_summary_brief(summary)}）" if summary else ""),
-    ]
-    if block_names:
-        lines.append(f"块：{', '.join(str(n) for n in block_names[:16])}")
-    if notes:
-        lines.extend(f"- {n}" for n in notes[:3])
-    lines.append("画布已更新；点击节点或 `@块名` 可查看功能。")
-    return "\n".join(lines)
+        + (f"（{_summary_brief(summary)}）" if summary else "")
+        + "\n画布已更新。可直接提问（将按问题检索知识图谱作答），或 `@块名` 深入单块。"
+    )
+    try:
+        from agents.plc.tia.chat_retrieve import answer_query_with_kg
+
+        brief = answer_query_with_kg(job, "本工程整体结构与主扫描调用关系是什么？")
+        return f"{head}\n\n{brief}"
+    except Exception:  # noqa: BLE001
+        return head
+
+
+def _pending_ingest_message(job: dict[str, Any]) -> str:
+    kind, source_label = _plc_source_kind(job)
+    label = source_label or job.get("project_name") or job.get("id")
+    status = job.get("status") or "queued"
+    return (
+        f"工程已接收，正在解析…\n"
+        f"已检测为{kind}：{label}\n"
+        f"作业 ID：{job['id']}（状态：{status}）\n"
+        f"解析完成后画布会自动更新，届时可直接提问。"
+    )
+
+
+def _replace_last_assistant_chat(job: dict[str, Any], content: str) -> None:
+    chat = job.get("chat") or []
+    for i in range(len(chat) - 1, -1, -1):
+        if isinstance(chat[i], dict) and chat[i].get("role") == "assistant":
+            chat[i]["content"] = content
+            job["chat"] = chat
+            job["updated_at"] = _now()
+            return
+    plc.append_chat_turn(job, role="assistant", content=content, block_name=None)
+
+
+def _ingest_and_refresh_welcome(job_id: str, task_id: str | None = None) -> None:
+    """Background ingest then refresh welcome chat + linked task canvas."""
+    try:
+        job = plc.run_ingest_job(job_id, publish_graph=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("async plc ingest failed job=%s: %s", job_id, exc)
+        job = plc.get_job(job_id)
+        if not job:
+            return
+
+    pending_q = ""
+    if task_id:
+        task0 = mem.store.tasks.get(task_id)
+        if task0:
+            pending_q = str((task0.get("result") or {}).get("pending_question") or "").strip()
+
+    welcome = _assistant_from_plc(job)
+    _replace_last_assistant_chat(job, welcome)
+    msg = welcome
+    if pending_q and job.get("status") == "ready":
+        plc.append_chat_turn(job, role="user", content=pending_q, block_name=None)
+        answer = plc.answer_block_chat(job, pending_q, None)
+        plc.append_chat_turn(job, role="assistant", content=answer, block_name=None)
+        msg = f"{welcome}\n\n——\n{answer}"
+
+    if not task_id:
+        return
+    task = mem.store.tasks.get(task_id)
+    if not task:
+        return
+    _link_plc_to_task(task, job, query=task.get("query") or "")
+    result = dict(task.get("result") or {})
+    result["assistant_message"] = msg
+    result.pop("pending_question", None)
+    task["result"] = result
+    _attach_canvas(
+        task,
+        user_text="",
+        assistant_text=msg,
+        job=job,
+    )
+    with mem.store._lock:
+        mem.store.tasks[task["id"]] = task
+
+
+def _schedule_plc_ingest(
+    *,
+    job_id: str,
+    task_id: str | None,
+    background: BackgroundTasks | None,
+    schedule_ingest: ScheduleIngest | None,
+) -> None:
+    """Queue ingest without blocking the chat HTTP response."""
+
+    def _run() -> None:
+        _ingest_and_refresh_welcome(job_id, task_id)
+
+    if schedule_ingest is not None:
+        schedule_ingest(_run)
+        return
+    if background is not None:
+        background.add_task(_run)
+        return
+    threading.Thread(target=_run, name=f"plc-ingest-{job_id}", daemon=True).start()
+    logger.warning("plc ingest scheduled via daemon thread job=%s (no BackgroundTasks)", job_id)
 
 
 def _summary_brief(summary: dict[str, Any]) -> str:
@@ -281,6 +379,8 @@ async def handle_chat_turn(
     block_name: str | None = None,
     canvas_edges_json: str | None = None,
     canvas_positions_json: str | None = None,
+    background: BackgroundTasks | None = None,
+    schedule_ingest: ScheduleIngest | None = None,
 ) -> dict[str, Any]:
     text = (message or "").strip()
     user_text = text  # keep original for PLC answers (no deep-dive wrapper echo)
@@ -318,9 +418,12 @@ async def handle_chat_turn(
                     created_by=principal_subject,
                     upload_filename=upload_filename,
                 )
-                plc.run_ingest_job(job["id"], publish_graph=True)
                 _link_plc_to_task(task, job, query=text or upload_filename)
-                msg = _assistant_from_plc(job)
+                msg = _pending_ingest_message(job)
+                task["result"] = {
+                    **(task.get("result") or {}),
+                    "assistant_message": msg,
+                }
                 plc.append_chat_turn(
                     job,
                     role="user",
@@ -337,6 +440,31 @@ async def handle_chat_turn(
                     positions=positions,
                     focus_node=focus_node,
                 )
+                with mem.store._lock:
+                    mem.store.tasks[task["id"]] = task
+                _schedule_plc_ingest(
+                    job_id=job["id"],
+                    task_id=task["id"],
+                    background=background,
+                    schedule_ingest=schedule_ingest,
+                )
+                return _pack(task, assistant_message=msg, route="plc", plc_job=job)
+
+            job_status = str(job.get("status") or "")
+            if job_status in {"queued", "running"}:
+                msg = (
+                    f"工程仍在解析中（状态：{job_status}），请稍候再提问。"
+                    f"作业 ID：{job['id']}"
+                )
+                plc.append_chat_turn(job, role="user", content=user_text, block_name=None)
+                plc.append_chat_turn(job, role="assistant", content=msg, block_name=None)
+                task["updated_at"] = _now()
+                task["result"] = {
+                    **(task.get("result") or {}),
+                    "route": "plc",
+                    "plc_job_id": job["id"],
+                    "assistant_message": msg,
+                }
                 with mem.store._lock:
                     mem.store.tasks[task["id"]] = task
                 return _pack(task, assistant_message=msg, route="plc", plc_job=job)
@@ -431,7 +559,6 @@ async def handle_chat_turn(
                 project_name="",
                 created_by=principal_subject,
             )
-        plc.run_ingest_job(job["id"], publish_graph=True)
         task = new_task(
             {
                 "query": text or upload_filename or job.get("project_name") or job["id"],
@@ -443,7 +570,11 @@ async def handle_chat_turn(
             }
         )
         _link_plc_to_task(task, job, query=task["query"])
-        msg = _assistant_from_plc(job)
+        msg = _pending_ingest_message(job)
+        task["result"] = {
+            **(task.get("result") or {}),
+            "assistant_message": msg,
+        }
         plc.append_chat_turn(
             job,
             role="user",
@@ -451,14 +582,12 @@ async def handle_chat_turn(
             block_name=None,
         )
         plc.append_chat_turn(job, role="assistant", content=msg, block_name=None)
-        if text and decision.path and text.replace(decision.path, "").strip():
-            q_only = text.replace(decision.path, "").strip()
-            if q_only and job.get("status") == "ready":
-                plc.append_chat_turn(job, role="user", content=q_only, block_name=None)
-                answer = plc.answer_block_chat(job, q_only, None)
-                plc.append_chat_turn(job, role="assistant", content=answer, block_name=None)
-                msg = f"{msg}\n\n——\n{answer}"
-                task["result"]["assistant_message"] = msg
+        # Path + extra question: deferred until ingest completes (frontend re-asks / polls).
+        pending_q = ""
+        if text and decision.path:
+            pending_q = text.replace(decision.path, "").strip()
+        if pending_q:
+            task["result"]["pending_question"] = pending_q
         _attach_canvas(
             task,
             user_text=message,
@@ -467,6 +596,12 @@ async def handle_chat_turn(
             user_edges=user_edges,
             positions=positions,
             focus_node=focus_node,
+        )
+        _schedule_plc_ingest(
+            job_id=job["id"],
+            task_id=task["id"],
+            background=background,
+            schedule_ingest=schedule_ingest,
         )
         return _pack(task, assistant_message=msg, route="plc", plc_job=job)
 

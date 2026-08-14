@@ -14,9 +14,13 @@ import {
   fetchTask,
   listResearchTasks,
   plcExportUrl,
+  plcZapUrl,
+  optimizePlcJob,
+  writebackPlcJob,
   postChatTurn,
   resumeTask,
   unwrapTask,
+  waitForPlcJob,
   type PlcJobDetail,
 } from "./api";
 import KnowledgeCanvas, {
@@ -118,6 +122,18 @@ function pretty(value: unknown): string {
 function titleFromQuery(q: string): string {
   const t = q.trim().replace(/\s+/g, " ");
   return t.length > 42 ? `${t.slice(0, 40)}…` : t || "未命名话题";
+}
+
+function formatPlcProgress(detail: PlcJobDetail): string {
+  const steps = detail.progress || [];
+  const running = [...steps].reverse().find((s) => s.status === "running");
+  const last = running || steps[steps.length - 1];
+  if (!last?.title) return `PLC ${detail.status || "…"}`;
+  const dur =
+    typeof last.duration_ms === "number" && last.status !== "running"
+      ? ` · ${last.duration_ms}ms`
+      : "";
+  return `${detail.status}: ${last.title}${dur}`;
 }
 
 function normalizeCanvas(raw: unknown): KnowledgeCanvasData {
@@ -418,13 +434,26 @@ export default function App() {
     ];
     blocks.slice(0, 120).forEach((b) => {
       const btype = String(b.type || "Block").toUpperCase();
-      const kind =
-        btype === "OB" ? "plc_ob" : btype === "DB" ? "plc_db" : "plc_block";
       const inst = String(b.instance_of || "").trim();
+      const kind =
+        btype === "OB"
+          ? "plc_ob"
+          : btype === "UDT"
+            ? "plc_udt"
+            : btype === "DB" && inst
+              ? "plc_instance"
+              : btype === "DB"
+                ? "plc_db"
+                : "plc_block";
       const bits = [btype];
       if (b.language) bits.push(String(b.language));
       if (b.networks != null) bits.push(`${b.networks} 网络`);
       if (inst) bits.push(`实例←${inst}`);
+      if (b.interface_only || (b.protected && !b.body_available)) {
+        bits.push("接口开放·程序体不可用");
+      } else if (b.protected) {
+        bits.push("Know-how 保护");
+      }
       nodes.push({
         id: `plc_b_${detail.id}_${b.name}`,
         label: b.name,
@@ -437,6 +466,8 @@ export default function App() {
           plc_job_id: detail.id,
           block_name: b.name,
           block_type: b.type,
+          instance_of: inst || undefined,
+          entity_kind: inst ? "instance" : "block",
           project: detail.project_name,
         },
       });
@@ -449,11 +480,24 @@ export default function App() {
       if (!name || known.has(name)) continue;
       known.add(name);
       const btype = String(props.block_type || "DB").toUpperCase();
+      const external = Boolean(props.external);
       nodes.push({
         id: `plc_b_${detail.id}_${name}`,
         label: name,
-        summary: `${btype} · 由依赖引用补全`,
-        kind: btype === "OB" ? "plc_ob" : btype === "DB" ? "plc_db" : "plc_block",
+        summary: external
+          ? `${btype} · 多实例/外部引用（图谱）`
+          : Boolean(props.interface_only)
+            ? `${btype} · 接口开放·程序体不可用`
+            : `${btype} · 由依赖引用补全`,
+        kind: external
+          ? "plc_instance"
+          : btype === "OB"
+            ? "plc_ob"
+            : btype === "UDT"
+              ? "plc_udt"
+              : btype === "DB"
+                ? "plc_db"
+                : "plc_block",
         x: 0,
         y: 0,
         source: {
@@ -461,14 +505,53 @@ export default function App() {
           plc_job_id: detail.id,
           block_name: name,
           block_type: btype,
+          entity_kind: external ? "instance" : "block",
+          instance_of: external
+            ? String(props.instance_of || props.InstanceOfName || "").trim() || undefined
+            : undefined,
           project: detail.project_name,
         },
       });
     }
+    // Tag tables as entry points (individual tags appear when a block is selected)
+    const tagTables = (detail.knowledge_graph?.nodes || []).filter(
+      (n) => String(n.type || "") === "TagTable",
+    );
+    const tagCountByTable = new Map<string, number>();
+    for (const e of detail.knowledge_graph?.edges || []) {
+      if (String(e.type || "") !== "CONTAINS") continue;
+      const src = String(e.source || "");
+      const tgt = String(e.target || "");
+      if (!src.startsWith("TagTable::") || !tgt.startsWith("Tag::")) continue;
+      const tname = src.slice("TagTable::".length);
+      tagCountByTable.set(tname, (tagCountByTable.get(tname) || 0) + 1);
+    }
+    tagTables.slice(0, 16).forEach((n, i) => {
+      const props = (n.props || {}) as Record<string, unknown>;
+      const name = String(props.name || String(n.id || "").split("::").pop() || `Tags${i}`);
+      if (known.has(name)) return;
+      known.add(name);
+      const count = tagCountByTable.get(name) || 0;
+      nodes.push({
+        id: `plc_tt_${detail.id}_${name}`,
+        label: name,
+        summary: count ? `标签表 · ${count} 个 Tag（点程序块查看 IO 子图）` : "标签表",
+        kind: "plc_tag",
+        x: 0,
+        y: 0,
+        source: {
+          type: "plc",
+          quote: name,
+          plc_job_id: detail.id,
+          project: detail.project_name,
+        },
+      });
+    });
     const byLabel = new Map<string, string>();
     nodes.forEach((n) => {
       byLabel.set(n.label, n.id);
       byLabel.set(`Block::${n.label}`, n.id);
+      if (n.kind === "plc_tag") byLabel.set(`TagTable::${n.label}`, n.id);
     });
     // Knowledge galaxy: CALLS / USES / INSTANCE_OF / DEPENDS_ON (full KG)
     const kgEdges = (detail.knowledge_graph?.edges || []) as Array<{
@@ -563,7 +646,18 @@ export default function App() {
         { id: "a", role: "assistant", content: assistant, at: Date.now() },
       ]);
       if (linked) {
-        const detail = await hydratePlc(linked);
+        let detail = await hydratePlc(linked);
+        if (detail.status !== "ready" && detail.status !== "failed") {
+          setStatus(formatPlcProgress(detail));
+          detail = await waitForPlcJob(linked, {
+            intervalMs: 1500,
+            onProgress: (d) => {
+              setPlcJob(d);
+              setStatus(formatPlcProgress(d));
+            },
+          });
+          setPlcJob(detail);
+        }
         if (detail.chat?.length) {
           const base = Date.now();
           setMessages(
@@ -576,7 +670,12 @@ export default function App() {
           );
         }
         // Always rebuild star from job so legacy grid canvases get fixed.
-        if (detail.status === "ready") applyCanvasFromPlcJob(detail);
+        if (detail.status === "ready") {
+          applyCanvasFromPlcJob(detail);
+          setStatus("ready");
+        } else if (detail.status === "failed") {
+          setStatus("failed");
+        }
       } else if (task.route !== "plc") {
         connectWs(topic.id);
       }
@@ -668,9 +767,6 @@ export default function App() {
       setActiveId(id);
       setStatus(String(task.status || ""));
       setInterrupts((task.interrupts as Record<string, unknown>[]) || []);
-      if (progressId) {
-        setMessages((prev) => prev.filter((m) => m.id !== progressId));
-      }
       pushMsg("assistant", turn.assistant_message || "");
       const linked = turn.plc_job_id || task.plc_job_id;
       // Node deep-dive / describe: keep current galaxy; only hydrate chat/job text.
@@ -678,15 +774,71 @@ export default function App() {
       if (!isNodeFocus || canvasGalaxyScore(canvas) === 0) {
         const applied = applyCanvasFromTask(task, turn.knowledge_canvas);
         if (linked) {
-          const detail = await hydratePlc(String(linked));
-          const hasGalaxy = canvasGalaxyScore(applied) > 0 || canvasGalaxyScore(canvas) > 0;
-          if (detail.status === "ready" && (!applied?.nodes.length || !hasGalaxy)) {
-            applyCanvasFromPlcJob(detail);
+          let detail = await hydratePlc(String(linked));
+          if (detail.status !== "ready" && detail.status !== "failed") {
+            detail = await waitForPlcJob(String(linked), {
+              intervalMs: 1500,
+              onProgress: (d) => {
+                setPlcJob(d);
+                const label = formatPlcProgress(d);
+                setStatus(label);
+                if (progressId) {
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === progressId ? { ...m, content: `正在解析 PLC 工程：${label}` } : m,
+                    ),
+                  );
+                }
+              },
+            });
+            setPlcJob(detail);
+            setPlcJobId(detail.id);
           }
-        } else if (turn.route === "research") connectWs(id);
+          if (progressId) {
+            setMessages((prev) => prev.filter((m) => m.id !== progressId));
+          }
+          if (detail.status === "failed") {
+            pushMsg("system", detail.error || "PLC 解析失败");
+            setStatus("failed");
+          } else if (detail.status === "ready") {
+            setStatus("ready");
+            const hasGalaxy = canvasGalaxyScore(applied) > 0 || canvasGalaxyScore(canvas) > 0;
+            if (!applied?.nodes.length || !hasGalaxy) {
+              applyCanvasFromPlcJob(detail);
+            }
+            const welcome = [...(detail.chat || [])]
+              .reverse()
+              .find((c) => c.role === "assistant")?.content;
+            if (welcome) {
+              setMessages((prev) => {
+                for (let i = prev.length - 1; i >= 0; i -= 1) {
+                  if (prev[i].role === "assistant") {
+                    const next = prev.slice();
+                    next[i] = { ...next[i], content: welcome };
+                    return next;
+                  }
+                }
+                return prev;
+              });
+            }
+          }
+        } else {
+          if (progressId) {
+            setMessages((prev) => prev.filter((m) => m.id !== progressId));
+          }
+          if (turn.route === "research") connectWs(id);
+        }
       } else if (linked) {
+        if (progressId) {
+          setMessages((prev) => prev.filter((m) => m.id !== progressId));
+        }
         await hydratePlc(String(linked));
-      } else if (turn.route === "research") connectWs(id);
+      } else {
+        if (progressId) {
+          setMessages((prev) => prev.filter((m) => m.id !== progressId));
+        }
+        if (turn.route === "research") connectWs(id);
+      }
       void refreshTopics();
     } catch (err) {
       if (progressId) {
@@ -738,7 +890,13 @@ export default function App() {
   async function onDeepDive(node: KnowledgeNode, question: string) {
     const block =
       node.source?.block_name ||
-      (node.kind === "plc_block" ? node.label : "") ||
+      (node.kind === "plc_block" ||
+      node.kind === "plc_ob" ||
+      node.kind === "plc_db" ||
+      node.kind === "plc_udt" ||
+      node.kind === "plc_instance"
+        ? node.label
+        : "") ||
       "";
     const q = question.trim();
     const message = block ? `@${block} ${q}` : q;
@@ -751,7 +909,91 @@ export default function App() {
   }
 
   async function onNodeDescribe(node: KnowledgeNode) {
-    await onDeepDive(node, "请描述这个功能块的作用、输入输出与主要逻辑");
+    const isInstance =
+      node.kind === "plc_instance" || node.source?.entity_kind === "instance";
+    await onDeepDive(
+      node,
+      isInstance
+        ? "请简述该实例的父块、类型块与接口；不要贴源码"
+        : "请简述该块作用、关键 IO 与调用关系；不要贴源码",
+    );
+  }
+
+  async function onOptimizePropose() {
+    if (!plcJobId || busy) return;
+    setBusy(true);
+    try {
+      const data = await optimizePlcJob(plcJobId, {
+        message: "优化工程逻辑并准备反写",
+      });
+      const detail = await hydratePlc(plcJobId);
+      const plan =
+        String(detail.optimize_plan || data.optimize_plan || "").trim() ||
+        "（无优化计划文本）";
+      const opsFromCs = detail.changeset?.ops;
+      const ops =
+        typeof data.ops === "number"
+          ? data.ops
+          : Array.isArray(opsFromCs)
+            ? opsFromCs.length
+            : 0;
+      pushMsg(
+        "assistant",
+        `### 优化提案（HITL）\n\n已生成 **${ops}** 条变更操作。审阅后可点「确认反写.zap」。\n\n${plan}`,
+      );
+      setStatus("optimize_proposed");
+    } catch (err) {
+      pushMsg("system", err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onConfirmWriteback() {
+    if (!plcJobId || busy) return;
+    let projectPath = String(plcJob?.project_path || "").trim();
+    if (!projectPath) {
+      const entered = window.prompt("请输入 TIA 工程路径（.ap19/.apxx）");
+      if (entered == null) return;
+      projectPath = entered.trim();
+      if (!projectPath) {
+        pushMsg("system", "需要工程路径才能确认反写");
+        return;
+      }
+    }
+    setBusy(true);
+    try {
+      const data = await writebackPlcJob(plcJobId, projectPath, {
+        archiveZap: true,
+      });
+      const detail = await hydratePlc(plcJobId);
+      const zap = String(
+        (detail.writeback as { zap_path?: string } | null)?.zap_path ||
+          data.zap_path ||
+          "",
+      );
+      if (zap) {
+        const name = String(zap).split(/[/\\]/).pop() || "archive.zap";
+        pushMsg(
+          "assistant",
+          `### 反写完成\n\n.zap 已归档：\`${zap}\`\n\n[${name}](${plcZapUrl(plcJobId)})`,
+        );
+      } else {
+        pushMsg(
+          "assistant",
+          `### 反写结果\n\n\`\`\`json\n${JSON.stringify(
+            { openness: data.openness, zap_archive: data.zap_archive || detail.writeback },
+            null,
+            2,
+          )}\n\`\`\``,
+        );
+      }
+      setStatus("writeback_done");
+    } catch (err) {
+      pushMsg("system", err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function onResume(resolution: string) {
@@ -932,6 +1174,40 @@ export default function App() {
                   ) : (
                     m.content
                   )}
+                  {m.role === "assistant" && /展开\s*SCL/.test(m.content) ? (
+                    <div className="chat-quick">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          const hit = m.content.match(/\*\*`([^`]+)`\*\*/);
+                          const block = hit?.[1] || null;
+                          void sendTurn({
+                            message: block ? `@${block} 展开 SCL` : "展开 SCL",
+                            blockName: block,
+                            displayUser: block ? `@${block} 展开 SCL` : "展开 SCL",
+                          });
+                        }}
+                      >
+                        展开完整 SCL
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          const hit = m.content.match(/\*\*`([^`]+)`\*\*/);
+                          const block = hit?.[1] || null;
+                          void sendTurn({
+                            message: block ? `@${block} 优化建议` : "优化建议",
+                            blockName: block,
+                            displayUser: block ? `@${block} 优化建议` : "优化建议",
+                          });
+                        }}
+                      >
+                        优化建议
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ))}
@@ -1025,11 +1301,45 @@ export default function App() {
         <section className="col canvas" aria-label="画布">
           <div className="col-head">
             <h2>画布</h2>
-            {plcJobId && plcJob?.export_ready ? (
-              <a className="ghost compact" href={plcExportUrl(plcJobId)} target="_blank" rel="noreferrer">
-                导出
-              </a>
-            ) : null}
+            <div className="col-head-actions">
+              {plcJobId && plcJob?.status === "ready" ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn-primary compact"
+                    disabled={busy}
+                    title="基于图谱生成安全优化提案"
+                    onClick={() => void onOptimizePropose()}
+                  >
+                    优化提案
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost compact"
+                    disabled={busy || !plcJob?.changeset}
+                    title="确认 changeset 并 Openness 反写归档 .zap"
+                    onClick={() => void onConfirmWriteback()}
+                  >
+                    确认反写.zap
+                  </button>
+                  {(plcJob?.writeback as { zap_path?: string } | null)?.zap_path ? (
+                    <a
+                      className="ghost compact"
+                      href={plcZapUrl(plcJobId)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      下载.zap
+                    </a>
+                  ) : null}
+                </>
+              ) : null}
+              {plcJobId && plcJob?.export_ready ? (
+                <a className="ghost compact" href={plcExportUrl(plcJobId)} target="_blank" rel="noreferrer">
+                  导出
+                </a>
+              ) : null}
+            </div>
           </div>
           <div className="canvas-body canvas-kg">
             <KnowledgeCanvas
@@ -1057,6 +1367,7 @@ export default function App() {
                     }
                   : null
               }
+              knowledgeGraph={plcJob?.knowledge_graph || null}
               onChange={setCanvas}
               onDeepDive={onDeepDive}
               onNodeDescribe={onNodeDescribe}

@@ -1,13 +1,21 @@
-const envBase = import.meta.env.VITE_GATEWAY_URL as string | undefined;
+const rawGateway = import.meta.env.VITE_GATEWAY_URL as string | undefined;
 
-/** Gateway base URL. Dev proxy uses relative `/api` when unset. */
+/**
+ * Gateway base URL.
+ * - Dev / Docker nginx: empty → same-origin `/api` (Vite or nginx proxy).
+ * - Explicit VITE_GATEWAY_URL (including "") wins; only fall back to localhost
+ *   when the env var is truly unset at build time.
+ */
 export const GATEWAY_BASE =
-  envBase?.replace(/\/$/, "") ||
-  (import.meta.env.DEV ? "" : "http://localhost:8000");
+  rawGateway === undefined
+    ? import.meta.env.DEV
+      ? ""
+      : "http://localhost:8000"
+    : String(rawGateway).replace(/\/$/, "");
 
 export const WS_BASE = GATEWAY_BASE
   ? GATEWAY_BASE.replace(/^http/, "ws")
-  : (import.meta.env.DEV ? "ws://localhost:8000" : "ws://localhost:8000");
+  : "ws://localhost:8000";
 
 export type TaskCreateResponse = {
   ok?: boolean;
@@ -314,6 +322,7 @@ export type PlcJobSummary = {
   status: string;
   source_type: string;
   source_path?: string | null;
+  project_path?: string | null;
   project_name?: string;
   summary?: Record<string, unknown>;
   error?: string | null;
@@ -322,7 +331,13 @@ export type PlcJobSummary = {
 
 export type PlcJobDetail = PlcJobSummary & {
   extraction_notes?: string[];
-  progress?: Array<{ step?: string; title?: string; detail?: string; status?: string }>;
+  progress?: Array<{
+    step?: string;
+    title?: string;
+    detail?: string;
+    status?: string;
+    duration_ms?: number;
+  }>;
   logic_graph?: {
     nodes?: Array<Record<string, unknown>>;
     edges?: Array<{
@@ -347,11 +362,19 @@ export type PlcJobDetail = PlcJobSummary & {
     members?: string[];
     inputs?: string[];
     outputs?: string[];
+    inouts?: string[];
+    protected?: boolean;
+    interface_only?: boolean;
+    body_available?: boolean;
   }>;
   chat?: Array<{ role: string; content: string; block_name?: string | null }>;
   report?: string;
   changeset?: Record<string, unknown> | null;
   writeback?: Record<string, unknown> | null;
+  optimize_plan?: string;
+  project_path?: string | null;
+  export_ready?: boolean;
+  export_dir?: string | null;
 };
 
 async function parseJson<T>(res: Response): Promise<T> {
@@ -406,6 +429,45 @@ export async function fetchPlcJob(jobId: string) {
     headers: { Accept: "application/json" },
   });
   return parseJson<PlcJobDetail>(res);
+}
+
+/** Poll PLC job until ready/failed. Default interval 1.5s. */
+export async function waitForPlcJob(
+  jobId: string,
+  options?: {
+    intervalMs?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    onProgress?: (detail: PlcJobDetail) => void;
+  },
+): Promise<PlcJobDetail> {
+  const intervalMs = options?.intervalMs ?? 1500;
+  const timeoutMs = options?.timeoutMs ?? 600_000;
+  const start = Date.now();
+  for (;;) {
+    if (options?.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+    const detail = await fetchPlcJob(jobId);
+    options?.onProgress?.(detail);
+    if (detail.status === "ready" || detail.status === "failed") {
+      return detail;
+    }
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`PLC 解析超时（${jobId}）`);
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(), intervalMs);
+      options?.signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new DOMException("Aborted", "AbortError"));
+        },
+        { once: true },
+      );
+    });
+  }
 }
 
 export async function listPlcJobs() {
@@ -479,12 +541,32 @@ export async function proposePlcChanges(
   return parseJson<Record<string, unknown>>(res);
 }
 
+export async function optimizePlcJob(
+  jobId: string,
+  options?: { blockName?: string; message?: string },
+) {
+  const res = await fetch(`${GATEWAY_BASE}/api/v1/plc/jobs/${jobId}/optimize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({
+      block_name: options?.blockName || null,
+      message: options?.message || "优化工程逻辑并准备反写",
+    }),
+  });
+  return parseJson<{
+    changeset?: Record<string, unknown>;
+    optimize_plan?: string;
+    ops?: number;
+  }>(res);
+}
+
 export async function writebackPlcJob(
   jobId: string,
-  projectPath: string,
+  projectPath?: string | null,
   options?: {
     plcName?: string;
     executeOpennessImport?: boolean;
+    archiveZap?: boolean;
     xmlPaths?: string[];
   },
 ) {
@@ -492,10 +574,11 @@ export async function writebackPlcJob(
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({
-      project_path: projectPath,
+      project_path: projectPath || null,
       plc_name: options?.plcName || "",
       accept_changeset: true,
       execute_openness_import: options?.executeOpennessImport ?? true,
+      archive_zap: options?.archiveZap ?? true,
       xml_paths: options?.xmlPaths || [],
     }),
   });
@@ -504,6 +587,10 @@ export async function writebackPlcJob(
 
 export function plcExportUrl(jobId: string) {
   return `${GATEWAY_BASE}/api/v1/plc/jobs/${jobId}/export`;
+}
+
+export function plcZapUrl(jobId: string) {
+  return `${GATEWAY_BASE}/api/v1/plc/jobs/${jobId}/zap`;
 }
 
 /* ---- LLM / Agent model settings ---- */
@@ -526,6 +613,8 @@ export type LlmSlotStatus = {
   base_url?: string;
   default_model?: string;
   default_base_url?: string;
+  primary?: boolean;
+  removable?: boolean;
   env_var?: string;
 };
 
@@ -564,6 +653,8 @@ export async function updateLlmSettings(body: {
   slots?: Record<string, { api_key?: string; model?: string; base_url?: string }>;
   providers?: Record<string, { api_key?: string; model?: string; base_url?: string }>;
   provider_keys?: Record<string, string>;
+  add_slot?: "chat" | "embed" | "rerank";
+  remove_slot?: string;
 }) {
   const res = await fetch(`${GATEWAY_BASE}/api/v1/settings/llm`, {
     method: "PUT",
@@ -571,6 +662,31 @@ export async function updateLlmSettings(body: {
     body: JSON.stringify(body),
   });
   return parseJson<LlmSettings>(res);
+}
+
+export type LlmSlotTestResult = {
+  ok: boolean;
+  slot_id: string;
+  kind: string;
+  model?: string;
+  base_url?: string;
+  latency_ms?: number;
+  message: string;
+  detail?: string | null;
+};
+
+export async function testLlmSlot(body: {
+  slot_id: string;
+  api_key?: string;
+  model?: string;
+  base_url?: string;
+}) {
+  const res = await fetch(`${GATEWAY_BASE}/api/v1/settings/llm/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJson<LlmSlotTestResult>(res);
 }
 
 export type KnowledgeDocument = {
@@ -690,6 +806,7 @@ export type KnowledgeStats = {
     title?: string | null;
     filename?: string | null;
     status?: string;
+    chunk_count?: number;
   }>;
   channels?: Record<string, boolean>;
 };
@@ -716,7 +833,40 @@ export async function rebuildKnowledgeSpace(spaceId: string) {
   return parseJson<{ ok: boolean; chunk_count: number; warnings?: string[] }>(res);
 }
 
-export async function searchKnowledge(query: string, spaceIds?: string[], topK = 6) {
+export async function fetchKnowledgeChunks(spaceId: string, docId?: string, limit = 80) {
+  const q = new URLSearchParams();
+  if (docId) q.set("doc_id", docId);
+  q.set("limit", String(limit));
+  const res = await fetch(
+    `${GATEWAY_BASE}/api/v1/knowledge/spaces/${spaceId}/chunks?${q.toString()}`,
+    { headers: { Accept: "application/json" } },
+  );
+  return parseJson<{
+    space_id?: string;
+    doc_id?: string | null;
+    count: number;
+    chunks: KnowledgeChunk[];
+  }>(res);
+}
+
+export type KnowledgeChunk = {
+  chunk_id: string;
+  doc_id?: string;
+  source_file?: string;
+  section_type?: string;
+  text: string;
+  chars?: number;
+  has_vector?: boolean;
+  dim?: number;
+  vector_preview?: number[];
+};
+
+export async function searchKnowledge(
+  query: string,
+  spaceIds?: string[],
+  topK = 6,
+  mode: "hybrid" | "vector" = "hybrid",
+) {
   const res = await fetch(`${GATEWAY_BASE}/api/v1/knowledge/search`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -724,12 +874,19 @@ export async function searchKnowledge(query: string, spaceIds?: string[], topK =
       query,
       knowledge_space_ids: spaceIds || [],
       top_k: topK,
-      mode: "hybrid",
+      mode,
     }),
   });
   return parseJson<{
     query: string;
-    hits: Array<{ citation_id: string; score: number; text: string; source_id: string }>;
+    hits: Array<{
+      citation_id: string;
+      score: number;
+      text: string;
+      source_id: string;
+      metadata?: { channels?: string[]; chunk_id?: string };
+    }>;
+    diagnostics?: { channel_hits?: Record<string, number> };
     message?: string;
   }>(res);
 }

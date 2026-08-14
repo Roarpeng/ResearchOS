@@ -109,6 +109,31 @@ async def space_stats(
     )
 
 
+class ChunkListResponse(BaseModel):
+    space_id: str | None = None
+    doc_id: str | None = None
+    count: int = 0
+    chunks: list[dict] = Field(default_factory=list)
+
+
+@router.get("/spaces/{kb_id}/chunks", response_model=ApiResponse[ChunkListResponse])
+async def space_chunks(
+    kb_id: str,
+    principal: PrincipalDep,
+    request_id: RequestIdDep,
+    doc_id: str | None = None,
+    limit: int = 80,
+) -> ApiResponse[ChunkListResponse]:
+    _ = principal
+    if kb_id not in mem.store.spaces:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND_SPACE", "message": "Knowledge space not found"},
+        )
+    data = ksvc.list_chunks(kb_id, doc_id=doc_id or None, limit=limit)
+    return ApiResponse(ok=True, data=ChunkListResponse.model_validate(data), request_id=request_id)
+
+
 @router.get("/spaces/{kb_id}/graph", response_model=ApiResponse[dict])
 async def space_graph(
     kb_id: str,
@@ -253,6 +278,7 @@ async def search(
             body.query,
             knowledge_space_ids=body.knowledge_space_ids or None,
             top_k=body.top_k,
+            mode=body.mode or "hybrid",
         )
         passages = pack.get("passages") or []
         diagnostics = pack.get("diagnostics") or {}
@@ -273,7 +299,11 @@ async def search(
                     },
                 )
             )
-        message = f"retrieved {len(hits)} passages via hybrid RRF"
+        message = (
+            f"retrieved {len(hits)} passages via vector"
+            if (pack.get("mode") or body.mode) == "vector"
+            else f"retrieved {len(hits)} passages via hybrid RRF"
+        )
         logger.info("search query=%r hits=%d", body.query[:80], len(hits))
     except ImportError:
         message = "knowledge_pipeline_not_available"

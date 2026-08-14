@@ -1,0 +1,10 @@
+# Overlay when Gateway runs on the Windows host (Openness CLI).
+# nginx proxies /api to hostname "gateway"; map it to the Docker host.
+# !reset drops depends_on:gateway so compose will not recreate/start the
+# container Gateway (host uvicorn owns :8000).
+services:
+  frontend:
+    extra_hosts:
+      - "gateway:host-gateway"
+    depends_on: !reset []
+

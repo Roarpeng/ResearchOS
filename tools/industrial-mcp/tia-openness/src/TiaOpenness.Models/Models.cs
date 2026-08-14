@@ -116,6 +116,9 @@ public sealed class BlockInfo
 
     [JsonPropertyName("number")]
     public int? Number { get; set; }
+
+    [JsonPropertyName("knowHowProtected")]
+    public bool KnowHowProtected { get; set; }
 }
 
 public sealed class ListBlocksResult
@@ -158,6 +161,18 @@ public sealed class ExportBlockResult
 
     [JsonPropertyName("failedCount")]
     public int? FailedCount { get; set; }
+
+    [JsonPropertyName("compileMs")]
+    public long? CompileMs { get; set; }
+
+    [JsonPropertyName("listMs")]
+    public long? ListMs { get; set; }
+
+    [JsonPropertyName("exportMs")]
+    public long? ExportMs { get; set; }
+
+    [JsonPropertyName("knowHowProtectedCount")]
+    public int? KnowHowProtectedCount { get; set; }
 
     [JsonPropertyName("message")]
     public string? Message { get; set; }

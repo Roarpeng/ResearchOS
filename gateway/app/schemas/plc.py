@@ -98,12 +98,30 @@ class PlcJobDetail(PlcJobSummary):
     blocks: list[dict[str, Any]] = Field(default_factory=list)
     changeset: dict[str, Any] | None = None
     writeback: dict[str, Any] | None = None
+    optimize_plan: str = ""
     source_xmls: list[str] = Field(default_factory=list)
+    timings: dict[str, int] = Field(
+        default_factory=dict,
+        description="Ingest stage wall-clock timings in milliseconds",
+    )
 
 
 class PlcProposeChangeRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
     block_name: str | None = None
+
+
+class PlcOptimizeRequest(BaseModel):
+    """Evidence-gated optimization proposal (safe annotate/comment/XML stage)."""
+
+    block_name: str | None = Field(
+        default=None,
+        description="Optional focus block; project-wide dead-block scan always runs",
+    )
+    message: str = Field(
+        default="优化工程逻辑并准备反写",
+        max_length=4000,
+    )
 
 
 class PlcWritebackRequest(BaseModel):

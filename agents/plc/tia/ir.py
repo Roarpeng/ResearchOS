@@ -238,6 +238,24 @@ class Block:
         blob = f"{self.header_comment} {self.source_text}".lower()
         return "know-how" in blob or "knowhow protect" in blob
 
+    def has_program_body(self) -> bool:
+        """True when networks or source text are present (export includes logic)."""
+        if self.networks:
+            return True
+        return bool((self.source_text or "").strip())
+
+    def is_interface_only(self) -> bool:
+        """FB/FC with open interface but no program body (typical Know-how export).
+
+        Siemens often exports Interface members while omitting CompileUnit/SCL body.
+        ``KnowHowProtection`` may be absent from XML even when the body is locked.
+        """
+        if self.block_type not in {BlockType.FB, BlockType.FC}:
+            return False
+        if self.has_program_body():
+            return False
+        return bool(self.interface)
+
 
 @dataclass
 class Tag:

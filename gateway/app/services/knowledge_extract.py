@@ -158,12 +158,14 @@ def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> li
             return 2
         return 1
 
-    def _kind_for(btype: str) -> str:
+    def _kind_for(btype: str, instance_of: str = "") -> str:
         t = (btype or "").upper()
         if t == "OB":
             return "plc_ob"
+        if t == "UDT":
+            return "plc_udt"
         if t == "DB":
-            return "plc_db"
+            return "plc_instance" if instance_of else "plc_db"
         return "plc_block"
 
     by_ring: dict[int, list[dict[str, Any]]] = {0: [], 1: [], 2: []}
@@ -196,7 +198,7 @@ def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> li
                     "id": _nid("plc", f"{job_id}:{name}"),
                     "label": name,
                     "summary": summary[:280],
-                    "kind": _kind_for(btype),
+                    "kind": _kind_for(btype, inst),
                     "x": x,
                     "y": y,
                     "source": {
@@ -205,6 +207,7 @@ def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> li
                         "block_name": name,
                         "block_type": btype,
                         "instance_of": inst or None,
+                        "entity_kind": "instance" if inst else "block",
                         "project": project,
                         "path": job.get("source_path") or job.get("project_path"),
                         "task_id": task_id,
@@ -226,15 +229,29 @@ def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> li
             for n in (job.get("knowledge_graph") or {}).get("nodes") or []
             if n.get("type") == "TagTable"
         ]
-    for i, n in enumerate(tag_nodes[:12]):
+    tag_counts: dict[str, int] = {}
+    for e in (job.get("knowledge_graph") or {}).get("edges") or []:
+        if str(e.get("type") or "") != "CONTAINS":
+            continue
+        src = str(e.get("source") or "")
+        tgt = str(e.get("target") or "")
+        if src.startswith("TagTable::") and tgt.startswith("Tag::"):
+            tname = src.split("::", 1)[-1]
+            tag_counts[tname] = tag_counts.get(tname, 0) + 1
+    for i, n in enumerate(tag_nodes[:16]):
         props = n.get("props") or {}
         name = str(props.get("name") or n.get("label") or n.get("id") or "Tags")
         x, y = _place_star(i, max(len(tag_nodes), 1), ring=3)
+        count = tag_counts.get(name, 0)
         nodes.append(
             {
                 "id": _nid("plc", f"{job_id}:tag:{name}"),
                 "label": name,
-                "summary": "Tag table",
+                "summary": (
+                    f"标签表 · {count} 个 Tag（点程序块查看 IO 子图）"
+                    if count
+                    else "标签表（点程序块查看 IO 子图）"
+                ),
                 "kind": "plc_tag",
                 "x": x,
                 "y": y,
@@ -264,6 +281,7 @@ def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> li
         if not name or name in known_names:
             continue
         btype = str(props.get("block_type") or "DB")
+        external = bool(props.get("external"))
         x, y = _place_star(extra_i, max(len(extra_blocks), 1), ring=2)
         extra_i += 1
         known_names.add(name)
@@ -271,8 +289,12 @@ def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> li
             {
                 "id": _nid("plc", f"{job_id}:{name}"),
                 "label": name,
-                "summary": f"{btype} · 由依赖引用补全",
-                "kind": _kind_for(btype),
+                "summary": (
+                    f"{btype} · 多实例/外部引用（图谱）"
+                    if external
+                    else f"{btype} · 由依赖引用补全"
+                ),
+                "kind": "plc_instance" if external else _kind_for(btype),
                 "x": x,
                 "y": y,
                 "source": {
@@ -280,6 +302,11 @@ def nodes_from_plc_job(job: dict[str, Any], *, task_id: str, turn_id: str) -> li
                     "quote": name,
                     "block_name": name,
                     "block_type": btype,
+                    "entity_kind": "instance" if external else "block",
+                    "instance_of": (
+                        str(props.get("instance_of") or props.get("InstanceOfName") or "").strip()
+                        or None
+                    ),
                     "project": project,
                     "task_id": task_id,
                     "turn_id": turn_id,

@@ -4,7 +4,9 @@ Local data plane + LiteLLM + Gateway skeleton.
 
 ## 一键启动（Windows）
 
-仓库根目录双击或命令行：
+**拓扑约定：** 除 **TIA Openness CLI（必须 Windows）** 外，前端 nginx、Gateway、数据面全部跑 Docker。
+
+仓库根目录双击或命令行（`.cmd` 为 ASCII，避免中文 Windows 控制台乱码）：
 
 ```bat
 Start-ResearchOS.cmd
@@ -12,24 +14,29 @@ Start-ResearchOS.cmd
 
 | 命令 | 行为 |
 |------|------|
-| `Start-ResearchOS.cmd` | 启动 Docker Desktop（若未开）→ `compose --profile plc up` → 构建/校验 **TIA Openness** CLI |
-| `Start-ResearchOS.cmd Hybrid` | Docker **仅数据面** + 本机 Gateway/Frontend + Openness（推荐 `.ap19` / 写回） |
+| `Start-ResearchOS.cmd` | Docker 全栈（**nginx 前端** + gateway + 数据面）；每次把当前 `frontend/` 打进镜像；准备 Windows Openness CLI |
+| `Start-ResearchOS.cmd HostGateway` | 同上，但 Gateway 改本机进程以便调用 Openness 处理 `.ap19`（前端仍 Docker nginx） |
+| `Start-ResearchOS.cmd Build` | 强制整栈 `docker compose --build`（需能解析 `auth.docker.io`） |
 | `Stop-ResearchOS.cmd` | 停止宿主进程 + `docker compose down` |
 
 PowerShell 等价：
 
 ```powershell
 .\scripts\Start-ResearchOS.ps1
-.\scripts\Start-ResearchOS.ps1 -Mode Hybrid
+.\scripts\Start-ResearchOS.ps1 -HostGateway
+.\scripts\Start-ResearchOS.ps1 -Build
 .\scripts\Stop-ResearchOS.ps1
 ```
 
-常用开关：`-SkipDocker` / `-SkipOpenness` / `-NoBuild`。
+常用开关：`-SkipDocker` / `-SkipOpenness` / `-Build` / `-NoBuild`（跳过 frontend 镜像重建）/ `-HostGateway`。  
+Full 启动会本机 `npm run build` + overlay 进 `researchos-frontend`（不依赖 Docker Hub 拉 node/nginx）。  
+若本机已有镜像但 Docker Hub DNS 失败，勿加 `-Build`；脚本在 `-Build` 失败时也会自动回退到已有镜像。
 
-Openness 为按需 CLI（非常驻守护）；脚本会写入 `RESEARCHOS_TIA_OPENNESS_EXE`，Hybrid 下宿主 Gateway 使用 `RESEARCHOS_TIA_OPENNESS=cli`。  
+Openness 为按需 Windows CLI（非常驻守护）；脚本会写入 `RESEARCHOS_TIA_OPENNESS_EXE`。  
+Linux 容器内 **无法** 执行该 exe：日常用上传 `.zap` / SimaticML；需要 Gateway 直接 Openness 时用 `HostGateway`。  
 日志与 PID：`.researchos/logs`、`.researchos/run`。
 
-访问：Frontend http://localhost:5173 · Gateway http://localhost:8000/api/v1/health/live
+访问：Frontend http://localhost:5173（Docker nginx） · Gateway http://localhost:8000/api/v1/health/live
 
 ## Quick start（手动）
 

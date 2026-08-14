@@ -26,6 +26,30 @@ public class BlockTypeMappingTests
     {
         Assert.Equal("OB", BlockService.MapBlockType("SomethingElse", "OB100"));
     }
+
+    [Theory]
+    [InlineData("OB", 0)]
+    [InlineData("FB", 1)]
+    [InlineData("FC", 1)]
+    [InlineData("DB", 2)]
+    [InlineData("OTHER", 3)]
+    public void ExportRank_Orders_ObThenFbFcThenDb(string type, int rank)
+    {
+        Assert.Equal(rank, BlockService.ExportRank(type));
+    }
+
+    [Fact]
+    public void IsKnowHowProtected_ReadsBoolProperty()
+    {
+        Assert.True(BlockService.IsKnowHowProtected(new FakeKnowHowBlock { IsKnowHowProtected = true }));
+        Assert.False(BlockService.IsKnowHowProtected(new FakeKnowHowBlock { IsKnowHowProtected = false }));
+        Assert.False(BlockService.IsKnowHowProtected(new object()));
+    }
+
+    private sealed class FakeKnowHowBlock
+    {
+        public bool IsKnowHowProtected { get; set; }
+    }
 }
 
 public class TiaStatusTests
