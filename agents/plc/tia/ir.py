@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 
 class BlockType(StrEnum):
@@ -286,7 +287,7 @@ class Block:
 
 @dataclass
 class HardwareDevice:
-    """Best-effort device / rack / Profinet row from Openness HW XML."""
+    """Best-effort device / rack / Profinet row from Openness HW XML / AML."""
 
     name: str
     device_type: str = ""
@@ -294,6 +295,10 @@ class HardwareDevice:
     slot: str = ""
     comment: str = ""
     source_file: str = ""
+    failsafe: bool = False
+    rack: str = ""
+    modules: list[str] = field(default_factory=list)
+    subnets: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -311,6 +316,80 @@ class TagTable:
 
 
 @dataclass
+class WatchEntry:
+    name: str = ""
+    address: str = ""
+    tag: str = ""
+    comment: str = ""
+
+
+@dataclass
+class WatchTable:
+    name: str
+    kind: str = "watch"  # watch | force
+    entries: list[WatchEntry] = field(default_factory=list)
+    source_file: str = ""
+
+
+@dataclass
+class TechnologyObject:
+    name: str
+    to_type: str = ""
+    version: str = ""
+    parameters: dict[str, str] = field(default_factory=dict)
+    source_file: str = ""
+
+
+@dataclass
+class AlarmObject:
+    name: str
+    kind: str = ""  # text_list | class | instance | supervision | prodiag
+    texts: list[str] = field(default_factory=list)
+    source_file: str = ""
+
+
+@dataclass
+class CfcChart:
+    name: str
+    folder: str = ""
+    blocks: list[str] = field(default_factory=list)
+    wires: list[str] = field(default_factory=list)
+    password_protected: bool = False
+    source_file: str = ""
+
+
+@dataclass
+class SafetyUnitInfo:
+    name: str
+    failsafe: bool = True
+    supervisions: list[str] = field(default_factory=list)
+    source_file: str = ""
+    skipped_reason: str = ""
+
+
+@dataclass
+class HmiScreen:
+    name: str
+    folder: str = ""
+    kind: str = "screen"  # screen | template | popup | slidein | faceplate | permanent
+    linked_tags: list[str] = field(default_factory=list)
+    source_file: str = ""
+
+
+@dataclass
+class HmiDevice:
+    name: str
+    kind: str = "hmi"  # hmi | hmi_unified
+    tag_tables: dict[str, TagTable] = field(default_factory=dict)
+    scripts: list[str] = field(default_factory=list)
+    text_lists: list[str] = field(default_factory=list)
+    graphic_lists: list[str] = field(default_factory=list)
+    connections: list[str] = field(default_factory=list)
+    screens: list[HmiScreen] = field(default_factory=list)
+    source_file: str = ""
+
+
+@dataclass
 class PlcProject:
     """Top-level PLC-IR container."""
 
@@ -321,6 +400,17 @@ class PlcProject:
     tag_tables: dict[str, TagTable] = field(default_factory=dict)
     extraction_notes: list[str] = field(default_factory=list)
     hardware: list[HardwareDevice] = field(default_factory=list)
+    watch_tables: dict[str, WatchTable] = field(default_factory=dict)
+    force_tables: dict[str, WatchTable] = field(default_factory=dict)
+    technology_objects: list[TechnologyObject] = field(default_factory=list)
+    alarms: list[AlarmObject] = field(default_factory=list)
+    prodiag: list[AlarmObject] = field(default_factory=list)
+    cfc_charts: list[CfcChart] = field(default_factory=list)
+    safety_units: list[SafetyUnitInfo] = field(default_factory=list)
+    hmi_devices: list[HmiDevice] = field(default_factory=list)
+    opcua_nodes: list[str] = field(default_factory=list)
+    project_texts: dict[str, str] = field(default_factory=dict)
+    export_manifest: dict[str, Any] = field(default_factory=dict)
 
     def add_block(self, block: Block) -> None:
         self.blocks[block.name] = block
@@ -333,4 +423,13 @@ class PlcProject:
         counts["Networks"] = sum(len(b.networks) for b in self.blocks.values())
         counts["SafetyBlocks"] = sum(1 for b in self.blocks.values() if b.is_safety)
         counts["Hardware"] = len(self.hardware)
+        counts["WatchTables"] = len(self.watch_tables)
+        counts["ForceTables"] = len(self.force_tables)
+        counts["TechnologyObjects"] = len(self.technology_objects)
+        counts["Alarms"] = len(self.alarms)
+        counts["ProDiag"] = len(self.prodiag)
+        counts["CfcCharts"] = len(self.cfc_charts)
+        counts["SafetyUnits"] = len(self.safety_units)
+        counts["HmiDevices"] = len(self.hmi_devices)
+        counts["OpcUaNodes"] = len(self.opcua_nodes)
         return counts

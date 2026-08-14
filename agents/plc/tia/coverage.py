@@ -6,10 +6,87 @@ import re
 from collections import Counter
 from typing import Any
 
-from agents.plc.tia.ir import Block, PlcProject
+from agents.plc.tia.ir import Block, BlockType, PlcProject
 from agents.plc.tia.package import build_conversion_report, classify_block
+from agents.plc.tia.surface import OFFICIAL_CATEGORIES
 
 _TODO_RE = re.compile(r"TODO\[([^\]]+)\]")
+
+_SKIP_REASONS = (
+    "know_how",
+    "inconsistent",
+    "no_license",
+    "no_export",
+    "password_protected",
+    "safety_login",
+    "openness_error",
+)
+
+
+def _empty_category() -> dict[str, Any]:
+    return {
+        "exported": 0,
+        "parsed": 0,
+        "skipped": 0,
+        "skipped_reasons": [],
+    }
+
+
+def build_category_coverage(project: PlcProject) -> dict[str, Any]:
+    """Official Openness chapter-6 categories: exported vs parsed vs skipped+reason."""
+    cats = {name: _empty_category() for name in OFFICIAL_CATEGORIES}
+    udt = [b for b in project.blocks.values() if b.block_type == BlockType.UDT]
+    prog = [b for b in project.blocks.values() if b.block_type != BlockType.UDT]
+    cats["blocks"]["parsed"] = len(prog)
+    cats["types"]["parsed"] = len(udt)
+    cats["tags"]["parsed"] = len(project.tag_tables)
+    cats["watch"]["parsed"] = len(getattr(project, "watch_tables", {}) or {})
+    cats["force"]["parsed"] = len(getattr(project, "force_tables", {}) or {})
+    cats["to"]["parsed"] = len(getattr(project, "technology_objects", None) or [])
+    cats["alarms"]["parsed"] = len(getattr(project, "alarms", None) or []) + len(
+        getattr(project, "prodiag", None) or []
+    )
+    cats["cfc"]["parsed"] = len(getattr(project, "cfc_charts", None) or [])
+    cats["safety"]["parsed"] = len(getattr(project, "safety_units", None) or [])
+    cats["hardware"]["parsed"] = len(getattr(project, "hardware", None) or [])
+    cats["hmi"]["parsed"] = len(getattr(project, "hmi_devices", None) or [])
+    cats["opcua"]["parsed"] = len(getattr(project, "opcua_nodes", None) or [])
+    cats["project"]["parsed"] = 1 if getattr(project, "project_texts", None) else 0
+
+    manifest = getattr(project, "export_manifest", None) or {}
+    counts = manifest.get("counts") if isinstance(manifest, dict) else None
+    if isinstance(counts, dict):
+        for name, row in counts.items():
+            key = str(name).lower()
+            if key not in cats or not isinstance(row, dict):
+                continue
+            cats[key]["exported"] = int(row.get("exported") or 0)
+            cats[key]["skipped"] = int(row.get("skipped") or 0)
+    else:
+        for row in cats.values():
+            row["exported"] = row["parsed"]
+
+    skipped = manifest.get("skipped") if isinstance(manifest, dict) else None
+    if isinstance(skipped, list):
+        for item in skipped:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("category") or "").lower()
+            if key not in cats:
+                continue
+            reason = str(item.get("reason") or "openness_error")
+            if reason not in _SKIP_REASONS:
+                reason = "openness_error"
+            cats[key]["skipped_reasons"].append(
+                {
+                    "name": item.get("name") or "",
+                    "reason": reason,
+                    "detail": item.get("detail") or item.get("message") or "",
+                }
+            )
+            if not counts:
+                cats[key]["skipped"] = len(cats[key]["skipped_reasons"])
+    return cats
 
 
 def _language_of(block: Block) -> str:
@@ -100,6 +177,7 @@ def build_coverage_report(
         "hardware_devices": len(getattr(project, "hardware", None) or []),
         "top_untranslated_parts": top_untranslated,
         "blocks": per_block,
+        "categories": build_category_coverage(project),
         "extraction_notes": list(project.extraction_notes),
         "timings": timings or {},
     }
@@ -129,6 +207,24 @@ def coverage_markdown(coverage: dict[str, Any]) -> str:
     lines.append(f"- Safety F-blocks: {coverage.get('safety_block_count') or 0}")
     lines.append(f"- Tag tables: {coverage.get('tag_tables') or 0}")
     lines.append(f"- Hardware devices (best-effort): {coverage.get('hardware_devices') or 0}")
+    lines.append("")
+    lines.append("## Official Openness categories (chapter 6)")
+    cats = coverage.get("categories") or {}
+    if cats:
+        for name in OFFICIAL_CATEGORIES:
+            row = cats.get(name) or {}
+            skipped = row.get("skipped") or 0
+            reasons = row.get("skipped_reasons") or []
+            reason_txt = ""
+            if reasons:
+                uniq = sorted({str(r.get("reason") or "") for r in reasons if r.get("reason")})
+                reason_txt = " (" + ", ".join(uniq) + ")"
+            lines.append(
+                f"- `{name}`: exported={row.get('exported') or 0} "
+                f"parsed={row.get('parsed') or 0} skipped={skipped}{reason_txt}"
+            )
+    else:
+        lines.append("- (none)")
     lines.append("")
     lines.append("## Language histogram")
     hist = coverage.get("language_histogram") or {}

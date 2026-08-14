@@ -237,3 +237,30 @@ public sealed class ArchiveProjectResult
     [JsonPropertyName("error")]
     public ToolError? Error { get; set; }
 }
+
+public sealed class ExportSkip
+{
+    [JsonPropertyName("category")]
+    public string Category { get; set; } = "";
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("reason")]
+    public string Reason { get; set; } = "";
+
+    [JsonPropertyName("detail")]
+    public string? Detail { get; set; }
+}
+
+public sealed class ExportCategoryCount
+{
+    [JsonPropertyName("exported")]
+    public int Exported { get; set; }
+
+    [JsonPropertyName("failed")]
+    public int Failed { get; set; }
+
+    [JsonPropertyName("skipped")]
+    public int Skipped { get; set; }
+}

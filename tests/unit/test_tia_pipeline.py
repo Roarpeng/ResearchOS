@@ -41,6 +41,15 @@ def test_extract_project_structure(result):
         "Networks": 2,
         "SafetyBlocks": 0,
         "Hardware": 0,
+        "WatchTables": 0,
+        "ForceTables": 0,
+        "TechnologyObjects": 0,
+        "Alarms": 0,
+        "ProDiag": 0,
+        "CfcCharts": 0,
+        "SafetyUnits": 0,
+        "HmiDevices": 0,
+        "OpcUaNodes": 0,
     }
 
 

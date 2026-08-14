@@ -19,18 +19,24 @@ from pathlib import Path
 from agents.plc.tia.ir import (
     Access,
     AccessScope,
+    AlarmObject,
     Block,
     BlockType,
+    CfcChart,
     GraphStep,
     GraphTransition,
     HardwareDevice,
+    HmiDevice,
     InterfaceSection,
     Network,
     Part,
     PlcProject,
+    SafetyUnitInfo,
     Tag,
     TagTable,
+    TechnologyObject,
     Variable,
+    WatchTable,
     Wire,
     WireEndpoint,
 )
@@ -1001,7 +1007,11 @@ def parse_tag_table_xml(path: Path) -> TagTable | None:
     doc_type = _detect_document_type(root)
     has_tag_table = any(_strip_ns(n.tag) == "SW.Tags.PlcTagTable" for n in root.iter())
     has_plc_tag = any(_strip_ns(n.tag) == "SW.Tags.PlcTag" for n in root.iter())
-    if not (has_tag_table or has_plc_tag or "TagTable" in doc_type or "Tag" in doc_type):
+    has_constant = any(
+        _strip_ns(n.tag) in {"SW.Tags.PlcConstant", "SW.Tags.Constant", "PlcConstant"}
+        for n in root.iter()
+    )
+    if not (has_tag_table or has_plc_tag or has_constant or "TagTable" in doc_type or "Tag" in doc_type):
         return None
 
     table_name = path.stem
@@ -1043,6 +1053,29 @@ def parse_tag_table_xml(path: Path) -> TagTable | None:
                 name = (sub.text or "").strip()
         if name:
             tags.append(Tag(name=name, data_type=data_type, logical_address=address, comment=comment))
+    for node in root.iter():
+        if _strip_ns(node.tag) not in {"SW.Tags.PlcConstant", "SW.Tags.Constant", "PlcConstant"}:
+            continue
+        name = _attr(node, "Name") or ""
+        data_type = ""
+        value = ""
+        for sub in node.iter():
+            sub_tag = _strip_ns(sub.tag)
+            if sub_tag in {"DataTypeName", "DataType"}:
+                data_type = (sub.text or "").strip()
+            elif sub_tag in {"Value", "StartValue", "ConstantValue"}:
+                value = (sub.text or "").strip()
+            elif sub_tag == "Name" and not name:
+                name = (sub.text or "").strip()
+        if name:
+            tags.append(
+                Tag(
+                    name=name,
+                    data_type=data_type or "CONSTANT",
+                    logical_address=value,
+                    comment="constant",
+                )
+            )
     if not tags and not has_tag_table:
         return None
     return TagTable(name=table_name, tags=tags)
@@ -1054,22 +1087,39 @@ def parse_tag_table_xml(path: Path) -> TagTable | None:
 
 @dataclass
 class XmlParseResult:
-    """One export XML classified as block, tag table, hardware, skip, or error."""
+    """One export XML classified as block, tag table, hardware, surface, skip, or error."""
 
-    kind: str  # "block" | "table" | "hardware" | "skip" | "error"
+    kind: str
     rel: str
     block: Block | None = None
     table: TagTable | None = None
     hardware: list[HardwareDevice] | None = None
+    payload: object | None = None
     note: str = ""
 
 
 def parse_export_xml(xml_file: Path, export_path: Path) -> XmlParseResult:
-    """Parse a single Openness XML into a block, tag table, or hardware row."""
+    """Parse a single Openness XML into a block, tag table, hardware, or chapter-6 surface row."""
     try:
         rel = str(xml_file.relative_to(export_path))
     except ValueError:
         rel = str(xml_file)
+    try:
+        from agents.plc.tia.surface import try_parse_surface
+
+        hit = try_parse_surface(xml_file, export_path, rel)
+    except Exception as exc:  # noqa: BLE001 — surface is advisory
+        hit = None
+        surface_err = f"surface parse skipped in {rel}: {exc}"
+    else:
+        surface_err = ""
+    if hit is not None:
+        if hit.kind == "error":
+            return XmlParseResult(kind="error", rel=rel, note=hit.note or surface_err)
+        if hit.kind == "hardware":
+            return XmlParseResult(kind="hardware", rel=rel, hardware=hit.hardware or [])
+        if hit.kind != "skip":
+            return XmlParseResult(kind=hit.kind, rel=rel, payload=hit.payload, note=hit.note)
     try:
         block = parse_block_xml(xml_file)
         if block is not None:
@@ -1095,7 +1145,22 @@ def parse_export_xml(xml_file: Path, export_path: Path) -> XmlParseResult:
                 return XmlParseResult(kind="hardware", rel=rel, hardware=devices)
     except Exception as exc:  # noqa: BLE001 — hardware is advisory
         return XmlParseResult(kind="error", rel=rel, note=f"hardware parse skipped in {rel}: {exc}")
+    if surface_err:
+        return XmlParseResult(kind="error", rel=rel, note=surface_err)
     return XmlParseResult(kind="skip", rel=rel)
+
+
+def _merge_hmi(project: PlcProject, device: HmiDevice) -> None:
+    existing = next((d for d in project.hmi_devices if d.name == device.name), None)
+    if existing is None:
+        project.hmi_devices.append(device)
+        return
+    existing.tag_tables.update(device.tag_tables)
+    existing.scripts.extend(device.scripts)
+    existing.text_lists.extend(device.text_lists)
+    existing.graphic_lists.extend(device.graphic_lists)
+    existing.connections.extend(device.connections)
+    existing.screens.extend(device.screens)
 
 
 def merge_parse_results(project: PlcProject, results: list[XmlParseResult]) -> None:
@@ -1108,6 +1173,26 @@ def merge_parse_results(project: PlcProject, results: list[XmlParseResult]) -> N
             project.tag_tables[item.table.name] = item.table
         elif item.kind == "hardware" and item.hardware:
             project.hardware.extend(item.hardware)
+        elif item.kind == "watch" and isinstance(item.payload, WatchTable):
+            project.watch_tables[item.payload.name] = item.payload
+        elif item.kind == "force" and isinstance(item.payload, WatchTable):
+            project.force_tables[item.payload.name] = item.payload
+        elif item.kind == "to" and isinstance(item.payload, TechnologyObject):
+            project.technology_objects.append(item.payload)
+        elif item.kind == "alarms" and isinstance(item.payload, AlarmObject):
+            project.alarms.append(item.payload)
+        elif item.kind == "prodiag" and isinstance(item.payload, AlarmObject):
+            project.prodiag.append(item.payload)
+        elif item.kind == "cfc" and isinstance(item.payload, CfcChart):
+            project.cfc_charts.append(item.payload)
+        elif item.kind == "safety" and isinstance(item.payload, SafetyUnitInfo):
+            project.safety_units.append(item.payload)
+        elif item.kind == "hmi" and isinstance(item.payload, HmiDevice):
+            _merge_hmi(project, item.payload)
+        elif item.kind == "opcua" and isinstance(item.payload, list):
+            project.opcua_nodes.extend(str(n) for n in item.payload if n)
+        elif item.kind == "project" and isinstance(item.payload, dict):
+            project.project_texts.update({str(k): str(v) for k, v in item.payload.items()})
         elif item.kind == "error" and item.note:
             project.extraction_notes.append(item.note)
         elif item.kind == "skip":
@@ -1120,11 +1205,42 @@ def merge_parse_results(project: PlcProject, results: list[XmlParseResult]) -> N
         )
 
 
+def _attach_export_manifest(project: PlcProject, export_path: Path) -> None:
+    path = export_path / "manifest.json"
+    if not path.is_file():
+        return
+    try:
+        import json
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            project.export_manifest = data
+    except Exception as exc:  # noqa: BLE001
+        project.extraction_notes.append(f"manifest.json unreadable: {exc}")
+
+
+def _has_parsed_surface(project: PlcProject) -> bool:
+    return bool(
+        project.blocks
+        or project.tag_tables
+        or project.hardware
+        or project.watch_tables
+        or project.force_tables
+        or project.technology_objects
+        or project.alarms
+        or project.prodiag
+        or project.cfc_charts
+        or project.safety_units
+        or project.hmi_devices
+        or project.opcua_nodes
+    )
+
+
 def extract_project(export_dir: str | Path, *, project_name: str = "") -> PlcProject:
     """Scan an Openness export directory and build PLC-IR.
 
-    Expected layout (flexible): any number of *.xml files exported via
-    `PlcBlock.Export(..., ExportOptions.WithDefaults)` and tag tables.
+    Accepts legacy ``Blocks/`` plus official ``plc/<name>/blocks|types|tags|...``,
+    ``hardware/``, ``hmi/<name>/``, and ``manifest.json``.
     Independent XML files are parsed on a thread pool; IR merge stays serial.
     """
     from agents.plc.tia.enrich import enrich_project_interfaces
@@ -1138,6 +1254,7 @@ def extract_project(export_dir: str | Path, *, project_name: str = "") -> PlcPro
     xml_files = sorted(p for p in export_path.rglob("*.xml") if p.is_file())
     if not xml_files:
         project.extraction_notes.append("no XML exports found")
+        _attach_export_manifest(project, export_path)
         return project
 
     results = map_parallel(
@@ -1146,8 +1263,9 @@ def extract_project(export_dir: str | Path, *, project_name: str = "") -> PlcPro
         min_items=4,
     )
     merge_parse_results(project, results)
+    _attach_export_manifest(project, export_path)
 
-    if not project.blocks and not project.tag_tables:
+    if not _has_parsed_surface(project):
         project.extraction_notes.append(
             "no PLC blocks or tag tables recognized — check Openness export layout"
         )

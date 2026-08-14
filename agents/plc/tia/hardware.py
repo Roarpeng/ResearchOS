@@ -1,4 +1,4 @@
-"""Best-effort hardware / Profinet parse from Openness HW XML.
+"""Best-effort hardware / Profinet parse from Openness HW XML and CAx AML.
 
 Skip (do not fail the job) when no device/rack XML is present.
 """
@@ -18,6 +18,7 @@ _DEVICE_TAGS = {
     "SW.Devices.Device",
     "Rack",
     "Module",
+    "InternalElement",
 }
 
 _SKIP_NAMES = {"conversionlog", "gsdml"}
@@ -42,6 +43,14 @@ def _child_text(el: ET.Element, *names: str) -> str:
     return ""
 
 
+def _is_failsafe(el: ET.Element, dtype: str, name: str) -> bool:
+    raw = (_attr(el, "Failsafe") or _child_text(el, "Failsafe", "IsFailsafe")).lower()
+    if raw in {"true", "1", "yes"}:
+        return True
+    blob = f"{dtype} {name}".lower()
+    return "f-cpu" in blob or "failsafe" in blob or name.startswith("F-")
+
+
 def looks_like_hardware_xml(path: Path) -> bool:
     name = path.name.lower()
     if any(skip in name for skip in _SKIP_NAMES):
@@ -49,6 +58,8 @@ def looks_like_hardware_xml(path: Path) -> bool:
     parts = {p.lower() for p in path.parts}
     if "gsd" in parts:
         return False
+    if "hardware" in parts:
+        return True
     try:
         head = path.read_bytes()[:8192].decode("utf-8", errors="ignore")
     except OSError:
@@ -61,8 +72,21 @@ def looks_like_hardware_xml(path: Path) -> bool:
         "Siemens.Engineering.HW",
         "<Rack",
         "CompositionName=\"Devices\"",
+        "<HardwareTree",
+        "<CAEXFile",
+        "InternalElement",
     )
     return any(m in head for m in markers)
+
+
+def _aml_attr(el: ET.Element, name: str) -> str:
+    want = name.lower()
+    for child in el:
+        if _strip_ns(child.tag) != "Attribute":
+            continue
+        if (_attr(child, "Name") or "").lower() == want:
+            return (child.text or "").strip() or _child_text(child, "Value")
+    return ""
 
 
 def parse_hardware_xml(path: Path) -> list[HardwareDevice]:
@@ -74,6 +98,58 @@ def parse_hardware_xml(path: Path) -> list[HardwareDevice]:
         return []
     devices: list[HardwareDevice] = []
     seen: set[tuple[str, str]] = set()
+
+    if _strip_ns(root.tag) == "HardwareTree" or any(
+        _strip_ns(n.tag) == "Device" and n is not root for n in root
+    ):
+        for device_el in root.iter():
+            if _strip_ns(device_el.tag) != "Device":
+                continue
+            row = _device_from_tree(device_el, path)
+            key = (row.name, row.device_type)
+            if key in seen:
+                continue
+            seen.add(key)
+            devices.append(row)
+        if devices:
+            return devices
+
+    if _strip_ns(root.tag) == "CAEXFile" or "InternalElement" in {
+        _strip_ns(n.tag) for n in list(root)[:8]
+    }:
+        for node in root.iter():
+            if _strip_ns(node.tag) != "InternalElement":
+                continue
+            name = _attr(node, "Name")
+            if not name:
+                continue
+            dtype = _aml_attr(node, "TypeIdentifier") or _aml_attr(node, "Type") or "InternalElement"
+            failsafe = _is_failsafe(node, dtype, name) or _aml_attr(node, "Failsafe").lower() in {
+                "true",
+                "1",
+            }
+            modules = [
+                _attr(c, "Name")
+                for c in node
+                if _strip_ns(c.tag) == "InternalElement" and _attr(c, "Name")
+            ]
+            key = (name, dtype)
+            if key in seen:
+                continue
+            seen.add(key)
+            devices.append(
+                HardwareDevice(
+                    name=name,
+                    device_type=dtype,
+                    failsafe=failsafe,
+                    modules=modules,
+                    source_file=str(path),
+                    rack=_attr(node, "ID") or "",
+                )
+            )
+        if devices:
+            return devices
+
     for node in root.iter():
         tag = _strip_ns(node.tag)
         if tag not in _DEVICE_TAGS and "Device" not in tag and tag not in {"ProfinetInterface"}:
@@ -105,9 +181,43 @@ def parse_hardware_xml(path: Path) -> list[HardwareDevice]:
                 slot=slot,
                 comment=comment[:240],
                 source_file=str(path),
+                failsafe=_is_failsafe(node, dtype, name),
             )
         )
     return devices
+
+
+def _device_from_tree(el: ET.Element, path: Path) -> HardwareDevice:
+    name = _attr(el, "Name") or _child_text(el, "Name")
+    dtype = _attr(el, "TypeIdentifier") or _attr(el, "Type") or "Device"
+    modules: list[str] = []
+    subnets: list[str] = []
+    rack = ""
+    for child in el:
+        tag = _strip_ns(child.tag)
+        if tag == "DeviceItem":
+            iname = _attr(child, "Name")
+            if iname:
+                modules.append(iname)
+            if not rack:
+                rack = _attr(child, "Slot") or _child_text(child, "Slot")
+            for nested in child:
+                if _strip_ns(nested.tag) == "Subnet" and _attr(nested, "Name"):
+                    subnets.append(_attr(nested, "Name"))
+        elif tag == "Subnet" and _attr(child, "Name"):
+            subnets.append(_attr(child, "Name"))
+    return HardwareDevice(
+        name=name,
+        device_type=dtype,
+        address=_attr(el, "Address") or _child_text(el, "Address"),
+        slot=_attr(el, "Slot"),
+        comment=_child_text(el, "Comment", "Text")[:240],
+        source_file=str(path),
+        failsafe=_is_failsafe(el, dtype, name),
+        rack=rack,
+        modules=modules,
+        subnets=subnets,
+    )
 
 
 def attach_hardware(project: PlcProject, xml_files: list[Path]) -> PlcProject:

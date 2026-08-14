@@ -50,7 +50,7 @@ API：
 - 指望 Docker Linux Gateway 直接读 `.zap`/`.ap19`  
 - 把 `ConversionLog` / `GSDML` 当成程序逻辑 XML  
 
-**易踩坑：** 真实 `.zap` 里常有杂项 XML；当前版本只认 SimaticML / `Blocks/*.xml`，否则走 `.apxx`+Openness。
+**易踩坑：** 真实 `.zap` 里常有杂项 XML；当前版本认 SimaticML、`Blocks/*.xml`，以及官方 `--full` 布局（`plc/<name>/…`、`hardware/`、`hmi/`、`manifest.json`）。否则走 `.apxx`+Openness。
 
 ---
 
@@ -106,9 +106,10 @@ docker compose --env-file ../env/.env --profile plc up -d
 cd tools\industrial-mcp\tia-openness
 dotnet build TiaOpenness.sln -c Release
 
-# CLI 导出示例
+# CLI 导出示例（默认 --full：官方 chapter 6 面）
 .\src\TiaOpenness.Server\bin\Release\net481\TiaOpenness.Server.exe --cli export-project `
-  -p "D:\Projects\HR002\HR002.ap19" -o "%TEMP%\researchos-tia-export\HR002"
+  --project "D:\Projects\HR002\HR002.ap19" --export-dir "%TEMP%\researchos-tia-export\HR002"
+# 仅旧版 Blocks/：加 --blocks-only
 ```
 
 环境变量（宿主 Gateway）：
@@ -180,7 +181,38 @@ researchos-tia-cli --exports tests/fixtures/tia_exports --result-dir ./ResearchO
 
 写回仍是 HITL：`POST /optimize` 提案 → 确认 → `POST /writeback` → 下载 `.zap`。Know-how 保护体从不解密或猜测。
 
-仍为 TODO / 有限覆盖：稀有 STL 助记符、GRAPH 可执行语义（当前是步序注释）、硬件机架（尽力而为，缺 XML 不失败）。增量 Openness 导出缓存 / `extract_stream` 已在主干落地，此处不重复实现。
+仍为 TODO / 有限覆盖：稀有 STL 助记符、GRAPH 可执行语义（当前是步序注释）。硬件 AML 缺失**不**导致程序块解析失败。HMI 只解析结构（名称 / 文件夹 / 关联标签），不重建画面编辑器。Know-how / CFC 密码不解密。HMI/AML **Import 写回**本 PR 不做（现有 HITL **块**导入保留）。增量 Openness 导出缓存 / `extract_stream` 已在主干落地，此处不重复实现。
+
+### 官方 Openness 对象 vs ResearchOS（chapter 6）
+
+`export-project` 默认 `--full`，写出：
+
+```text
+export_dir/
+  plc/<plcName>/blocks|types|tags|watch|force|to|alarms|cfc|safety/
+  hardware/          # devices.xml；有 CAx 时 project.aml
+  hmi/<hmiName>/
+  opcua/             # API 存在时
+  project/texts.xml
+  manifest.json      # exported / skipped + 原因
+```
+
+| 手册 | 对象 | 导出 | 解析 | 跳过原因 |
+|------|------|------|------|----------|
+| 6.4.2 | 块 OB/FB/FC/DB（含 SCL/GRAPH/F/系统/快照） | 是 | 既有 PLC-IR | `know_how`（仅接口）、`inconsistent`、`no_license` |
+| 6.4.2.27–31 | UDT / PlcTypes | 是 | IR UDT | 同上 |
+| 6.4.4 | 标签表 + 常量（全部组） | 是 | `tag_tables` | `no_export` |
+| 6.4.2.26 | 监视表 / 强制表 | 是 | `watch_tables` / `force_tables` | `no_export` |
+| 6.4.3 | 工艺对象 Motion/PID/Counting | 是 | `technology_objects[]` | `no_export` / `no_license` |
+| 6.4.2.19–25 | 报警 / ProDiag | 是 | `alarms[]` / `prodiag[]` | `no_export` |
+| 6.4.1 | CFC | 是 | 图名 + 块/连线尽力 | `password_protected`（列出不解密） |
+| 5.11.7 / 6.4.2.9 / 6.5.39 | SafetyUnit / F 程序 | 枚举 | `safety_units[]`；F 块打标 | 非 F 工程干净跳过（`safety_login` / `no_export`） |
+| 6.4.2.29 | OPC UA XML | API 有则写 | 节点名 | 可选 `no_export` |
+| 6.5 | 硬件 AML + 设备树 | `hardware/` | `PlcProject.hardware`（含 `failsafe`） | 无 AML 不失败 |
+| 6.3 | HMI 结构 | `hmi/<device>/` | `hmi_devices[]` | 不做画面像素级还原、不做 HMI Import |
+| 6.2 | 工程文本 | `project/texts.xml` | 多语言文本 | 跳过大型二进制图形 |
+
+`reports/coverage.json` 增加 `categories`：每类 `exported` / `parsed` / `skipped` + 官方原因。
 
 ## API 速查
 

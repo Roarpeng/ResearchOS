@@ -27,6 +27,64 @@ public sealed class ProjectService
     public string? DeviceName => _deviceName;
     public object? Project => _project;
     public object? PlcSoftware => _plcSoftware;
+    public TiaConnection Connection => _connection;
+
+    /// <summary>All PLC / HMI software containers under Project.Devices (chapter 6.2 / 6.3 / 6.4).</summary>
+    public List<(string Kind, string DeviceName, string SoftwareName, object Software, object Device)> EnumerateSoftware()
+    {
+        var list = new List<(string, string, string, object, object)>();
+        if (_project is null) return list;
+        var seen = new HashSet<int>();
+        if (GetProp(_project, "Devices") is not IEnumerable devices) return list;
+        foreach (var device in devices)
+        {
+            CollectSoftware(device, GetPropString(device, "Name") ?? "", list, seen);
+        }
+        return list;
+    }
+
+    private void CollectSoftware(
+        object deviceOrItem,
+        string deviceName,
+        List<(string Kind, string DeviceName, string SoftwareName, object Software, object Device)> sink,
+        HashSet<int> seen)
+    {
+        foreach (var typeName in new[]
+                 {
+                     "Siemens.Engineering.HW.Features.SoftwareContainer",
+                     "Siemens.Engineering.Software.SoftwareContainer",
+                 })
+        {
+            var container = _connection.GetService(deviceOrItem, typeName);
+            if (container is null) continue;
+            var software = GetProp(container, "Software");
+            if (software is null) continue;
+            var id = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(software);
+            if (!seen.Add(id)) continue;
+            var full = software.GetType().FullName ?? software.GetType().Name;
+            var kind = "other";
+            if (full.IndexOf("PlcSoftware", StringComparison.OrdinalIgnoreCase) >= 0)
+                kind = "plc";
+            else if (full.IndexOf("HmiUnified", StringComparison.OrdinalIgnoreCase) >= 0)
+                kind = "hmi_unified";
+            else if (full.IndexOf("Hmi", StringComparison.OrdinalIgnoreCase) >= 0)
+                kind = "hmi";
+            else
+                continue;
+            var softName = GetPropString(software, "Name")
+                ?? GetPropString(deviceOrItem, "Name")
+                ?? deviceName;
+            sink.Add((kind, deviceName, softName, software, deviceOrItem));
+        }
+
+        if (GetProp(deviceOrItem, "DeviceItems") is IEnumerable children)
+        {
+            foreach (var child in children)
+            {
+                CollectSoftware(child, deviceName, sink, seen);
+            }
+        }
+    }
 
     public OpenProjectResult OpenProject(string projectPath, string? plcName = null, bool withoutUi = true)
     {
