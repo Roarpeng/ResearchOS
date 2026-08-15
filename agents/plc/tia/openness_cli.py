@@ -61,7 +61,7 @@ def _payload_text(payload: Any) -> str:
             parts.append(str(err["message"]))
         elif err:
             parts.append(str(err))
-        for key in ("message", "export", "import", "archive", "project"):
+        for key in ("message", "export", "import", "archive", "project", "generate", "compile"):
             val = payload.get(key)
             if isinstance(val, dict):
                 nested = _payload_text(val)
@@ -128,6 +128,8 @@ def format_openness_failure(
     action_cn = {
         "export": "导出 SimaticML XML",
         "import": "写回（Import）",
+        "generate_from_source": "SCL External Source → GenerateBlocksFromSource",
+        "compile": "编译 PLC 软件（ICompilable.Compile）",
         "archive": "归档为 .zap",
     }.get(action, action)
     return (
@@ -501,6 +503,79 @@ def _zap_name_for_project(project: Path, explicit: str = "") -> str:
     m = re.search(r"\.ap(1[789]|20)$", project.suffix.lower())
     ver = m.group(1) if m else "19"
     return f"{project.stem}.zap{ver}"
+
+
+def generate_from_source_via_openness_cli(
+    project_path: str | Path,
+    scl_path: str | Path,
+    *,
+    plc_name: str = "",
+    overwrite: bool = True,
+    timeout_s: int = 600,
+) -> dict[str, Any]:
+    """Import one .scl via ``--cli generate-from-source`` (save inside CLI).
+
+    Official Openness path: ExternalSourceGroup.ExternalSources.CreateFromFile
+    + PlcExternalSource.GenerateBlocksFromSource(). Windows HostGateway only.
+    """
+    project = Path(project_path).expanduser().resolve()
+    scl = Path(scl_path).expanduser().resolve()
+    if not scl.is_file():
+        raise FileNotFoundError(f"SCL source not found: {scl}")
+
+    args = [
+        "generate-from-source",
+        "--project",
+        str(project),
+        "--scl",
+        str(scl),
+    ]
+    if plc_name:
+        args.extend(["--plc", plc_name])
+    if not overwrite:
+        args.append("--no-overwrite")
+
+    result = openness_cli(*args, timeout_s=timeout_s)
+    if not result.get("ok"):
+        raise RuntimeError(
+            format_openness_failure(
+                result, project_path=project, action="generate_from_source"
+            )
+        )
+    return result
+
+
+def compile_plc_via_openness_cli(
+    project_path: str | Path,
+    *,
+    plc_name: str = "",
+    timeout_s: int = 600,
+) -> dict[str, Any]:
+    """Fail-closed PLC compile via ``--cli compile-plc``.
+
+    If ICompilable is unreachable, the CLI returns ok=false /
+    compile_api_unavailable — callers must not archive .zap.
+    """
+    project = Path(project_path).expanduser().resolve()
+    args = ["compile-plc", "--project", str(project)]
+    if plc_name:
+        args.extend(["--plc", plc_name])
+    result = openness_cli(*args, timeout_s=timeout_s)
+    compile = result.get("compile") if isinstance(result.get("compile"), dict) else {}
+    if not result.get("ok"):
+        # Do not raise a generic import error — return structured fail-closed payload.
+        if not compile:
+            compile = {
+                "ok": False,
+                "apiAvailable": False,
+                "error": result.get("error")
+                or {"code": "compile_api_unavailable", "message": _payload_text(result)},
+            }
+        result = dict(result)
+        result["ok"] = False
+        result["compile"] = compile
+        return result
+    return result
 
 
 def archive_project_via_openness_cli(

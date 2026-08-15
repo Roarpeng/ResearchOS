@@ -62,6 +62,8 @@ public static class Program
             Console.Error.WriteLine(
                 "Usage: --cli status | export-project --project <ap19> --export-dir <dir> [--plc name] [--version V19] [--skip-compile] [--full|--blocks-only] | " +
                 "import-block --project <ap19> --xml <file> [--plc name] [--no-overwrite] [--version V19] | " +
+                "generate-from-source --project <ap19> --scl <file.scl> [--plc name] [--no-overwrite] [--version V19] | " +
+                "compile-plc --project <ap19> [--plc name] [--version V19] | " +
                 "archive-project --project <ap19> --out-dir <dir> [--name file.zap19] [--version V19]");
             return 2;
         }
@@ -174,6 +176,81 @@ public static class Program
                 };
                 Console.WriteLine(JsonSerializer.Serialize(importPayload, JsonDefaults.Options));
                 return saved.Ok ? 0 : 5;
+            }
+
+            if (command == "generate-from-source")
+            {
+                if (!opts.TryGetValue("project", out var project) || string.IsNullOrWhiteSpace(project))
+                {
+                    Console.Error.WriteLine("Missing --project");
+                    return 2;
+                }
+                if (!opts.TryGetValue("scl", out var scl) || string.IsNullOrWhiteSpace(scl))
+                {
+                    Console.Error.WriteLine("Missing --scl");
+                    return 2;
+                }
+
+                opts.TryGetValue("plc", out var plc);
+                var overwrite = !opts.ContainsKey("no-overwrite");
+
+                var opened = projects.OpenProject(project, plc, withoutUi: true);
+                if (!opened.Ok)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(opened, JsonDefaults.Options));
+                    return 3;
+                }
+
+                var generated = blocks.GenerateBlocksFromSource(scl, overwrite);
+                if (!generated.Ok)
+                {
+                    var failPayload = new
+                    {
+                        ok = false,
+                        project = opened,
+                        generate = generated,
+                    };
+                    Console.WriteLine(JsonSerializer.Serialize(failPayload, JsonDefaults.Options));
+                    return 4;
+                }
+
+                var saved = projects.SaveProject();
+                var genPayload = new
+                {
+                    ok = saved.Ok,
+                    project = opened,
+                    generate = generated,
+                    save = saved,
+                };
+                Console.WriteLine(JsonSerializer.Serialize(genPayload, JsonDefaults.Options));
+                return saved.Ok ? 0 : 5;
+            }
+
+            if (command == "compile-plc")
+            {
+                if (!opts.TryGetValue("project", out var project) || string.IsNullOrWhiteSpace(project))
+                {
+                    Console.Error.WriteLine("Missing --project");
+                    return 2;
+                }
+
+                opts.TryGetValue("plc", out var plc);
+                var opened = projects.OpenProject(project, plc, withoutUi: true);
+                if (!opened.Ok)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(opened, JsonDefaults.Options));
+                    return 3;
+                }
+
+                var compiled = blocks.CompilePlcSoftwareStrict();
+                var compilePayload = new
+                {
+                    ok = compiled.Ok,
+                    project = opened,
+                    compile = compiled,
+                };
+                Console.WriteLine(JsonSerializer.Serialize(compilePayload, JsonDefaults.Options));
+                return compiled.Ok ? 0 : 6;
             }
 
             if (command == "archive-project")
@@ -353,6 +430,27 @@ public sealed class TiaOpennessTools
         [Description("When true, use ImportOptions.Override; when false, ImportOptions.None.")] bool overwrite = true)
     {
         var result = _blocks.ImportBlock(xml_path, overwrite);
+        return JsonSerializer.Serialize(result, Json);
+    }
+
+    [McpServerTool(Name = "tia.generate_from_source"), Description(
+        "Import an SCL external source via PlcSoftware.ExternalSourceGroup.ExternalSources.CreateFromFile " +
+        "then PlcExternalSource.GenerateBlocksFromSource(). Refuses Safety/F-block SCL. " +
+        "Does not persist — call tia.save_project afterwards. Windows HostGateway only.")]
+    public string GenerateFromSource(
+        [Description("Absolute path to an ASCII .scl external source.")] string scl_path,
+        [Description("When true, replace an existing external source of the same name.")] bool overwrite = true)
+    {
+        var result = _blocks.GenerateBlocksFromSource(scl_path, overwrite);
+        return JsonSerializer.Serialize(result, Json);
+    }
+
+    [McpServerTool(Name = "tia.compile_plc"), Description(
+        "Compile the open PLC software via ICompilable.Compile(). Fail-closed: if the compile API " +
+        "is unreachable or ErrorCount>0, ok=false and callers must not archive .zap.")]
+    public string CompilePlc()
+    {
+        var result = _blocks.CompilePlcSoftwareStrict();
         return JsonSerializer.Serialize(result, Json);
     }
 

@@ -608,16 +608,20 @@ def translate_block_to_scl(block: Block) -> str:
 
 
 def convert_project_to_scl(project: PlcProject) -> dict[str, str]:
-    """Map block name -> SCL for every *non-protected* translatable block.
+    """Map block name -> SCL for every *writable non-safety* translatable block.
 
-    Know-how / password protected blocks and interface-only exports (no body)
-    are skipped (kept as original only).
+    Know-how / password protected, interface-only (no body), and Safety/F-blocks
+    are skipped (kept as original only). Never write F-block bodies.
     """
     out: dict[str, str] = {}
     items = [
         (name, block)
         for name, block in project.blocks.items()
-        if not (block.is_protected() or block.is_interface_only())
+        if not (
+            block.is_protected()
+            or block.is_interface_only()
+            or getattr(block, "is_safety", False)
+        )
     ]
 
     def _one(item: tuple[str, Block]) -> tuple[str, str]:

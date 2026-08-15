@@ -247,8 +247,13 @@ def interpretation_report(project: PlcProject, kg: PlcKnowledgeGraph) -> str:
         lines.append("")
 
     lines.append("## Conversion Notes")
-    lines.append("- Output is advisory SCL; review before importing to TIA Portal.")
-    lines.append("- Import path: External Source (.scl) -> GenerateBlocksFromSource().")
+    lines.append("- SCL is an importable External Source artifact (HITL review required).")
+    lines.append(
+        "- Writeback path (Windows HostGateway): External Source (.scl) → "
+        "PlcSoftware.ExternalSourceGroup.ExternalSources.CreateFromFile → "
+        "GenerateBlocksFromSource(); then ICompilable.Compile() before Archive."
+    )
+    lines.append("- Linux Docker can stage .scl packages; it cannot run Openness import/compile.")
     lines.append("- Untranslated instructions are marked with `(* TODO[...] *)` comments.")
-    lines.append("- Protected / unknown blocks are listed in conversion_report.json.")
+    lines.append("- Protected / Safety / interface-only blocks are listed in conversion_report.json.")
     return "\n".join(lines)

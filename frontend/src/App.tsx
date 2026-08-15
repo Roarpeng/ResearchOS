@@ -1288,9 +1288,28 @@ export default function App() {
           : Array.isArray(opsFromCs)
             ? opsFromCs.length
             : 0;
+      const skipped = data.skipped || detail.scl_skipped || [];
+      const diffs = data.scl_diffs || detail.scl_diffs || [];
+      const skipLines = skipped
+        .slice(0, 24)
+        .map((s) => `- \`${s.block || "?"}\`：${s.reason || ""}${s.detail ? ` — ${s.detail}` : ""}`)
+        .join("\n");
+      const diffLines = diffs
+        .slice(0, 8)
+        .map((d) => {
+          const body = String(d.diff || "").trim() || "(unchanged importable SCL)";
+          return `#### \`${d.block || "?"}\`${d.new_block ? "（新建）" : ""}\n\n\`\`\`diff\n${body}\n\`\`\``;
+        })
+        .join("\n\n");
+      const extra = [
+        skipLines ? `### 跳过（拒绝写程序体）\n\n${skipLines}` : "",
+        diffLines ? `### SCL diff\n\n${diffLines}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
       pushMsg(
         "assistant",
-        `### 优化提案（HITL）\n\n已生成 **${ops}** 条变更操作。审阅后可点「确认反写.zap」。\n\n${plan}`,
+        `### 优化提案（HITL）\n\n已生成 **${ops}** 条变更操作（含 SCL 改写/解耦）。请审阅 **SCL diff** 与跳过列表后再点「确认反写.zap」。\n\n${plan}${extra ? `\n\n${extra}` : ""}`,
       );
       setStatus("optimize_proposed");
     } catch (err) {
@@ -1323,20 +1342,28 @@ export default function App() {
           data.zap_path ||
           "",
       );
+      const compile = (data.compile ||
+        (detail.writeback as { compile?: unknown } | null)?.compile ||
+        (data.openness as { compile?: unknown } | null)?.compile) as
+        | Record<string, unknown>
+        | undefined;
       if (zap) {
         const name = String(zap).split(/[/\\]/).pop() || "archive.zap";
         pushMsg(
           "assistant",
-          `### 反写完成\n\n.zap 已归档：\`${zap}\`\n\n[${name}](${plcZapUrl(plcJobId)})`,
+          `### 反写完成\n\n编译通过后已归档 .zap：\`${zap}\`\n\n[${name}](${plcZapUrl(plcJobId)})`,
         );
       } else {
+        const compileNote = compile
+          ? `\n\n编译门禁：\`${JSON.stringify(compile)}\`。编译失败或 API 不可达时**不会**归档 .zap。`
+          : "";
         pushMsg(
           "assistant",
           `### 反写结果\n\n\`\`\`json\n${JSON.stringify(
-            { openness: data.openness, zap_archive: data.zap_archive || detail.writeback },
+            { openness: data.openness, zap_archive: data.zap_archive || detail.writeback, compile },
             null,
             2,
-          )}\n\`\`\``,
+          )}\n\`\`\`${compileNote}`,
         );
       }
       setStatus("writeback_done");

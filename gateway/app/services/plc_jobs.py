@@ -333,6 +333,9 @@ def create_job_record(
         "changeset": None,
         "writeback": None,
         "optimize_plan": "",
+        "scl_files": {},
+        "scl_diffs": [],
+        "scl_skipped": [],
         "source_xmls": [],
         "progress": [],
         "timings": {},
@@ -736,7 +739,7 @@ def propose_job_optimize(
     block_name: str | None = None,
     message: str = "",
 ) -> dict[str, Any]:
-    """Propose safe optimization changeset (analyst → annotate/comment/stage XML)."""
+    """Propose optimization changeset (dead + decouple + SCL rewrite)."""
     from agents.plc.tia.optimize import propose_optimization_changeset
 
     _ = message
@@ -822,20 +825,43 @@ def confirm_job_writeback(
 
     bundle = prepare_writeback(export_root, cs, sources)
     result["bundle_dir"] = str(bundle)
+    result["staged_scls"] = [
+        str(p) for p in (bundle / "external_sources").glob("*.scl")
+    ] if (bundle / "external_sources").is_dir() else []
 
     if execute_openness_import:
         if target is None:
             raise ValueError("project_path required for Openness import")
-        if not list(bundle.glob("*.xml")):
+        has_xml = list(bundle.glob("*.xml"))
+        has_scl = list((bundle / "external_sources").glob("*.scl")) if (bundle / "external_sources").is_dir() else []
+        if not has_xml and not has_scl:
             raise ValueError(
-                "No XML staged for Openness import. Provide xml_paths or ingest from .xml first."
+                "No XML or SCL staged for Openness import. "
+                "Provide xml_paths, ingest from .xml, or run optimize (SCL rewrite) first."
             )
         openness = execute_writeback(target, bundle, plc_name=plc_name)
         result["openness"] = openness
+        result["compile"] = openness.get("compile")
+        if not openness.get("import_ok", openness.get("ok")):
+            raise RuntimeError(f"Openness import failed: {openness}")
         if openness.get("ok"):
             cs.status = "applied"
         else:
-            raise RuntimeError(f"Openness import failed: {openness}")
+            # Import may have succeeded; compile gate failed — do not archive.
+            compile = openness.get("compile") or {}
+            result["zap_archive"] = {
+                "ok": False,
+                "skipped": True,
+                "reason": "compile_failed",
+                "compile": compile,
+                "inconsistent_blocks": (compile.get("compile") or compile).get("inconsistentBlocks")
+                if isinstance(compile, dict)
+                else None,
+            }
+            job["changeset"] = cs.to_dict()
+            job["writeback"] = result
+            job["updated_at"] = _now()
+            return result
 
         if archive_zap and openness.get("ok"):
             out_dir = Path(export_root) / "archived"

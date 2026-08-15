@@ -18,6 +18,8 @@ ChangeOpKind = Literal[
     "set_block_comment",
     "annotate",
     "stage_xml_import",
+    "rewrite_scl",
+    "stage_scl_source",
 ]
 
 ChangeSetStatus = Literal["proposed", "accepted", "rejected", "applied"]
@@ -30,6 +32,8 @@ OP_KINDS: frozenset[str] = frozenset(
         "set_block_comment",
         "annotate",
         "stage_xml_import",
+        "rewrite_scl",
+        "stage_scl_source",
     }
 )
 
@@ -143,8 +147,8 @@ def apply_changeset_to_kg(kg_json: dict[str, Any], changeset: PlcChangeSet) -> d
                 text = p.get("text") or p.get("annotation") or ""
                 if text:
                     notes.append(text)
-        elif op.kind == "stage_xml_import":
-            # Bundle-only; no KG mutation.
+        elif op.kind in {"stage_xml_import", "rewrite_scl", "stage_scl_source"}:
+            # Bundle-only; no KG mutation (CALLS edges are explicit add_edge ops).
             pass
 
     out["nodes"] = list(nodes_by_id.values())
@@ -273,6 +277,7 @@ def write_import_bundle(
     patch_by_xml: dict[str, str] = {}
     staged: list[Path] = []
     wanted: list[Path] = []
+    scl_files: dict[str, str] = {}
     lookup = [Path(p).expanduser() for p in (source_xml_paths or [])]
 
     for op in changeset.ops:
@@ -290,6 +295,11 @@ def write_import_bundle(
                 patch_by_xml[str(Path(str(xp)).expanduser().resolve())] = str(patch)
             if patch and name:
                 comments.setdefault(name, str(patch))
+        elif op.kind in {"rewrite_scl", "stage_scl_source"}:
+            name = str(op.payload.get("block_name") or "")
+            scl = str(op.payload.get("scl_text") or op.payload.get("scl") or "")
+            if name and scl.strip():
+                scl_files[name] = scl
 
     pool = list(wanted) + lookup
     for name, comment in comments.items():
@@ -342,6 +352,19 @@ def write_import_bundle(
         )
     (bundle / "staged_xmls.json").write_text(
         json.dumps([str(p) for p in staged], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    scl_dir = bundle / "external_sources"
+    staged_scls: list[str] = []
+    if scl_files:
+        scl_dir.mkdir(parents=True, exist_ok=True)
+        for name, text in scl_files.items():
+            safe = re.sub(r'[\\/:*?"<>|]', "_", name) + ".scl"
+            dest = scl_dir / safe
+            dest.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
+            staged_scls.append(str(dest))
+    (bundle / "staged_scls.json").write_text(
+        json.dumps(staged_scls, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     write_optimize_plan(bundle, changeset)
