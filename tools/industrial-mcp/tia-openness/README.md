@@ -27,11 +27,13 @@ XML → PLC Parser → PLC-IR → Neo4j → PLC Agent
 | `tia.list_blocks` | List `OB` / `FB` / `FC` / `DB` |
 | `tia.export_block` | Export one block as SimaticML XML |
 | `tia.export_project` | Full official Openness chapter-6 export (`--full`, default) or legacy `Blocks/` (`blocks_only` / `--blocks-only`) |
-| `tia.import_block` | Import SimaticML XML into the open project (`ImportOptions.Override` / `None`) |
+| `tia.import_block` | Import SimaticML XML into the open project (`ImportOptions.Override` / `None`). Refuses Safety/F-block XML. |
+| `tia.generate_from_source` | Import SCL via `ExternalSourceGroup.ExternalSources.CreateFromFile` + `GenerateBlocksFromSource()`. Refuses Safety/F-block SCL. Windows HostGateway only. |
+| `tia.compile_plc` | Fail-closed `ICompilable.Compile()`. If the API is unreachable or `ErrorCount>0`, `ok=false` — do not archive `.zap`. |
 | `tia.save_project` | Persist the open project (`Project.Save`) after import |
 | `tia.archive_project` | Archive open project to compressed `.zap*` (`Project.Archive` + `Compressed`) |
 
-Write-back flow: `tia.open_project` → `tia.import_block` → `tia.save_project` → `tia.archive_project`.
+Write-back flow: `tia.open_project` → (`tia.import_block` and/or `tia.generate_from_source`) → `tia.compile_plc` → `tia.save_project` → `tia.archive_project` (archive only if compile ok).
 
 **License:** Export/Import/Archive require a valid STEP 7 / TIA license (e.g. STEP 7 Basic).
 

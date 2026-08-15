@@ -41,6 +41,14 @@ def _job_with_dead() -> dict:
                 "interface_only": True,
                 "body_available": False,
             },
+            {
+                "name": "F-FB_EStop",
+                "type": "FB",
+                "number": 2000,
+                "networks": 1,
+                "body_available": True,
+                "is_safety": True,
+            },
         ],
         "knowledge_graph": {
             "nodes": [
@@ -63,6 +71,11 @@ def _job_with_dead() -> dict:
                         "block_type": "FB",
                         "interface_only": True,
                     },
+                },
+                {
+                    "id": "Block::F-FB_EStop",
+                    "type": "Block",
+                    "props": {"name": "F-FB_EStop", "block_type": "FB", "safety": True},
                 },
             ],
             "edges": [
@@ -112,6 +125,13 @@ def test_propose_optimization_marks_dead_and_skips_locked():
         if o.kind == "stage_xml_import" and o.payload.get("block_name") == "FB_Locked"
     ]
     assert locked_stage == []
+    safety_body = [
+        o
+        for o in cs.ops
+        if o.kind in {"rewrite_scl", "stage_scl_source", "stage_xml_import"}
+        and o.payload.get("block_name") == "F-FB_EStop"
+    ]
+    assert safety_body == []
     assert any(str(n).startswith("optimize_plan:") for n in cs.notes)
 
 

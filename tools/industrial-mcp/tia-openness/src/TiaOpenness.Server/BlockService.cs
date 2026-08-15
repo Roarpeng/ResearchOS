@@ -231,9 +231,22 @@ public sealed class BlockService
                 }
             }
 
+            if (XmlLooksLikeSafety(full))
+            {
+                return FailImport(
+                    "safety_block",
+                    "Refusing Blocks.Import for Safety/F-block XML. Never write F-block bodies.");
+            }
+
             var fileInfo = Activator.CreateInstance(fileInfoType, full)!;
             var imported = import.Invoke(blocks, new[] { fileInfo, importOption });
             var names = ExtractImportedNames(imported);
+            if (names.Any(LooksLikeSafetyName))
+            {
+                return FailImport(
+                    "safety_block",
+                    "Refusing Blocks.Import: imported name looks like a Safety/F-block. Never write F-block bodies.");
+            }
 
             return new ImportBlockResult
             {
@@ -249,6 +262,120 @@ public sealed class BlockService
         catch (Exception ex)
         {
             return FailImport("openness_error", Unwrap(ex).Message);
+        }
+    }
+
+    /// <summary>
+    /// Import SCL via the official Openness External Source path:
+    /// <c>PlcSoftware.ExternalSourceGroup.ExternalSources.CreateFromFile(name, path)</c>
+    /// then <c>PlcExternalSource.GenerateBlocksFromSource()</c>.
+    ///
+    /// Verified against Siemens TIA Portal Openness docs
+    /// ("Generating blocks from source" / "Adding external sources"):
+    /// existing generated blocks are overwritten; an exception rolls the project back.
+    /// Assumed (reflection, same pattern as Import): CreateFromFile(string, string),
+    /// optional Find/Delete of a same-named external source, and a parameterless
+    /// GenerateBlocksFromSource() (GenerateBlockOption.None if the overload exists).
+    /// Does not save the project — call ProjectService.SaveProject afterwards.
+    /// </summary>
+    public GenerateFromSourceResult GenerateBlocksFromSource(string sclPath, bool overwrite = true)
+    {
+        if (string.IsNullOrWhiteSpace(sclPath))
+        {
+            return FailGenerate("invalid_argument", "scl_path is required.");
+        }
+
+        var full = Path.GetFullPath(sclPath);
+        if (!File.Exists(full))
+        {
+            return FailGenerate("not_found", $"SCL file not found: {full}");
+        }
+
+        string sclText;
+        try
+        {
+            sclText = File.ReadAllText(full);
+        }
+        catch (Exception ex)
+        {
+            return FailGenerate("openness_error", Unwrap(ex).Message);
+        }
+
+        if (SclLooksLikeSafety(sclText))
+        {
+            return FailGenerate(
+                "safety_block",
+                "Refusing GenerateBlocksFromSource for Safety/F-block SCL. Never write F-block bodies.");
+        }
+
+        if (_projects.PlcSoftware is null)
+        {
+            return FailGenerate("invalid_argument", "No project open. Call tia.open_project first.");
+        }
+
+        try
+        {
+            var extGroup = GetProp(_projects.PlcSoftware, "ExternalSourceGroup");
+            if (extGroup is null)
+            {
+                return FailGenerate(
+                    "dependency_unavailable",
+                    "PlcSoftware.ExternalSourceGroup not found. Official Openness path is " +
+                    "ExternalSourceGroup.ExternalSources.CreateFromFile + GenerateBlocksFromSource " +
+                    "(Siemens TIA Portal Openness API, Generating blocks from source). " +
+                    "This TIA/Openness build does not expose it. Linux Docker cannot import SCL.");
+            }
+
+            var sources = GetProp(extGroup, "ExternalSources");
+            if (sources is null)
+            {
+                return FailGenerate(
+                    "dependency_unavailable",
+                    "ExternalSourceGroup.ExternalSources not found on this Openness build.");
+            }
+
+            var sourceName = Path.GetFileName(full);
+            if (overwrite)
+            {
+                TryDeleteExternalSource(sources, sourceName);
+            }
+
+            var created = TryCreateExternalSource(sources, sourceName, full);
+            if (created.Error is not null)
+            {
+                return created.Error;
+            }
+
+            var generated = InvokeGenerateBlocksFromSource(created.Source!);
+            if (generated.Error is not null)
+            {
+                return generated.Error;
+            }
+
+            var names = generated.Names ?? new List<string>();
+            if (names.Any(LooksLikeSafetyName))
+            {
+                return FailGenerate(
+                    "safety_block",
+                    "Refusing result: generated name looks like a Safety/F-block. Never write F-block bodies.");
+            }
+
+            return new GenerateFromSourceResult
+            {
+                Ok = true,
+                SclPath = full,
+                SourceName = sourceName,
+                Overwrite = overwrite,
+                GeneratedNames = names,
+                Api = "ExternalSourceGroup.ExternalSources.CreateFromFile + GenerateBlocksFromSource",
+                Message = names.Count == 0
+                    ? $"Generated blocks from {sourceName} (GenerateBlocksFromSource)."
+                    : $"Generated {names.Count} item(s) from {sourceName}: {string.Join(", ", names)}.",
+            };
+        }
+        catch (Exception ex)
+        {
+            return FailGenerate("openness_error", Unwrap(ex).Message);
         }
     }
 
@@ -377,54 +504,168 @@ public sealed class BlockService
     public string CompilePlcSoftware() => TryCompilePlcSoftware();
 
     /// <summary>
+    /// Fail-closed compile for writeback. If ICompilable is unreachable, Ok=false
+    /// with code compile_api_unavailable — callers must not archive .zap.
+    /// </summary>
+    public CompilePlcResult CompilePlcSoftwareStrict()
+    {
+        if (_projects.PlcSoftware is null)
+        {
+            return new CompilePlcResult
+            {
+                Ok = false,
+                ApiAvailable = false,
+                Error = new ToolError
+                {
+                    Code = "invalid_argument",
+                    Message = "No project open. Call tia.open_project first.",
+                },
+            };
+        }
+
+        try
+        {
+            var invoked = InvokeCompile(_projects.PlcSoftware);
+            if (!invoked.ApiAvailable)
+            {
+                return new CompilePlcResult
+                {
+                    Ok = false,
+                    ApiAvailable = false,
+                    Message = invoked.Note,
+                    Error = new ToolError
+                    {
+                        Code = "compile_api_unavailable",
+                        Message = invoked.Note
+                            + " Fail closed: do not archive .zap. Openness compile requires Windows HostGateway + TIA.",
+                    },
+                };
+            }
+
+            var errCount = ParseCount(invoked.ErrorCount);
+            var warnCount = ParseCount(invoked.WarningCount);
+            var state = invoked.State ?? "?";
+            var failed = errCount is > 0
+                || state.IndexOf("Error", StringComparison.OrdinalIgnoreCase) >= 0
+                || state.IndexOf("Fail", StringComparison.OrdinalIgnoreCase) >= 0;
+            var message = $"Compile State={state} errors={invoked.ErrorCount} warnings={invoked.WarningCount}";
+            return new CompilePlcResult
+            {
+                Ok = !failed,
+                ApiAvailable = true,
+                State = state,
+                ErrorCount = errCount,
+                WarningCount = warnCount,
+                InconsistentBlocks = invoked.Inconsistent,
+                Message = message,
+                Error = failed
+                    ? new ToolError
+                    {
+                        Code = "compile_failed",
+                        Message = message + (
+                            invoked.Inconsistent.Count == 0
+                                ? ""
+                                : " inconsistent=" + string.Join(", ", invoked.Inconsistent)),
+                    }
+                    : null,
+            };
+        }
+        catch (Exception ex)
+        {
+            return new CompilePlcResult
+            {
+                Ok = false,
+                ApiAvailable = false,
+                Error = new ToolError
+                {
+                    Code = "compile_api_unavailable",
+                    Message = "Compile threw: " + Unwrap(ex).Message
+                        + " Fail closed: do not archive .zap.",
+                },
+            };
+        }
+    }
+
+    /// <summary>
     /// Best-effort PLC software compile via Openness ICompilable (reflection).
-    /// Returns a short status note; never throws.
+    /// Returns a short status note; never throws. Used on export only.
     /// </summary>
     private string TryCompilePlcSoftware()
     {
+        if (_projects.PlcSoftware is null) return "Compile skipped: no PLC software.";
         try
         {
-            var plc = _projects.PlcSoftware;
-            if (plc is null) return "Compile skipped: no PLC software.";
-
-            MethodInfo? getService = null;
-            foreach (var m in plc.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance))
-            {
-                if (m.Name == "GetService" && m.IsGenericMethodDefinition && m.GetParameters().Length == 0)
-                {
-                    getService = m;
-                    break;
-                }
-            }
-            if (getService is null) return "Compile skipped: GetService not found.";
-
-            Type? iCompilable = plc.GetType().Assembly.GetType("Siemens.Engineering.Compiler.ICompilable");
-            if (iCompilable is null)
-            {
-                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    iCompilable = asm.GetType("Siemens.Engineering.Compiler.ICompilable");
-                    if (iCompilable is not null) break;
-                }
-            }
-            if (iCompilable is null) return "Compile skipped: ICompilable type not found.";
-
-            var service = getService.MakeGenericMethod(iCompilable).Invoke(plc, null);
-            if (service is null) return "Compile skipped: ICompilable service null.";
-
-            var compile = service.GetType().GetMethod("Compile", Type.EmptyTypes);
-            if (compile is null) return "Compile skipped: Compile() not found.";
-
-            var result = compile.Invoke(service, null);
-            var state = GetProp(result, "State")?.ToString() ?? "?";
-            var errCount = GetProp(result, "ErrorCount")?.ToString() ?? "?";
-            var warnCount = GetProp(result, "WarningCount")?.ToString() ?? "?";
-            return $"Compile State={state} errors={errCount} warnings={warnCount}";
+            var invoked = InvokeCompile(_projects.PlcSoftware);
+            return invoked.Note;
         }
         catch (Exception ex)
         {
             return "Compile skipped: " + Unwrap(ex).Message;
         }
+    }
+
+    private readonly record struct CompileInvoke(
+        bool ApiAvailable,
+        string Note,
+        string? State,
+        string? ErrorCount,
+        string? WarningCount,
+        List<string> Inconsistent);
+
+    private static CompileInvoke InvokeCompile(object plc)
+    {
+        MethodInfo? getService = null;
+        foreach (var m in plc.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (m.Name == "GetService" && m.IsGenericMethodDefinition && m.GetParameters().Length == 0)
+            {
+                getService = m;
+                break;
+            }
+        }
+        if (getService is null)
+        {
+            return new CompileInvoke(false, "Compile skipped: GetService not found.", null, null, null, new());
+        }
+
+        Type? iCompilable = plc.GetType().Assembly.GetType("Siemens.Engineering.Compiler.ICompilable");
+        if (iCompilable is null)
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                iCompilable = asm.GetType("Siemens.Engineering.Compiler.ICompilable");
+                if (iCompilable is not null) break;
+            }
+        }
+        if (iCompilable is null)
+        {
+            return new CompileInvoke(false, "Compile skipped: ICompilable type not found.", null, null, null, new());
+        }
+
+        var service = getService.MakeGenericMethod(iCompilable).Invoke(plc, null);
+        if (service is null)
+        {
+            return new CompileInvoke(false, "Compile skipped: ICompilable service null.", null, null, null, new());
+        }
+
+        var compile = service.GetType().GetMethod("Compile", Type.EmptyTypes);
+        if (compile is null)
+        {
+            return new CompileInvoke(false, "Compile skipped: Compile() not found.", null, null, null, new());
+        }
+
+        var result = compile.Invoke(service, null);
+        var state = GetProp(result, "State")?.ToString() ?? "?";
+        var errCount = GetProp(result, "ErrorCount")?.ToString() ?? "?";
+        var warnCount = GetProp(result, "WarningCount")?.ToString() ?? "?";
+        var inconsistent = ExtractInconsistentNames(result);
+        return new CompileInvoke(
+            true,
+            $"Compile State={state} errors={errCount} warnings={warnCount}",
+            state,
+            errCount,
+            warnCount,
+            inconsistent);
     }
 
     private void CollectBlocks(object group, string relative, List<BlockInfo> sink)
@@ -621,6 +862,223 @@ public sealed class BlockService
         Ok = false,
         Error = new ToolError { Code = code, Message = message },
     };
+
+    private static GenerateFromSourceResult FailGenerate(string code, string message) => new()
+    {
+        Ok = false,
+        Error = new ToolError { Code = code, Message = message },
+        Api = "ExternalSourceGroup.ExternalSources.CreateFromFile + GenerateBlocksFromSource",
+    };
+
+    /// <summary>F-OB / F-FB / F-FC / F-DB name heuristic (never write these bodies).</summary>
+    public static bool LooksLikeSafetyName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        var n = name.Trim();
+        if (n.StartsWith("F-", StringComparison.OrdinalIgnoreCase)) return true;
+        if (n.StartsWith("F_", StringComparison.OrdinalIgnoreCase)) return true;
+        var upper = n.ToUpperInvariant();
+        return upper.StartsWith("FOB") || upper.StartsWith("FFB")
+            || upper.StartsWith("FFC") || upper.StartsWith("FDB");
+    }
+
+    /// <summary>F-LAD / F-FBD / F-SCL / F-STL language heuristic.</summary>
+    public static bool LooksLikeSafetyLanguage(string? language)
+    {
+        if (string.IsNullOrWhiteSpace(language)) return false;
+        var u = language.Trim().ToUpperInvariant();
+        return u.StartsWith("F-") || u.StartsWith("F_") || u is "FSCL" or "FLAD" or "FFBD" or "FSTL";
+    }
+
+    /// <summary>Scan SCL header / keywords for Safety/F-block units.</summary>
+    public static bool SclLooksLikeSafety(string? scl)
+    {
+        if (string.IsNullOrWhiteSpace(scl)) return false;
+        if (Regex.IsMatch(scl, @"\bF-(?:FUNCTION_BLOCK|FUNCTION|ORGANIZATION_BLOCK|DATA_BLOCK)\b", RegexOptions.IgnoreCase))
+        {
+            return true;
+        }
+        foreach (Match m in Regex.Matches(
+            scl,
+            @"(?:FUNCTION_BLOCK|FUNCTION|ORGANIZATION_BLOCK|DATA_BLOCK)\s+""([^""]+)""",
+            RegexOptions.IgnoreCase))
+        {
+            if (LooksLikeSafetyName(m.Groups[1].Value)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Scan SimaticML XML for F-block name / F-language / failsafe markers.</summary>
+    public static bool XmlLooksLikeSafety(string xmlPath)
+    {
+        try
+        {
+            var text = File.ReadAllText(xmlPath);
+            if (Regex.IsMatch(text, @"<(?:ProgrammingLanguage)>\s*F[-_]", RegexOptions.IgnoreCase))
+            {
+                return true;
+            }
+            if (Regex.IsMatch(text, @"failsafe|f-runtime|safety\s+program", RegexOptions.IgnoreCase))
+            {
+                // Attribute noise is common; only treat as safety when a block name/lang also matches.
+            }
+            foreach (Match m in Regex.Matches(text, @"<Name>\s*([^<]+)\s*</Name>", RegexOptions.IgnoreCase))
+            {
+                if (LooksLikeSafetyName(m.Groups[1].Value.Trim())) return true;
+            }
+            return Regex.IsMatch(
+                text,
+                @"<(?:ProgrammingLanguage)>\s*(?:F-LAD|F-FBD|F-SCL|F-STL|FSCL|FLAD)\s*</",
+                RegexOptions.IgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private readonly record struct CreatedSource(object? Source, GenerateFromSourceResult? Error);
+    private readonly record struct GeneratedBlocks(List<string>? Names, GenerateFromSourceResult? Error);
+
+    private static void TryDeleteExternalSource(object sources, string sourceName)
+    {
+        try
+        {
+            var find = sources.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .FirstOrDefault(m =>
+                    m.Name == "Find" &&
+                    m.GetParameters().Length == 1 &&
+                    m.GetParameters()[0].ParameterType == typeof(string));
+            if (find is null) return;
+            var existing = find.Invoke(sources, new object[] { sourceName });
+            if (existing is null) return;
+            var delete = existing.GetType().GetMethod("Delete", Type.EmptyTypes);
+            delete?.Invoke(existing, null);
+        }
+        catch
+        {
+            // Overwrite is best-effort; CreateFromFile may still replace.
+        }
+    }
+
+    private static CreatedSource TryCreateExternalSource(object sources, string sourceName, string fullPath)
+    {
+        var create = sources.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(m =>
+            {
+                if (m.Name != "CreateFromFile") return false;
+                var ps = m.GetParameters();
+                return ps.Length == 2 && ps[0].ParameterType == typeof(string);
+            });
+        if (create is null)
+        {
+            return new CreatedSource(
+                null,
+                FailGenerate(
+                    "dependency_unavailable",
+                    "ExternalSources.CreateFromFile(string, path) not found. " +
+                    "Official Openness API (Adding external sources) is unavailable on this build."));
+        }
+
+        var second = create.GetParameters()[1].ParameterType;
+        object? secondArg = fullPath;
+        if (second.Name.IndexOf("FileInfo", StringComparison.Ordinal) >= 0)
+        {
+            secondArg = Activator.CreateInstance(second, fullPath);
+        }
+
+        var source = create.Invoke(sources, new[] { sourceName, secondArg });
+        if (source is null)
+        {
+            return new CreatedSource(
+                null,
+                FailGenerate("openness_error", "CreateFromFile returned null."));
+        }
+        return new CreatedSource(source, null);
+    }
+
+    private static GeneratedBlocks InvokeGenerateBlocksFromSource(object source)
+    {
+        var methods = source.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Where(m => m.Name == "GenerateBlocksFromSource")
+            .ToList();
+        if (methods.Count == 0)
+        {
+            return new GeneratedBlocks(
+                null,
+                FailGenerate(
+                    "dependency_unavailable",
+                    "PlcExternalSource.GenerateBlocksFromSource() not found. " +
+                    "Official Openness API (Generating blocks from source) is unavailable on this build."));
+        }
+
+        var parameterless = methods.FirstOrDefault(m => m.GetParameters().Length == 0);
+        object? generated;
+        if (parameterless is not null)
+        {
+            generated = parameterless.Invoke(source, null);
+        }
+        else
+        {
+            var withOption = methods.FirstOrDefault(m => m.GetParameters().Length == 1);
+            if (withOption is null)
+            {
+                return new GeneratedBlocks(
+                    null,
+                    FailGenerate(
+                        "dependency_unavailable",
+                        "GenerateBlocksFromSource overload not usable on this Openness build."));
+            }
+            var optType = withOption.GetParameters()[0].ParameterType;
+            object? option = null;
+            try
+            {
+                option = Enum.Parse(optType, "None");
+            }
+            catch (ArgumentException)
+            {
+                return new GeneratedBlocks(
+                    null,
+                    FailGenerate(
+                        "dependency_unavailable",
+                        "GenerateBlockOption.None not found on this Openness build."));
+            }
+            generated = withOption.Invoke(source, new[] { option });
+        }
+
+        return new GeneratedBlocks(ExtractImportedNames(generated), null);
+    }
+
+    private static int? ParseCount(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw) || raw == "?") return null;
+        return int.TryParse(raw, out var n) ? n : null;
+    }
+
+    private static List<string> ExtractInconsistentNames(object? compileResult)
+    {
+        var names = new List<string>();
+        if (compileResult is null) return names;
+        var messages = GetProp(compileResult, "Messages") ?? GetProp(compileResult, "CompilerMessages");
+        if (messages is not IEnumerable enumerable or string) return names;
+        foreach (var item in enumerable)
+        {
+            if (item is null) continue;
+            var path = GetPropString(item, "Path")
+                ?? GetPropString(item, "Description")
+                ?? GetPropString(item, "Message")
+                ?? item.ToString();
+            if (string.IsNullOrWhiteSpace(path)) continue;
+            if (path!.IndexOf("Inconsistent", StringComparison.OrdinalIgnoreCase) < 0
+                && path.IndexOf("error", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                continue;
+            }
+            names.Add(path);
+            if (names.Count >= 32) break;
+        }
+        return names;
+    }
 
     private static List<string> ExtractImportedNames(object? imported)
     {

@@ -410,6 +410,15 @@ export type PlcJobDetail = PlcJobSummary & {
   changeset?: Record<string, unknown> | null;
   writeback?: Record<string, unknown> | null;
   optimize_plan?: string;
+  scl_files?: Record<string, string>;
+  scl_diffs?: Array<{
+    block?: string;
+    before?: string;
+    after?: string;
+    diff?: string;
+    new_block?: boolean;
+  }>;
+  scl_skipped?: Array<{ block?: string; reason?: string; detail?: string }>;
   project_path?: string | null;
   export_ready?: boolean;
   export_dir?: string | null;
@@ -600,6 +609,15 @@ export async function optimizePlcJob(
     changeset?: Record<string, unknown>;
     optimize_plan?: string;
     ops?: number;
+    scl_files?: Record<string, string>;
+    scl_diffs?: Array<{
+      block?: string;
+      before?: string;
+      after?: string;
+      diff?: string;
+      new_block?: boolean;
+    }>;
+    skipped?: Array<{ block?: string; reason?: string; detail?: string }>;
   }>(res);
 }
 

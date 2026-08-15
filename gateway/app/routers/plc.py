@@ -297,6 +297,9 @@ async def propose_plc_changes(
     cs = plc.propose_job_changeset(job, body.message, body.block_name)
     payload = dict(cs) if isinstance(cs, dict) else {}
     payload["optimize_plan"] = job.get("optimize_plan") or ""
+    payload["scl_files"] = job.get("scl_files") or {}
+    payload["scl_diffs"] = job.get("scl_diffs") or []
+    payload["skipped"] = job.get("scl_skipped") or []
     return ApiResponse(ok=True, data=payload, request_id=request_id)
 
 
@@ -307,7 +310,7 @@ async def optimize_plc_job(
     principal: PrincipalDep,
     request_id: RequestIdDep,
 ) -> ApiResponse[dict]:
-    """Evidence-gated optimize proposal → changeset (HITL before writeback/zap)."""
+    """Evidence-gated optimize → changeset + SCL diffs (HITL before writeback/zap)."""
     _ = principal
     job = plc.get_job(job_id)
     if job is None:
@@ -327,6 +330,9 @@ async def optimize_plc_job(
             "changeset": cs,
             "optimize_plan": job.get("optimize_plan") or "",
             "ops": len(cs.get("ops") or []) if isinstance(cs, dict) else 0,
+            "scl_files": job.get("scl_files") or {},
+            "scl_diffs": job.get("scl_diffs") or [],
+            "skipped": job.get("scl_skipped") or [],
         },
         request_id=request_id,
     )
@@ -339,7 +345,7 @@ async def writeback_plc_job(
     principal: PrincipalDep,
     request_id: RequestIdDep,
 ) -> ApiResponse[dict]:
-    """HITL confirm: apply KG change-set and optionally Openness-import XML into .apxx."""
+    """HITL confirm: apply KG change-set and optionally Openness-import XML/SCL into .apxx."""
     _ = principal
     job = plc.get_job(job_id)
     if job is None:

@@ -105,6 +105,77 @@ public class TiaStatusTests
         Assert.Equal("invalid_argument", result.Error?.Code);
     }
 
+    [Theory]
+    [InlineData("F-FB_EStop", true)]
+    [InlineData("F_FC_Door", true)]
+    [InlineData("FOB_Safety", true)]
+    [InlineData("FB_Motor", false)]
+    [InlineData("FC_Hold", false)]
+    public void LooksLikeSafetyName_Classifies_F_Blocks(string name, bool expected)
+    {
+        Assert.Equal(expected, BlockService.LooksLikeSafetyName(name));
+    }
+
+    [Fact]
+    public void SclLooksLikeSafety_Detects_F_FunctionBlock()
+    {
+        Assert.True(BlockService.SclLooksLikeSafety("FUNCTION_BLOCK \"F-FB_EStop\"\nBEGIN\nEND_FUNCTION_BLOCK"));
+        Assert.True(BlockService.SclLooksLikeSafety("F-FUNCTION \"F_FC_Door\" : Void"));
+        Assert.False(BlockService.SclLooksLikeSafety("FUNCTION_BLOCK \"FB_Motor\"\nBEGIN\nEND_FUNCTION_BLOCK"));
+    }
+
+    [Fact]
+    public void GenerateBlocksFromSource_Refuses_Safety_Scl_Without_Portal()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "researchos-f-block-" + Guid.NewGuid().ToString("N") + ".scl");
+        File.WriteAllText(tmp, "FUNCTION_BLOCK \"F-FB_EStop\"\nBEGIN\nEND_FUNCTION_BLOCK\n");
+        try
+        {
+            using var connection = new TiaConnection("V19");
+            var projects = new ProjectService(connection);
+            var blocks = new BlockService(projects);
+            var result = blocks.GenerateBlocksFromSource(tmp);
+            Assert.False(result.Ok);
+            Assert.Equal("safety_block", result.Error?.Code);
+        }
+        finally
+        {
+            if (File.Exists(tmp)) File.Delete(tmp);
+        }
+    }
+
+    [Fact]
+    public void GenerateBlocksFromSource_Requires_Open_Project()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "researchos-std-" + Guid.NewGuid().ToString("N") + ".scl");
+        File.WriteAllText(tmp, "FUNCTION_BLOCK \"FB_Motor\"\nBEGIN\nEND_FUNCTION_BLOCK\n");
+        try
+        {
+            using var connection = new TiaConnection("V19");
+            var projects = new ProjectService(connection);
+            var blocks = new BlockService(projects);
+            var result = blocks.GenerateBlocksFromSource(tmp);
+            Assert.False(result.Ok);
+            Assert.Equal("invalid_argument", result.Error?.Code);
+        }
+        finally
+        {
+            if (File.Exists(tmp)) File.Delete(tmp);
+        }
+    }
+
+    [Fact]
+    public void CompilePlcSoftwareStrict_Requires_Open_Project()
+    {
+        using var connection = new TiaConnection("V19");
+        var projects = new ProjectService(connection);
+        var blocks = new BlockService(projects);
+        var result = blocks.CompilePlcSoftwareStrict();
+        Assert.False(result.Ok);
+        Assert.False(result.ApiAvailable);
+        Assert.Equal("invalid_argument", result.Error?.Code);
+    }
+
     [Fact]
     public void SaveProject_Requires_Open_Project()
     {

@@ -104,6 +104,9 @@ class PlcJobDetail(PlcJobSummary):
     changeset: dict[str, Any] | None = None
     writeback: dict[str, Any] | None = None
     optimize_plan: str = ""
+    scl_files: dict[str, str] = Field(default_factory=dict)
+    scl_diffs: list[dict[str, Any]] = Field(default_factory=list)
+    scl_skipped: list[dict[str, Any]] = Field(default_factory=list)
     source_xmls: list[str] = Field(default_factory=list)
     timings: dict[str, int] = Field(
         default_factory=dict,
@@ -118,7 +121,7 @@ class PlcProposeChangeRequest(BaseModel):
 
 
 class PlcOptimizeRequest(BaseModel):
-    """Evidence-gated optimization proposal (safe annotate/comment/XML stage)."""
+    """Evidence-gated optimization proposal (dead + decouple + SCL rewrite)."""
 
     block_name: str | None = Field(
         default=None,
@@ -131,7 +134,7 @@ class PlcOptimizeRequest(BaseModel):
 
 
 class PlcWritebackRequest(BaseModel):
-    """HITL confirm: apply KG changes and optionally import staged XML into .apxx."""
+    """HITL confirm: apply KG changes and optionally import XML/SCL into .apxx."""
 
     project_path: str | None = Field(
         default=None,

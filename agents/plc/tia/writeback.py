@@ -1,4 +1,4 @@
-"""PLC write-back orchestration — import bundle → Openness CLI import."""
+"""PLC write-back orchestration — import bundle → Openness XML/SCL + compile gate."""
 
 from __future__ import annotations
 
@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from agents.plc.tia.changeset import PlcChangeSet, write_import_bundle
-from agents.plc.tia.openness_cli import import_block_via_openness_cli
+from agents.plc.tia.openness_cli import (
+    compile_plc_via_openness_cli,
+    generate_from_source_via_openness_cli,
+    import_block_via_openness_cli,
+)
 
 
 def prepare_writeback(
@@ -29,16 +33,38 @@ def _staged_xmls(bundle_dir: Path) -> list[Path]:
     return sorted(bundle_dir.glob("*.xml"))
 
 
+def _staged_scls(bundle_dir: Path) -> list[Path]:
+    manifest = bundle_dir / "staged_scls.json"
+    if manifest.is_file():
+        raw = json.loads(manifest.read_text(encoding="utf-8"))
+        return [Path(p) for p in raw if Path(p).is_file()]
+    ext = bundle_dir / "external_sources"
+    if ext.is_dir():
+        return sorted(ext.glob("*.scl"))
+    return []
+
+
 def execute_writeback(
     project_path: str | Path,
     bundle_dir: str | Path,
     plc_name: str = "",
+    *,
+    compile_after: bool = True,
 ) -> dict[str, Any]:
-    """Import each staged XML via Openness CLI (project save is inside CLI)."""
+    """Import staged XML (comments) and SCL (logic), then fail-closed compile.
+
+    SCL import uses official Openness
+    ``CreateFromFile`` + ``GenerateBlocksFromSource`` (Windows HostGateway).
+    Compile must succeed before the caller archives ``.zap``. If the compile
+    API is unreachable, ``ok`` is false (fail closed) — do not archive.
+    """
     bundle = Path(bundle_dir).expanduser().resolve()
     xmls = _staged_xmls(bundle)
+    scls = _staged_scls(bundle)
     results: list[dict[str, Any]] = []
-    ok = True
+    scl_results: list[dict[str, Any]] = []
+    import_ok = True
+
     for xml in xmls:
         try:
             payload = import_block_via_openness_cli(
@@ -50,16 +76,67 @@ def execute_writeback(
             results.append({"xml": str(xml), "result": payload})
         except Exception as exc:  # noqa: BLE001
             results.append({"xml": str(xml), "result": {"ok": False, "error": str(exc)}})
-            ok = False
+            import_ok = False
             continue
         if not payload.get("ok"):
-            ok = False
+            import_ok = False
 
+    for scl in scls:
+        try:
+            payload = generate_from_source_via_openness_cli(
+                project_path,
+                scl,
+                plc_name=plc_name,
+                overwrite=True,
+            )
+            scl_results.append({"scl": str(scl), "result": payload})
+        except Exception as exc:  # noqa: BLE001
+            scl_results.append({"scl": str(scl), "result": {"ok": False, "error": str(exc)}})
+            import_ok = False
+            continue
+        if not payload.get("ok"):
+            import_ok = False
+
+    compile_payload: dict[str, Any] | None = None
+    compiled_ok = False
+    if compile_after and import_ok and (xmls or scls):
+        compile_payload = compile_plc_via_openness_cli(project_path, plc_name=plc_name)
+        compile = (
+            compile_payload.get("compile")
+            if isinstance(compile_payload.get("compile"), dict)
+            else compile_payload
+        )
+        compiled_ok = bool(compile_payload.get("ok") and (compile or {}).get("ok", True))
+        if compile and compile.get("apiAvailable") is False:
+            compiled_ok = False
+        if compile and compile.get("ok") is False:
+            compiled_ok = False
+    elif compile_after and not import_ok:
+        compile_payload = {
+            "ok": False,
+            "skipped": True,
+            "message": "Compile skipped because import failed.",
+        }
+    elif not compile_after:
+        compile_payload = {"ok": False, "skipped": True, "message": "Compile not requested."}
+
+    ok = import_ok and (compiled_ok if compile_after else import_ok)
+    note = (
+        "XML: Blocks.Import + Save. "
+        "SCL: ExternalSourceGroup.CreateFromFile + GenerateBlocksFromSource + Save. "
+        "Compile: ICompilable.Compile (fail closed). "
+        "Linux Docker cannot run these Openness calls."
+    )
     return {
         "ok": ok,
+        "import_ok": import_ok,
+        "compiled_ok": compiled_ok,
         "project_path": str(Path(project_path).expanduser().resolve()),
         "bundle_dir": str(bundle),
         "imported": len(results),
+        "scl_imported": len(scl_results),
         "results": results,
-        "note": "project save is performed inside the Openness CLI import-block command",
+        "scl_results": scl_results,
+        "compile": compile_payload,
+        "note": note,
     }

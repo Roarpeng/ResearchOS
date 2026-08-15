@@ -202,6 +202,71 @@ public sealed class ImportBlockResult
     public ToolError? Error { get; set; }
 }
 
+/// <summary>
+/// Result of External Source SCL import via
+/// <c>PlcSoftware.ExternalSourceGroup.ExternalSources.CreateFromFile</c>
+/// + <c>PlcExternalSource.GenerateBlocksFromSource()</c>
+/// (Siemens TIA Portal Openness: "Generating blocks from source").
+/// </summary>
+public sealed class GenerateFromSourceResult
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; set; }
+
+    [JsonPropertyName("sclPath")]
+    public string? SclPath { get; set; }
+
+    [JsonPropertyName("sourceName")]
+    public string? SourceName { get; set; }
+
+    [JsonPropertyName("overwrite")]
+    public bool Overwrite { get; set; }
+
+    [JsonPropertyName("generatedNames")]
+    public List<string>? GeneratedNames { get; set; }
+
+    [JsonPropertyName("api")]
+    public string? Api { get; set; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+
+    [JsonPropertyName("error")]
+    public ToolError? Error { get; set; }
+}
+
+/// <summary>
+/// Fail-closed PLC software compile via <c>ICompilable.Compile()</c>.
+/// Unlike export's best-effort skip, writeback must not archive when this fails
+/// or when the compile API is unreachable.
+/// </summary>
+public sealed class CompilePlcResult
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; set; }
+
+    [JsonPropertyName("apiAvailable")]
+    public bool ApiAvailable { get; set; }
+
+    [JsonPropertyName("state")]
+    public string? State { get; set; }
+
+    [JsonPropertyName("errorCount")]
+    public int? ErrorCount { get; set; }
+
+    [JsonPropertyName("warningCount")]
+    public int? WarningCount { get; set; }
+
+    [JsonPropertyName("inconsistentBlocks")]
+    public List<string>? InconsistentBlocks { get; set; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+
+    [JsonPropertyName("error")]
+    public ToolError? Error { get; set; }
+}
+
 public sealed class SaveProjectResult
 {
     [JsonPropertyName("ok")]
