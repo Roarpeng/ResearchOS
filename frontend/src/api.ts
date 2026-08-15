@@ -228,6 +228,7 @@ export type PlcCitation = {
   block?: string;
   network?: string;
   evidence?: string;
+  nodeId?: string;
   edge_type?: string;
   target?: string;
   snippet?: string;
