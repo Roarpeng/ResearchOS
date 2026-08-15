@@ -6,6 +6,8 @@ Edge types:
   CALLS       — OB/FC/FB calls another block (CallInfo)
   USES        — block uses a DB / instance DB (global DB root or Instance)
   INSTANCE_OF — instance DB typed from an FB
+  TYPED_AS    — Variable (or owning Block) member data_type is another FB/FC/UDT/DB
+                (Siemens multi-instance nesting; not CALLS, not instance-DB INSTANCE_OF)
   READS / WRITES — signal-level access
   NEXT        — successive callees in one caller
 
@@ -31,6 +33,12 @@ from agents.plc.tia.ir import (
     Variable,
 )
 from agents.plc.tia.parts import canon_part
+from agents.plc.tia.typed_as import (
+    NEST_SECTIONS,
+    TYPED_AS,
+    is_primitive_type,
+    strip_type_name,
+)
 
 #: Parts whose primary Access pin writes state (coils, assignments, resets)
 WRITE_PARTS = {
@@ -375,6 +383,88 @@ def _enrich_interface_from_call_params(
             known_names.add(pname)
 
 
+def _add_typed_as_block_edge(
+    kg: PlcKnowledgeGraph,
+    owner: str,
+    type_name: str,
+    *,
+    member: str,
+    section: str,
+) -> None:
+    """Block → Block TYPED_AS; merge extra member names on the same pair."""
+    src, tgt = f"Block::{owner}", f"Block::{type_name}"
+    key = (src, tgt, TYPED_AS)
+    if key in kg._edge_keys:
+        for edge in kg.edges:
+            if edge.source == src and edge.target == tgt and edge.type == TYPED_AS:
+                prev = str(edge.props.get("member") or "")
+                names = [p for p in prev.split(",") if p]
+                if member and member not in names:
+                    names.append(member)
+                    edge.props["member"] = ",".join(names)
+                if section and not edge.props.get("section"):
+                    edge.props["section"] = section
+                return
+        return
+    kg.add_edge(
+        src,
+        tgt,
+        TYPED_AS,
+        kind="multi_instance",
+        member=member,
+        section=section,
+        evidence="interface_data_type",
+    )
+
+
+def _emit_typed_as_edges(kg: PlcKnowledgeGraph, project: PlcProject) -> None:
+    """Link interface members whose data_type names an FB/FC/UDT/DB in IR."""
+    known_names = set(project.blocks)
+    for block in project.blocks.values():
+        for var in block.interface:
+            section = var.section.value if hasattr(var.section, "value") else str(var.section or "")
+            if section not in NEST_SECTIONS:
+                continue
+            type_name = strip_type_name(var.data_type)
+            if not type_name or is_primitive_type(type_name) or type_name == block.name:
+                continue
+            if type_name not in known_names:
+                continue
+            var_id = _variable_node_id(block.name, section, var.name)
+            kg.add_edge(
+                var_id,
+                f"Block::{type_name}",
+                TYPED_AS,
+                kind="multi_instance",
+                member=var.name,
+                section=section,
+                evidence="interface_data_type",
+            )
+            _add_typed_as_block_edge(
+                kg,
+                block.name,
+                type_name,
+                member=var.name,
+                section=section,
+            )
+
+
+def _annotate_nest_depth(kg: PlcKnowledgeGraph) -> None:
+    """Store nest_depth on Block nodes (longest TYPED_AS hop count)."""
+    from agents.plc.tia.typed_as import nest_depth_of
+
+    payload = kg.to_json()
+    memo: dict[str, int] = {}
+    for node in kg.nodes.values():
+        if node.type != "Block":
+            continue
+        name = str(node.props.get("name") or node.id.split("::", 1)[-1])
+        if not name:
+            continue
+        depth = nest_depth_of(payload, name, _memo=memo)
+        node.props["nest_depth"] = depth
+
+
 def _ensure_block_node(
     kg: PlcKnowledgeGraph,
     name: str,
@@ -676,5 +766,10 @@ def build_knowledge_graph(project: PlcProject) -> PlcKnowledgeGraph:
         )
         if type_attr in fb_names:
             kg.add_edge(f"Block::{block.name}", f"Block::{type_attr}", "INSTANCE_OF")
+
+    # Multi-instance member types (Variable.data_type → existing block). After
+    # CALLS enrichment so inferred interface pins are included. Never invent types.
+    _emit_typed_as_edges(kg, project)
+    _annotate_nest_depth(kg)
 
     return kg

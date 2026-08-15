@@ -703,7 +703,7 @@ export default function App() {
 
   function canvasGalaxyScore(c: KnowledgeCanvasData | null | undefined): number {
     if (!c?.edges?.length) return 0;
-    const want = new Set(["CALLS", "USES", "INSTANCE_OF", "DEPENDS_ON"]);
+    const want = new Set(["CALLS", "USES", "INSTANCE_OF", "TYPED_AS", "DEPENDS_ON"]);
     return c.edges.filter((e) => want.has(String(e.label || "")) || e.user_created).length;
   }
 
@@ -752,6 +752,7 @@ export default function App() {
     blocks.slice(0, 120).forEach((b) => {
       const btype = String(b.type || "Block").toUpperCase();
       const inst = String(b.instance_of || "").trim();
+      const nestDepth = Number(b.nest_depth || 0);
       const kind =
         btype === "OB"
           ? "plc_ob"
@@ -766,6 +767,7 @@ export default function App() {
       if (b.language) bits.push(String(b.language));
       if (b.networks != null) bits.push(`${b.networks} 网络`);
       if (inst) bits.push(`实例←${inst}`);
+      if (nestDepth > 0) bits.push(`嵌套深度 ${nestDepth}`);
       if (b.interface_only || (b.protected && !b.body_available)) {
         bits.push("接口开放·程序体不可用");
       } else if (b.protected) {
@@ -784,6 +786,7 @@ export default function App() {
           block_name: b.name,
           block_type: b.type,
           instance_of: inst || undefined,
+          nest_depth: nestDepth > 0 ? nestDepth : undefined,
           entity_kind: inst ? "instance" : "block",
           project: detail.project_name,
         },
@@ -798,6 +801,7 @@ export default function App() {
       known.add(name);
       const btype = String(props.block_type || "DB").toUpperCase();
       const external = Boolean(props.external);
+      const nestDepth = Number(props.nest_depth || 0);
       nodes.push({
         id: `plc_b_${detail.id}_${name}`,
         label: name,
@@ -826,6 +830,7 @@ export default function App() {
           instance_of: external
             ? String(props.instance_of || props.InstanceOfName || "").trim() || undefined
             : undefined,
+          nest_depth: nestDepth > 0 ? nestDepth : undefined,
           project: detail.project_name,
         },
       });
@@ -870,7 +875,7 @@ export default function App() {
       byLabel.set(`Block::${n.label}`, n.id);
       if (n.kind === "plc_tag") byLabel.set(`TagTable::${n.label}`, n.id);
     });
-    // Knowledge galaxy: CALLS / USES / INSTANCE_OF / DEPENDS_ON (full KG)
+    // Knowledge galaxy: CALLS / USES / INSTANCE_OF / TYPED_AS / DEPENDS_ON (full KG)
     const kgEdges = (detail.knowledge_graph?.edges || []) as Array<{
       source?: string;
       target?: string;
@@ -886,7 +891,13 @@ export default function App() {
     const rawEdges = (kgEdges.length ? kgEdges : lgFallback)
       .filter((e) => {
         const t = String(e.type || "");
-        return t === "CALLS" || t === "USES" || t === "INSTANCE_OF" || t === "DEPENDS_ON";
+        return (
+          t === "CALLS" ||
+          t === "USES" ||
+          t === "INSTANCE_OF" ||
+          t === "TYPED_AS" ||
+          t === "DEPENDS_ON"
+        );
       })
       .slice()
       .sort((a, b) => {
@@ -894,7 +905,8 @@ export default function App() {
           CALLS: 0,
           USES: 1,
           INSTANCE_OF: 2,
-          DEPENDS_ON: 3,
+          TYPED_AS: 3,
+          DEPENDS_ON: 4,
         };
         return (
           (rank[String(a.type)] ?? 9) - (rank[String(b.type)] ?? 9) ||

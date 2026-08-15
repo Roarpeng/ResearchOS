@@ -5,6 +5,14 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from typing import Any
 
+from agents.plc.tia.typed_as import (
+    TYPED_AS,
+    nest_depth_of as _nest_depth_of,
+    typed_as_chains as _typed_as_chains,
+    typed_as_children as _typed_as_children,
+    typed_as_members as _typed_as_members,
+)
+
 
 def normalize_kg(kg: dict[str, Any] | Any) -> dict[str, list[dict[str, Any]]]:
     """Return the JSON-compatible KG shape accepted by this module."""
@@ -167,6 +175,23 @@ def dead_blocks(kg: dict[str, Any] | Any) -> list[str]:
     ob_ids = set(_ob_block_ids(graph, blocks))
     reachable = {block_id(name) for name in reachable_from(graph, edge_types=("CALLS",))}
     return sorted(_block_name(node_id) for node_id in blocks if node_id not in ob_ids | reachable)
+
+
+def typed_as_of(kg: dict[str, Any] | Any, block_name: str) -> list[dict[str, Any]]:
+    """In-block members whose data_type is another IR block (multi-instance)."""
+    return _typed_as_members(normalize_kg(kg), block_name)
+
+
+def typed_as_callees(kg: dict[str, Any] | Any, block_name: str) -> list[str]:
+    return _typed_as_children(normalize_kg(kg), block_name)
+
+
+def nest_depth(kg: dict[str, Any] | Any, block_name: str) -> int:
+    return _nest_depth_of(normalize_kg(kg), block_name)
+
+
+def typed_as_chains(kg: dict[str, Any] | Any, block_name: str) -> list[list[str]]:
+    return _typed_as_chains(normalize_kg(kg), block_name)
 
 
 def _access_evidence(
@@ -346,6 +371,24 @@ def query(kg: dict[str, Any] | Any, op: str, **params: Any) -> dict[str, Any]:
             }
         )
         evidence = [e for e in graph["edges"] if e.get("source") == block or e.get("target") == block]
+    elif op in {"typed_as", "nested_fb"}:
+        block = str(params.get("block_name") or "")
+        result = {
+            "members": typed_as_of(graph, block),
+            "children": typed_as_callees(graph, block),
+            "nest_depth": nest_depth(graph, block),
+            "chains": typed_as_chains(graph, block),
+        }
+        bid = block_id(block)
+        evidence = [
+            e
+            for e in graph["edges"]
+            if e.get("type") == TYPED_AS
+            and (
+                e.get("source") == bid
+                or str(e.get("source") or "").startswith(f"Variable::{block}::")
+            )
+        ]
     else:
         raise ValueError(f"Unsupported graph query op: {op}")
     return {"op": op, "result": result, "evidence": evidence}

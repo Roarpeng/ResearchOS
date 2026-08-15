@@ -299,6 +299,31 @@ def _block_list(project: Any) -> list[dict[str, Any]]:
     return blocks
 
 
+def _annotate_block_nest_depth(job: dict[str, Any]) -> None:
+    """Copy TYPED_AS nest_depth onto job.blocks for node cards / chat."""
+    from agents.plc.tia.typed_as import nest_depth_of
+
+    kg = job.get("knowledge_graph") or {}
+    memo: dict[str, int] = {}
+    for block in job.get("blocks") or []:
+        name = str(block.get("name") or "")
+        if not name:
+            continue
+        block["nest_depth"] = nest_depth_of(kg, name, _memo=memo)
+
+
+def _format_nested_fb_line(job: dict[str, Any], block_name: str) -> str | None:
+    """One card line: embedded FB types + one more nesting level."""
+    from agents.plc.tia.typed_as import nest_depth_of, one_level_embed_bits
+
+    kg = job.get("knowledge_graph") or {}
+    bits = one_level_embed_bits(kg, block_name)
+    if not bits:
+        return None
+    depth = nest_depth_of(kg, block_name)
+    return f"嵌套 FB 类型（深度 {depth}）：" + "；".join(bits)
+
+
 def create_job_record(
     *,
     source_type: str,
@@ -626,6 +651,7 @@ def run_ingest_job(
         job["logic_graph"] = _logic_graph_from_kg(kg)
         logic_ms = int((time.monotonic() - t_logic) * 1000)
         pipeline_timings["logic_graph_ms"] = logic_ms
+        _annotate_block_nest_depth(job)
         _finish_progress(
             job,
             detail=(
@@ -1754,6 +1780,8 @@ def _format_optimize_hints(job: dict[str, Any], block_name: str | None = None) -
         tip = {
             "DEAD_BLOCK": "核对是否仍需保留，或补上从 OB 的 CALLS。",
             "UNREACHABLE_FROM_OB": "检查调用链是否缺失 / 仅被注释掉。",
+            "NESTED_FB_TYPE": "审查块内多实例成员类型；这不是父 FB CALL 子 FB。",
+            "MULTI_INSTANCE_CHAIN": "记录嵌套链；勿为改数字扁平化多实例。不可写体则只出 HITL 计划。",
         }.get(code, "结合调用与 IO 再确认是否可简化。")
         lines.append(f"- [{sev}] {msg} → {tip}")
         actionable += 1
@@ -1831,6 +1859,10 @@ def _describe_block_function(
         lines.append("；".join(call_bits))
     elif instance_of:
         lines.append(f"实例类型：`{instance_of}`")
+
+    nest_line = _format_nested_fb_line(job, block_name)
+    if nest_line:
+        lines.append(nest_line)
 
     step_titles = titles[:5]
     if step_titles:

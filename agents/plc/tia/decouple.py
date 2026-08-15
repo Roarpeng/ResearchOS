@@ -18,6 +18,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agents.plc.tia.scl_rewrite import refuse_body_write_reason
+from agents.plc.tia.typed_as import (
+    format_chain_plain,
+    nest_depth_of,
+    typed_as_chains,
+    typed_as_members,
+)
 
 _IDENT_RE = re.compile(r'(?:#|"?)([A-Za-z_][\w.]*)"?')
 _NETWORK_HEADER_RE = re.compile(
@@ -211,6 +217,61 @@ def _shared_instance_dbs(job: dict[str, Any]) -> dict[str, list[str]]:
         if src and tgt:
             owners.setdefault(tgt, []).append(src)
     return {db: sorted(set(cs)) for db, cs in owners.items() if len(set(cs)) > 1}
+
+
+def _nested_fb_reason(job: dict[str, Any], name: str) -> str | None:
+    """Deep in-block multi-instance nesting (depth ≥ 2). Not instance-DB INSTANCE_OF."""
+    kg = job.get("knowledge_graph") or {}
+    depth = nest_depth_of(kg, name)
+    if depth < 2:
+        return None
+    chains = typed_as_chains(kg, name)
+    chain = format_chain_plain(chains[0] if chains else [name])
+    return f"multi-instance nest depth {depth}: {chain}"
+
+
+def nested_fb_coupling_notes(job: dict[str, Any], *, focus: str | None = None) -> list[dict[str, Any]]:
+    """HITL notes for optimize_plan: chains + skip reasons even when no SCL can land."""
+    kg = job.get("knowledge_graph") or {}
+    blocks = _block_map(job)
+    names: list[str]
+    if focus and focus in blocks:
+        names = [focus]
+    else:
+        names = sorted(blocks)
+    notes: list[dict[str, Any]] = []
+    for name in names:
+        btype = str((blocks.get(name) or {}).get("type") or "").upper()
+        if btype not in {"FB", "FC", "DB", "UDT"}:
+            continue
+        depth = nest_depth_of(kg, name)
+        min_depth = 1 if (focus and name == focus) else 2
+        if depth < min_depth:
+            continue
+        members = typed_as_members(kg, name)
+        chains = typed_as_chains(kg, name)
+        skip: list[dict[str, str]] = []
+        nested_names = {str(m.get("type_block") or "") for m in members}
+        for chain in chains:
+            nested_names.update(chain[1:])
+        for nested in sorted(n for n in nested_names if n):
+            reason = refuse_body_write_reason(blocks.get(nested))
+            if reason:
+                skip.append({"block": nested, "reason": reason})
+        parent_skip = refuse_body_write_reason(blocks.get(name))
+        notes.append(
+            {
+                "block": name,
+                "depth": depth,
+                "members": members,
+                "chains": chains,
+                "skip": skip,
+                "parent_skip": parent_skip,
+                "writable_parent": parent_skip is None,
+            }
+        )
+    notes.sort(key=lambda n: (-int(n.get("depth") or 0), str(n.get("block") or "")))
+    return notes[:16]
 
 
 def _god_or_mixed(
@@ -423,6 +484,8 @@ def propose_decouple(
                 if name in callers:
                     reason = f"shared instance DB `{db}` used by {', '.join(callers)}"
                     break
+        if not reason:
+            reason = _nested_fb_reason(job, name)
         if reason:
             candidates.append((name, reason, networks))
 

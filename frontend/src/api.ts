@@ -389,6 +389,7 @@ export type PlcJobDetail = PlcJobSummary & {
     networks?: number;
     comment?: string;
     instance_of?: string | null;
+    nest_depth?: number | null;
     statics?: string[];
     members?: string[];
     inputs?: string[];
