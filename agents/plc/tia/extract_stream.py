@@ -128,13 +128,18 @@ class ExportJournalExtractor:
             self._results.extend(extra)
             results = list(self._results)
         merge_parse_results(self.project, results)
-        if not self.project.blocks and not self.project.tag_tables:
+        from agents.plc.tia.simaticml import _attach_export_manifest, _has_parsed_surface
+
+        _attach_export_manifest(self.project, self.export_path)
+        if not _has_parsed_surface(self.project):
             self.project.extraction_notes.append(
                 "no PLC blocks or tag tables recognized — check Openness export layout"
             )
         from agents.plc.tia.enrich import enrich_project_interfaces
+        from agents.plc.tia.safety import apply_safety_flags
 
         enrich_project_interfaces(self.project)
+        apply_safety_flags(self.project)
         return self.project
 
     def close(self) -> None:

@@ -46,6 +46,7 @@ class PlcChatTurn(BaseModel):
     content: str
     block_name: str | None = None
     created_at: datetime | None = None
+    citations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PlcAnalyzeRequest(BaseModel):
@@ -82,6 +83,10 @@ class PlcJobSummary(BaseModel):
     updated_at: datetime | None = None
     error: str | None = None
     export_ready: bool = False
+    coverage: dict[str, Any] | None = Field(
+        default=None,
+        description="Language/Part/TODO histogram; also on GET job detail",
+    )
 
 
 class PlcJobDetail(PlcJobSummary):
@@ -104,6 +109,7 @@ class PlcJobDetail(PlcJobSummary):
         default_factory=dict,
         description="Ingest stage wall-clock timings in milliseconds",
     )
+    coverage: dict[str, Any] = Field(default_factory=dict)
 
 
 class PlcProposeChangeRequest(BaseModel):

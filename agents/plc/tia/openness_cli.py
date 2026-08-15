@@ -372,6 +372,15 @@ def export_project_via_openness_cli(
         args.extend(["--plc", plc_name])
     if use_skip:
         args.append("--skip-compile")
+    if os.getenv("RESEARCHOS_TIA_EXPORT_BLOCKS_ONLY", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        args.append("--blocks-only")
+    else:
+        args.append("--full")
 
     notes: list[str] = []
     if use_skip:

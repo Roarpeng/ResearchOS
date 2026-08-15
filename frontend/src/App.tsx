@@ -21,6 +21,8 @@ import {
   resumeTask,
   unwrapTask,
   waitForPlcJob,
+  type PlcCitation,
+  type PlcCoverage,
   type PlcJobDetail,
 } from "./api";
 import KnowledgeCanvas, {
@@ -44,6 +46,7 @@ type ChatMsg = {
   role: "user" | "assistant" | "system";
   content: string;
   at: number;
+  citations?: PlcCitation[];
 };
 
 const TRI_SIZES_KEY = "researchos.tri.sizes";
@@ -58,6 +61,127 @@ const PANE_STEP = 24;
 
 function clamp(n: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, n));
+}
+
+function coverageConvertedPct(cov: PlcCoverage | null | undefined): number {
+  const total = Number(cov?.total_blocks || 0);
+  const converted = Number(cov?.converted || 0);
+  if (!total) return 0;
+  return Math.max(0, Math.min(100, Math.round((converted / total) * 100)));
+}
+
+function topTodoParts(cov: PlcCoverage | null | undefined, limit = 4): Array<{ name: string; count: number }> {
+  const top = cov?.top_untranslated_parts || [];
+  if (top.length) {
+    return top
+      .map((r) => ({ name: String(r.name || ""), count: Number(r.count || 0) }))
+      .filter((r) => r.name)
+      .slice(0, limit);
+  }
+  return Object.entries(cov?.todo_histogram || {})
+    .map(([name, count]) => ({ name, count: Number(count) }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
+}
+
+function obCallTree(detail: PlcJobDetail | null): string[] {
+  const nodes = detail?.logic_graph?.nodes || [];
+  const edges = (detail?.logic_graph?.edges || []).filter((e) => String(e.type || "") === "CALLS");
+  if (!edges.length) return [];
+  const labelOf = (id: string) => {
+    const n = nodes.find((x) => String(x.id || "") === id);
+    const props = (n?.props || {}) as Record<string, unknown>;
+    const raw = String(n?.label || props.name || id);
+    return raw.includes("::") ? raw.split("::").pop() || raw : raw;
+  };
+  const obs = nodes.filter((n) => {
+    const props = (n.props || {}) as Record<string, unknown>;
+    const t = String(n.type || props.block_type || "").toUpperCase();
+    const name = String(props.name || n.label || "");
+    return t === "OB" || /^ob\d+/i.test(name) || name === "Main";
+  });
+  const roots = obs.length ? obs : nodes.slice(0, 1);
+  const lines: string[] = [];
+  for (const ob of roots.slice(0, 2)) {
+    const oid = String(ob.id || "");
+    const kids = edges
+      .filter((e) => String(e.source || "") === oid)
+      .map((e) => labelOf(String(e.target || "")))
+      .filter(Boolean);
+    if (!kids.length) continue;
+    lines.push(`${labelOf(oid)} → ${kids.slice(0, 8).join(" → ")}`);
+  }
+  return lines.slice(0, 3);
+}
+
+function PlcCoverageStrip({ detail }: { detail: PlcJobDetail | null }) {
+  const cov = detail?.coverage;
+  if (!cov || !Number(cov.total_blocks || 0)) return null;
+  const pct = coverageConvertedPct(cov);
+  const r = 16;
+  const c = 2 * Math.PI * r;
+  const dash = (pct / 100) * c;
+  const todos = topTodoParts(cov);
+  const tree = obCallTree(detail);
+  const rate = Number(cov.todo_rate || 0);
+  return (
+    <div className="plc-coverage" aria-label="转换覆盖率">
+      <svg className="plc-coverage-ring" viewBox="0 0 40 40" width="40" height="40" aria-hidden="true">
+        <circle cx="20" cy="20" r={r} fill="none" stroke="var(--line)" strokeWidth="4" />
+        <circle
+          cx="20"
+          cy="20"
+          r={r}
+          fill="none"
+          stroke="var(--accent)"
+          strokeWidth="4"
+          strokeDasharray={`${dash} ${c - dash}`}
+          strokeLinecap="round"
+          transform="rotate(-90 20 20)"
+        />
+        <text x="20" y="22" textAnchor="middle" fontSize="9" fill="currentColor">
+          {pct}%
+        </text>
+      </svg>
+      <div className="plc-coverage-meta">
+        <div>
+          已转换 {cov.converted ?? 0}/{cov.total_blocks ?? 0} · TODO {rate.toLocaleString(undefined, { style: "percent", maximumFractionDigits: 1 })}
+          {cov.safety_block_count ? ` · F-block ${cov.safety_block_count}` : ""}
+        </div>
+        {todos.length ? (
+          <div className="plc-coverage-todos">
+            未译 Part：
+            {todos.map((t) => (
+              <span key={t.name} className="plc-chip">
+                {t.name} × {t.count}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div className="muted">无未译 Part</div>
+        )}
+        {tree.length ? <div className="plc-coverage-tree">OB 调用：{tree.join("；")}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function EvidenceChips({ citations }: { citations?: PlcCitation[] }) {
+  if (!citations?.length) return null;
+  return (
+    <div className="evidence-chips" aria-label="图谱证据">
+      {citations.slice(0, 6).map((c, i) => {
+        const label = [c.block, c.edge_type, c.target ? `→ ${c.target}` : ""]
+          .filter(Boolean)
+          .join(" ");
+        return (
+          <span key={`${c.block}-${c.edge_type}-${c.target}-${i}`} className="plc-chip" title={c.snippet || c.evidence || ""}>
+            {label || c.snippet || "证据"}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 function loadTriSizes(): { history: number; chat: number; historyCollapsed: boolean } {
@@ -341,10 +465,10 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  function pushMsg(role: ChatMsg["role"], content: string) {
+  function pushMsg(role: ChatMsg["role"], content: string, citations?: PlcCitation[]) {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const at = Date.now();
-    setMessages((prev) => [...prev, { id, role, content, at }]);
+    setMessages((prev) => [...prev, { id, role, content, at, citations }]);
     return id;
   }
 
@@ -767,7 +891,7 @@ export default function App() {
       setActiveId(id);
       setStatus(String(task.status || ""));
       setInterrupts((task.interrupts as Record<string, unknown>[]) || []);
-      pushMsg("assistant", turn.assistant_message || "");
+      pushMsg("assistant", turn.assistant_message || "", turn.citations);
       const linked = turn.plc_job_id || task.plc_job_id;
       // Node deep-dive / describe: keep current galaxy; only hydrate chat/job text.
       const isNodeFocus = Boolean(opts.focusNodeId || opts.blockName);
@@ -808,13 +932,17 @@ export default function App() {
             }
             const welcome = [...(detail.chat || [])]
               .reverse()
-              .find((c) => c.role === "assistant")?.content;
-            if (welcome) {
+              .find((c) => c.role === "assistant");
+            if (welcome?.content) {
               setMessages((prev) => {
                 for (let i = prev.length - 1; i >= 0; i -= 1) {
                   if (prev[i].role === "assistant") {
                     const next = prev.slice();
-                    next[i] = { ...next[i], content: welcome };
+                    next[i] = {
+                      ...next[i],
+                      content: welcome.content,
+                      citations: welcome.citations || next[i].citations,
+                    };
                     return next;
                   }
                 }
@@ -1170,7 +1298,10 @@ export default function App() {
                 </div>
                 <div className="bubble-body">
                   {m.role === "assistant" ? (
-                    <MarkdownBody content={m.content} />
+                    <>
+                      <MarkdownBody content={m.content} />
+                      <EvidenceChips citations={m.citations} />
+                    </>
                   ) : (
                     m.content
                   )}
@@ -1342,6 +1473,7 @@ export default function App() {
             </div>
           </div>
           <div className="canvas-body canvas-kg">
+            <PlcCoverageStrip detail={plcJob} />
             <KnowledgeCanvas
               data={canvas}
               logicGraph={

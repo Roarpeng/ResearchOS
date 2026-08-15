@@ -33,7 +33,24 @@ def test_extract_project_structure(result):
     assert project.extraction_notes == []
     assert set(project.blocks) == {"FB_Motor", "Main", "MotorInst"}
     assert set(project.tag_tables) == {"HMI", "Safety"}
-    assert project.summary() == {"FB": 1, "OB": 1, "DB": 1, "TagTables": 2, "Networks": 2}
+    assert project.summary() == {
+        "FB": 1,
+        "OB": 1,
+        "DB": 1,
+        "TagTables": 2,
+        "Networks": 2,
+        "SafetyBlocks": 0,
+        "Hardware": 0,
+        "WatchTables": 0,
+        "ForceTables": 0,
+        "TechnologyObjects": 0,
+        "Alarms": 0,
+        "ProDiag": 0,
+        "CfcCharts": 0,
+        "SafetyUnits": 0,
+        "HmiDevices": 0,
+        "OpcUaNodes": 0,
+    }
 
 
 def test_fb_motor_block_details(result):
@@ -176,6 +193,7 @@ def test_cli_runs_end_to_end(tmp_path, capsys):
     assert (result_root / "knowledge_graph" / "graph.json").exists()
     assert (result_root / "reports" / "analysis.md").exists()
     assert (result_root / "reports" / "conversion_report.json").exists()
+    assert (result_root / "reports" / "coverage.json").exists()
     assert (result_root / "manifest.json").exists()
 
 

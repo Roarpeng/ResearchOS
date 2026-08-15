@@ -60,7 +60,7 @@ public static class Program
         if (args.Length == 0)
         {
             Console.Error.WriteLine(
-                "Usage: --cli status | export-project --project <ap19> --export-dir <dir> [--plc name] [--version V19] [--skip-compile] | " +
+                "Usage: --cli status | export-project --project <ap19> --export-dir <dir> [--plc name] [--version V19] [--skip-compile] [--full|--blocks-only] | " +
                 "import-block --project <ap19> --xml <file> [--plc name] [--no-overwrite] [--version V19] | " +
                 "archive-project --project <ap19> --out-dir <dir> [--name file.zap19] [--version V19]");
             return 2;
@@ -104,6 +104,8 @@ public static class Program
                 opts.TryGetValue("plc", out var plc);
                 var skipCompile = IsTruthyFlag(opts, "skip-compile")
                     || IsTruthyEnv("TIA_EXPORT_SKIP_COMPILE");
+                var blocksOnly = IsTruthyFlag(opts, "blocks-only")
+                    || IsTruthyEnv("RESEARCHOS_TIA_EXPORT_BLOCKS_ONLY");
                 var openSw = System.Diagnostics.Stopwatch.StartNew();
                 var opened = projects.OpenProject(project, plc, withoutUi: true);
                 openSw.Stop();
@@ -113,7 +115,8 @@ public static class Program
                     return 3;
                 }
 
-                var exported = blocks.ExportAllBlocks(exportDir, skipCompile);
+                var surface = new ExportSurface(projects, blocks);
+                var exported = surface.Export(exportDir, skipCompile, blocksOnly);
                 var payload = new
                 {
                     ok = exported.Ok,
@@ -329,12 +332,16 @@ public sealed class TiaOpennessTools
     }
 
     [McpServerTool(Name = "tia.export_project"), Description(
-        "Export all OB/FB/FC/DB blocks from the open project into an export directory (Blocks/). " +
-        "Feed the directory to plc.tia.analyze / plc.tia.ingest.")]
+        "Export the official Openness chapter-6 surface (PLC groups, hardware, HMI structure) " +
+        "into export_dir (plc/<name>/..., hardware/, hmi/, manifest.json). " +
+        "blocks_only=true keeps the legacy Blocks/ layout. Feed the directory to plc.tia.analyze / plc.tia.ingest.")]
     public string ExportProject(
-        [Description("Output directory for SimaticML XML (creates Blocks/ under it).")] string export_dir)
+        [Description("Output directory for SimaticML / AML XML (full layout or Blocks/).")] string export_dir,
+        [Description("Skip ICompilable compile before export (default false).")] bool skip_compile = false,
+        [Description("When true, only export OB/FB/FC/DB into Blocks/ (legacy). Default false = full official surface.")] bool blocks_only = false)
     {
-        var result = _blocks.ExportAllBlocks(export_dir);
+        var surface = new ExportSurface(_projects, _blocks);
+        var result = surface.Export(export_dir, skip_compile, blocks_only);
         return JsonSerializer.Serialize(result, Json);
     }
 

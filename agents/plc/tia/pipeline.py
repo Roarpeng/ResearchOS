@@ -50,6 +50,9 @@ def analyze_tia_exports(
     else:
         timings["extract_ms"] = 0
         timings["extract_overlapped"] = 1
+    from agents.plc.tia.safety import apply_safety_flags
+
+    apply_safety_flags(project)
     with timed_step(timings, "fold_attach_ms"):
         project = attach_folded(project)
     with timed_step(timings, "kg_ms"):
@@ -61,6 +64,9 @@ def analyze_tia_exports(
         conversion = build_conversion_report(project, scl_sources)
     with timed_step(timings, "fold_serialize_ms"):
         folded = fold_project(project)
+    from agents.plc.tia.coverage import build_coverage_report
+
+    coverage = build_coverage_report(project, scl_sources, timings=timings)
     result: dict[str, Any] = {
         "project": project,
         "folded_logic": folded,
@@ -68,6 +74,7 @@ def analyze_tia_exports(
         "scl_sources": scl_sources,
         "report": report,
         "conversion_report": conversion,
+        "coverage": coverage,
         "timings": timings,
     }
     if publish_graph:
@@ -146,10 +153,17 @@ def analyze_plc_project(
                     "source_kind": imported.source_kind,
                     "export_dir": str(imported.export_dir),
                     "tia_version": imported.tia_version,
+                    "timings": timings,
                 },
             )
         analyzed["conversion_report"] = conversion
         package_root = str(Path(result_dir).resolve())
+
+    from agents.plc.tia.coverage import build_coverage_report
+
+    analyzed["coverage"] = build_coverage_report(
+        project, analyzed["scl_sources"], timings=timings
+    )
 
     analyzed["import"] = {
         "source_kind": imported.source_kind,

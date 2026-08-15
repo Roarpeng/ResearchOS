@@ -24,7 +24,11 @@ _SYNONYMS: dict[str, tuple[str, ...]] = {
     "架构": ("ob1", "main", "调用", "扫描", "architecture"),
     "整体": ("ob1", "project", "工程", "项目"),
     "通信": ("modbus", "communication", "pc", "通信"),
-    "安全": ("safety", "door", "安全门"),
+    "安全": ("safety", "door", "安全门", "failsafe", "f-fb", "f-fc"),
+    "线圈": ("coil", "write", "writes", "写入", "置位", "复位"),
+    "写入": ("writes", "coil", "writer", "写"),
+    "调用": ("calls", "call", "fb", "fc"),
+    "互锁": ("interlock", "interlocked", "互锁", "stop", "estop"),
 }
 
 
@@ -138,8 +142,32 @@ def retrieve_kg_for_query(
                     if title not in title_hits[name]:
                         title_hits[name].append(title)
 
-    # Always seed OB1/Main lightly for structural questions
+    # Tag READS/WRITES — "who writes this coil" must hit KG edges, never invent CALLs
     qlow = (query or "").lower()
+    for edge in (job.get("knowledge_graph") or {}).get("edges") or []:
+        if not isinstance(edge, dict):
+            continue
+        et = str(edge.get("type") or "")
+        if et not in {"READS", "WRITES", "CALLS", "USES"}:
+            continue
+        src = str(edge.get("source") or "").split("::")[-1]
+        tgt = str(edge.get("target") or "").split("::")[-1]
+        blob = f"{src} {tgt} {et}".lower()
+        for tok in tokens:
+            tl = tok.lower()
+            if tl and tl in blob:
+                if src:
+                    scores[src] += 10.0 if et in {"WRITES", "CALLS"} else 6.0
+                    label = f"{et} {tgt}"
+                    if label not in title_hits[src]:
+                        title_hits[src].append(label)
+                if et == "CALLS" and tgt and tgt in blocks:
+                    scores[tgt] += 4.0
+        if any(k in qlow for k in ("write", "coil", "写入", "线圈", "who writes")) and et == "WRITES":
+            if tokens and any(t.lower() in tgt.lower() for t in tokens if len(t) > 1):
+                scores[src] += 8.0
+
+    # Always seed OB1/Main lightly for structural questions
     if any(k in (query or "") for k in ("整体", "架构", "工程", "项目", "图谱")) or "architect" in qlow:
         for name, meta in blocks.items():
             if str(meta.get("type") or "").upper() == "OB":
@@ -179,16 +207,91 @@ def retrieve_kg_for_query(
                 "titles": titles[:12],
                 "calls": kids,
                 "called_by": parents,
+                "is_safety": bool(meta.get("is_safety") or meta.get("safety")),
             }
         )
 
-    return {
+    retrieval = {
         "query": query,
         "tokens": tokens[:24],
         "hits": hits,
         "project": job.get("project_name") or "",
         "summary": job.get("summary") or {},
     }
+    retrieval["citations"] = citations_for_retrieval(job, retrieval)
+    return retrieval
+
+
+def _edge_network(edge: dict[str, Any]) -> str:
+    props = edge.get("props") if isinstance(edge.get("props"), dict) else {}
+    raw = str(props.get("network") or edge.get("network") or "")
+    return raw.split("::")[-1] if raw else ""
+
+
+def _scl_snippet(job: dict[str, Any], block_name: str, *, needle: str = "") -> str:
+    scl = str((job.get("scl_sources") or {}).get(block_name) or "")
+    lines = [ln.strip() for ln in scl.splitlines() if ln.strip() and not ln.strip().startswith("//")]
+    if needle:
+        nlow = needle.lower()
+        for ln in lines:
+            if nlow in ln.lower() and not ln.startswith("(*"):
+                return ln[:180]
+    for ln in lines:
+        if ":=" in ln or "=>" in ln or "(" in ln:
+            return ln[:180]
+    return ""
+
+
+def citations_for_retrieval(job: dict[str, Any], retrieval: dict[str, Any]) -> list[dict[str, Any]]:
+    """KG edge + network/SCL snippet citations. Never invent CALLs."""
+    names = {str(h.get("name")) for h in (retrieval.get("hits") or []) if h.get("name")}
+    citations: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for edge in (job.get("knowledge_graph") or {}).get("edges") or []:
+        if not isinstance(edge, dict):
+            continue
+        et = str(edge.get("type") or "")
+        if et not in {"CALLS", "USES", "WRITES", "READS"}:
+            continue
+        src = str(edge.get("source") or "").split("::")[-1]
+        tgt = str(edge.get("target") or "").split("::")[-1]
+        if src not in names and tgt not in names:
+            continue
+        key = (et, src, tgt)
+        if key in seen:
+            continue
+        seen.add(key)
+        props = edge.get("props") if isinstance(edge.get("props"), dict) else {}
+        network = _edge_network(edge)
+        snippet = _scl_snippet(job, src, needle=tgt)
+        citations.append(
+            {
+                "block": src,
+                "network": network,
+                "evidence": str(props.get("evidence") or et),
+                "edge_type": et,
+                "target": tgt,
+                "snippet": snippet,
+            }
+        )
+        if len(citations) >= 24:
+            break
+    if not citations:
+        for h in retrieval.get("hits") or []:
+            name = str(h.get("name") or "")
+            snippet = _scl_snippet(job, name)
+            if name:
+                citations.append(
+                    {
+                        "block": name,
+                        "network": (h.get("titles") or [""])[0] if h.get("titles") else "",
+                        "evidence": "retrieval_hit",
+                        "edge_type": "",
+                        "target": "",
+                        "snippet": snippet,
+                    }
+                )
+    return citations[:24]
 
 
 def _format_evidence_pack(retrieval: dict[str, Any]) -> str:
@@ -245,10 +348,25 @@ def _deterministic_answer(retrieval: dict[str, Any], query: str) -> str:
                 lines.append(f"  - {t}")
 
     lines.append(
-        f"_检索命中 {len(hits)} 个块（块名/注释/网络标题/CALLS）。"
+        f"_检索命中 {len(hits)} 个块（块名/注释/网络标题/CALLS/READS/WRITES）。"
         "已配置 PLC 对话模型时将用 LLM 基于上述证据作答；未配置则直接展示检索证据。"
         "可用 `@块名` 继续下钻。_"
     )
+    citations = retrieval.get("citations") or []
+    if citations:
+        lines.append("")
+        lines.append("**证据：**")
+        for c in citations[:8]:
+            bits = [f"`{c.get('block')}`"]
+            if c.get("network"):
+                bits.append(str(c["network"]))
+            if c.get("edge_type"):
+                bits.append(str(c["edge_type"]))
+            if c.get("target"):
+                bits.append(f"→ `{c['target']}`")
+            if c.get("snippet"):
+                bits.append(f"`{c['snippet']}`")
+            lines.append("- " + " · ".join(bits))
     return "\n".join(lines)
 
 
@@ -333,7 +451,19 @@ def answer_query_with_kg(
     chat_history: list[dict[str, str]] | None = None,
 ) -> str:
     """Understand dialogue context → retrieve KG → answer (LLM if configured else grounded)."""
-    # Fold recent user turns into retrieval query for dialogue continuity
+    return answer_query_pack(
+        job, query, focus_block=focus_block, chat_history=chat_history
+    )["content"]
+
+
+def answer_query_pack(
+    job: dict[str, Any],
+    query: str,
+    *,
+    focus_block: str | None = None,
+    chat_history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Same as ``answer_query_with_kg`` plus structured citations for the API/UI."""
     hist_bits = []
     for turn in list(chat_history or [])[-4:]:
         if (turn.get("role") or "") == "user":
@@ -341,11 +471,16 @@ def answer_query_with_kg(
     retrieval_query = " ".join(hist_bits + [query or ""]).strip() or (query or "")
 
     retrieval = retrieve_kg_for_query(job, retrieval_query, focus_block=focus_block)
+    citations = list(retrieval.get("citations") or [])
     llm_ans = _try_llm_answer(retrieval, query or retrieval_query, chat_history)
     if llm_ans:
-        # Keep a thin evidence footer so answers stay auditable
         names = [h["name"] for h in (retrieval.get("hits") or [])[:5]]
+        content = llm_ans.rstrip()
         if names:
-            return llm_ans.rstrip() + "\n\n_依据块：`" + "`、`".join(names) + "`_"
-        return llm_ans
-    return _deterministic_answer(retrieval, query or retrieval_query)
+            content += "\n\n_依据块：`" + "`、`".join(names) + "`_"
+        return {"content": content, "citations": citations, "retrieval": retrieval}
+    return {
+        "content": _deterministic_answer(retrieval, query or retrieval_query),
+        "citations": citations,
+        "retrieval": retrieval,
+    }

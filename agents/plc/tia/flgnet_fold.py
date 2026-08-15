@@ -19,26 +19,24 @@ from agents.plc.tia.ir import (
     PlcProject,
     Ref,
 )
-
-COMPARE_OPS = {
-    "Eq": "=",
-    "Ne": "<>",
-    "Gt": ">",
-    "Ge": ">=",
-    "Lt": "<",
-    "Le": "<=",
-}
+from agents.plc.tia.parts import (
+    BOX_PARTS,
+    BRANCH_PARTS,
+    CALL_PARTS,
+    COIL_PARTS,
+    COMPARE_OPS,
+    CONVERT_PARTS,
+    JUMP_PARTS,
+    MOVE_PARTS,
+    MUX_PARTS,
+    canon_part,
+)
 
 RLO_OUTPUT_PARTS = {"Contact", "NegContact", "NotContact", "ContactNeg"} | set(COMPARE_OPS)
-BRANCH_PARTS = {"Contact", "NegContact", "NotContact", "ContactNeg", *COMPARE_OPS}
-COIL_PARTS = {"Coil", "NegCoil", "Set", "Reset", "Save"}
-MOVE_PARTS = {"Move", "Assign", "Move_Bool", "Move_Word", "Move_DWord", "Move_Real"}
 COUNTER_PARTS = {"CTU", "CTD", "CTUD"}
-TIMER_PARTS = {"TON", "TOF", "TP"}
+TIMER_PARTS = {"TON", "TOF", "TP", "TONR"}
 EDGE_TRIG_PARTS = {"R_TRIG", "F_TRIG", "P_TRIG"}
-CALL_PARTS = {"Call", "CallPart"}
-BOX_PARTS = COUNTER_PARTS | TIMER_PARTS | EDGE_TRIG_PARTS
-_SKIP_CALL_PINS = {"in", "operand", "db", "instance", "en", "eno", "EN", "ENO"}
+_SKIP_CALL_PINS = {"in", "operand", "db", "instance", "en", "EN"}
 _OUTPUT_SECTIONS = {"Output", "Return"}
 _OUTPUT_PINS = {"Q", "QU", "QD", "OUT", "OUT1", "CV", "ET", "ENO", "RET_VAL"}
 
@@ -194,11 +192,12 @@ class _NetworkFolder:
             if part.name in {"NegContact", "NotContact", "ContactNeg"} or part.negated:
                 operand_expr = Not(operand_expr)
             return operand_expr if incoming == Lit(True) else And((incoming, operand_expr))
-        if part.name in COMPARE_OPS:
+        cname = canon_part(part.name)
+        if cname in COMPARE_OPS:
             lhs = self._pin_access(part, "in1")
             rhs = self._pin_access(part, "in2")
             return Compare(
-                COMPARE_OPS[part.name],
+                COMPARE_OPS[cname],
                 Ref(lhs) if lhs is not None else Lit("(* in1 *)"),
                 Ref(rhs) if rhs is not None else Lit("(* in2 *)"),
             )
@@ -219,15 +218,17 @@ class _NetworkFolder:
                 )
             return folded
         for part in self.network.parts.values():
-            if part.name in COIL_PARTS:
+            self._visited.clear()
+            name = canon_part(part.name)
+            if name in COIL_PARTS:
                 target = self._operand_access(part)
                 kind = {
                     "NegCoil": "neg_coil",
                     "Set": "set",
                     "Reset": "reset",
-                }.get(part.name, "coil")
+                }.get(name, "coil")
                 folded.statements.append(AssignStmt(target, self._value_at_pin(part.uuid, "in"), kind))
-            elif part.name in MOVE_PARTS or (part.name or "").startswith("Move"):
+            elif name in MOVE_PARTS or (part.name or "").startswith("Move"):
                 src = self._pin_access(part, "in")
                 dst = self._pin_access(part, "out")
                 if dst is None:
@@ -247,18 +248,24 @@ class _NetworkFolder:
                 folded.statements.append(
                     AssignStmt(dst, src_expr, kind="move", enable=en_expr)
                 )
-            elif part.name in BOX_PARTS:
+            elif name in CONVERT_PARTS:
+                folded.statements.append(self._fold_convert(part, name))
+            elif name in MUX_PARTS:
+                folded.statements.append(self._fold_mux(part, name))
+            elif name in JUMP_PARTS:
+                folded.statements.append(self._fold_jump(part, name))
+            elif name in BOX_PARTS:
                 folded.statements.append(self._fold_box_call(part))
             elif (
-                part.name in CALL_PARTS
+                name in CALL_PARTS
                 or part.template_values.get("Call")
                 or part.template_values.get("calledBlock")
             ):
                 folded.statements.append(self._fold_block_call(part))
-            elif part.name in BRANCH_PARTS:
+            elif name in BRANCH_PARTS or name in COMPARE_OPS:
                 continue
             else:
-                folded.unresolved_parts.append(part.uuid or part.name or "unknown")
+                folded.unresolved_parts.append(part.name or part.uuid or "unknown")
         return folded
 
     def _pin_has_real_driver(self, part: Part, pin: str) -> bool:
@@ -337,7 +344,7 @@ class _NetworkFolder:
         )
         params: list[str] = []
         # Boolean / RLO inputs may be driven by contacts, not IdentCon Access.
-        for pin in ("CU", "CD", "R", "LD", "IN", "CLK"):
+        for pin in ("CU", "CD", "R", "R1", "S", "S1", "LD", "IN", "CLK"):
             if part.accesses.get(pin) is not None and not self._wires_to_pin(part.uuid, pin):
                 params.append(f"{pin} := {part.accesses[pin].as_scl()}")
                 continue
@@ -358,6 +365,61 @@ class _NetworkFolder:
                 params.append(f"{pin} => {access.as_scl()}")
         call = f"{inst}({', '.join(params)});"
         return AssignStmt(None, Lit(True), kind="call", target_scl=call)
+
+    def _fold_convert(self, part: Part, name: str) -> AssignStmt:
+        src = self._pin_access(part, "in") or part.accesses.get("in")
+        dst = self._pin_access(part, "out") or part.accesses.get("out")
+        src_txt = src.as_scl() if src is not None else "(* in *)"
+        dst_txt = dst.as_scl() if dst is not None else "(* out *)"
+        if name == "Round":
+            line = f"{dst_txt} := ROUND({src_txt});"
+        else:
+            to_type = (
+                part.template_values.get("Type")
+                or part.template_values.get("OutType")
+                or ""
+            ).strip()
+            if to_type:
+                line = f"{dst_txt} := {src_txt}; (* Convert → {to_type} *)"
+            else:
+                line = f"{dst_txt} := {src_txt}; (* Convert *)"
+        return AssignStmt(None, Lit(True), kind="call", target_scl=line)
+
+    def _fold_mux(self, part: Part, name: str) -> AssignStmt:
+        k = self._pin_access(part, "k") or part.accesses.get("k") or part.accesses.get("K")
+        out = self._pin_access(part, "out") or part.accesses.get("out")
+        k_txt = k.as_scl() if k is not None else "#K"
+        out_txt = out.as_scl() if out is not None else "(* out *)"
+        if name == "Demux":
+            ins = self._pin_access(part, "in") or part.accesses.get("in")
+            in_txt = ins.as_scl() if ins is not None else "(* in *)"
+            line = f"(* Demux *) CASE {k_txt} OF (* {in_txt} → {out_txt} *); END_CASE;"
+        else:
+            ins = []
+            for pin in ("in0", "in1", "in2", "in3", "IN0", "IN1"):
+                acc = self._pin_access(part, pin) or part.accesses.get(pin)
+                if acc is not None:
+                    ins.append(acc.as_scl())
+            args = ", ".join([k_txt, *ins]) if ins else k_txt
+            line = f"{out_txt} := (* Mux *) {args};"
+        return AssignStmt(None, Lit(True), kind="call", target_scl=line)
+
+    def _fold_jump(self, part: Part, name: str) -> AssignStmt:
+        label = (
+            part.template_values.get("Label")
+            or part.template_values.get("Name")
+            or (self._operand_access(part).raw if self._operand_access(part) else "")
+            or part.name
+        )
+        if name == "Label":
+            line = f"{label}:"
+        elif name == "Return":
+            cond = expr_to_scl(self._value_at_pin(part.uuid, "in"))
+            line = "RETURN;" if cond == "TRUE" else f"IF {cond} THEN RETURN; END_IF;"
+        else:
+            cond = expr_to_scl(self._value_at_pin(part.uuid, "in"))
+            line = f"JMP {label};" if cond == "TRUE" else f"IF {cond} THEN JMP {label}; END_IF;"
+        return AssignStmt(None, Lit(True), kind="call", target_scl=line)
 
 
 def fold_network(network: Network) -> FoldedNetwork:

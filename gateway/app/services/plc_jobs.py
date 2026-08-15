@@ -135,6 +135,11 @@ def _logic_graph_from_kg(
         tgt = str(e.get("target") or "")
         if src not in ob_ids or tgt not in by_id or src == tgt:
             continue
+        src_safe = bool((by_id.get(src) or {}).get("props", {}).get("safety"))
+        tgt_safe = bool((by_id.get(tgt) or {}).get("props", {}).get("safety"))
+        if src_safe != tgt_safe:
+            # F-blocks are first-class and never mixed into standard scan logic
+            continue
         key = (src, tgt, "CALLS")
         if key in seen:
             continue
@@ -287,6 +292,7 @@ def _block_list(project: Any) -> list[dict[str, Any]]:
                 "protected": is_protected,
                 "interface_only": is_iface_only,
                 "body_available": body_ok,
+                "is_safety": bool(getattr(block, "is_safety", False)),
             }
         )
     blocks.sort(key=lambda b: (b.get("type") or "", b.get("name") or ""))
@@ -330,6 +336,7 @@ def create_job_record(
         "source_xmls": [],
         "progress": [],
         "timings": {},
+        "coverage": {},
         "error": None,
         "created_at": now,
         "updated_at": now,
@@ -545,6 +552,7 @@ def run_ingest_job(
                 "source_kind": imported.source_kind,
                 "export_dir": str(imported.export_dir),
                 "tia_version": imported.tia_version,
+                "timings": pipeline_timings,
             },
         )
         pipeline_timings["package_ms"] = int((time.monotonic() - t_pkg) * 1000)
@@ -559,6 +567,7 @@ def run_ingest_job(
         job["report"] = interpretation_report(project, result["knowledge_graph"])
         job["graph_publish"] = result.get("graph_publish")
         job["blocks"] = _block_list(project)
+        job["coverage"] = result.get("coverage") or {}
         job["export_dir"] = str(work / "package")
         job["export_ready"] = True
         ir_bits = {
@@ -1917,7 +1926,7 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
     if _wants_optimize_hints(msg) and not at:
         return "\n".join(_format_optimize_hints(job, None))
 
-    from agents.plc.tia.chat_retrieve import answer_query_with_kg
+    from agents.plc.tia.chat_retrieve import answer_query_pack
 
     history = []
     chat_turns = list(job.get("chat") or [])
@@ -1926,12 +1935,14 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
             history.append(
                 {"role": str(turn.get("role") or "user"), "content": str(turn.get("content"))}
             )
-    return answer_query_with_kg(
+    pack = answer_query_pack(
         job,
         msg,
         focus_block=focus or None,
         chat_history=history,
     )
+    job["_last_citations"] = list(pack.get("citations") or [])
+    return pack["content"]
 
 
 def analyze_job(job: dict[str, Any], *, block_name: str | None = None) -> dict[str, Any]:
@@ -1965,12 +1976,14 @@ def append_chat_turn(
     role: str,
     content: str,
     block_name: str | None = None,
+    citations: list[dict[str, Any]] | None = None,
 ) -> None:
     job.setdefault("chat", []).append(
         {
             "role": role,
             "content": content,
             "block_name": block_name,
+            "citations": list(citations or []),
             "created_at": _now(),
         }
     )

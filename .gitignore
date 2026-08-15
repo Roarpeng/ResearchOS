@@ -25,6 +25,9 @@ Cursor/
 data/
 *.log
 PLC_Openness_data/
+TIAPortalOpenness*.pdf
+**/*Openness*.pdf
+
 
 # IDE / OS
 .idea/

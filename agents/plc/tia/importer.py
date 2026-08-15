@@ -499,19 +499,35 @@ def _looks_like_simaticml_xml(path: Path) -> bool:
         "SW.Blocks.",
         "SW.Tags.",
         "SW.DataTypes.",
+        "SW.Types.",
         "DocumentType",
         "PlcStruct",
         "TagTable",
+        "PlcWatchTable",
+        "PlcForceTable",
+        "TechnologicalObject",
+        "SW.Alarm",
+        "SW.Cfc",
+        "SafetyUnit",
+        "HardwareTree",
+        "CAEXFile",
+        "Hmi.Screen",
+        "Hmi.Tag",
+        "OpcUa",
+        "ProjectTexts",
     )
     return any(m in head for m in markers)
 
 
 def has_simaticml_exports(root: Path) -> bool:
-    """Whether a tree contains real SimaticML program/tag exports."""
+    """Whether a tree contains real SimaticML / official Openness export XML."""
     root = root.resolve()
-    for blocks in root.rglob("Blocks"):
-        if blocks.is_dir() and any(blocks.glob("*.xml")):
-            return True
+    if (root / "manifest.json").is_file():
+        return True
+    for folder in ("Blocks", "blocks", "tags", "types", "watch", "hardware", "hmi", "plc"):
+        for found in root.rglob(folder):
+            if found.is_dir() and any(found.rglob("*.xml")):
+                return True
     for xml in root.rglob("*.xml"):
         if _looks_like_simaticml_xml(xml):
             return True
@@ -524,7 +540,8 @@ def diagnose_extracted_tree(root: Path) -> dict[str, object]:
     xmls = sorted(root.rglob("*.xml"))
     apxx = find_apxx_files(root)
     has_blocks = any(
-        b.is_dir() and any(b.glob("*.xml")) for b in root.rglob("Blocks")
+        b.is_dir() and any(b.glob("*.xml"))
+        for b in list(root.rglob("Blocks")) + list(root.rglob("blocks"))
     )
     has_simatic = has_simaticml_exports(root)
     if has_simatic:
@@ -568,9 +585,14 @@ def pick_project_root_from_extracted(root: Path) -> Path:
     3. The extraction root itself
     """
     root = root.resolve()
-    for blocks in root.rglob("Blocks"):
+    if (root / "manifest.json").is_file():
+        return root
+    for blocks in list(root.rglob("Blocks")) + list(root.rglob("blocks")):
         if blocks.is_dir() and any(blocks.glob("*.xml")):
-            return blocks.parent
+            parent = blocks.parent
+            if parent.parent.name.lower() == "plc":
+                return parent.parent.parent
+            return parent
     if has_simaticml_exports(root):
         return root
     apxx_files = find_apxx_files(root)

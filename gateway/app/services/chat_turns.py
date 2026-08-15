@@ -352,6 +352,7 @@ def _pack(
     assistant_message: str,
     route: str,
     plc_job: dict[str, Any] | None,
+    citations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "task": task,
@@ -359,6 +360,7 @@ def _pack(
         "route": route,
         "plc_job": plc_job,
         "knowledge_canvas": (task.get("result") or {}).get("knowledge_canvas") or kx.empty_canvas(),
+        "citations": list(citations or []),
     }
 
 
@@ -477,7 +479,14 @@ async def handle_chat_turn(
                 ).strip() or None
             plc.append_chat_turn(job, role="user", content=user_text, block_name=resolved_block)
             answer = plc.answer_block_chat(job, user_text, resolved_block)
-            plc.append_chat_turn(job, role="assistant", content=answer, block_name=resolved_block)
+            citations = list(job.pop("_last_citations", None) or [])
+            plc.append_chat_turn(
+                job,
+                role="assistant",
+                content=answer,
+                block_name=resolved_block,
+                citations=citations,
+            )
             task["updated_at"] = _now()
             task["result"] = {
                 **(task.get("result") or {}),
@@ -500,7 +509,13 @@ async def handle_chat_turn(
             )
             with mem.store._lock:
                 mem.store.tasks[task["id"]] = task
-            return _pack(task, assistant_message=answer, route="plc", plc_job=job)
+            return _pack(
+                task,
+                assistant_message=answer,
+                route="plc",
+                plc_job=job,
+                citations=citations,
+            )
 
     decision = detect_route(
         text or (upload_filename or ""),

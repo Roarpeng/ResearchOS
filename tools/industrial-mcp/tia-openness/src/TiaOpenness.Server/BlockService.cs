@@ -373,6 +373,9 @@ public sealed class BlockService
         }
     }
 
+    /// <summary>Public wrapper so full-surface export can compile before walking groups.</summary>
+    public string CompilePlcSoftware() => TryCompilePlcSoftware();
+
     /// <summary>
     /// Best-effort PLC software compile via Openness ICompilable (reflection).
     /// Returns a short status note; never throws.

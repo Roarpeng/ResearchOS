@@ -125,8 +125,10 @@ def test_chat_plc_path_and_followup(client: TestClient) -> None:
         data={"message": "有哪些块？", "task_id": task_id},
     )
     assert follow.status_code == 200
-    assert follow.json()["data"]["route"] == "plc"
-    assert follow.json()["data"]["assistant_message"]
+    follow_data = follow.json()["data"]
+    assert follow_data["route"] == "plc"
+    assert follow_data["assistant_message"]
+    assert isinstance(follow_data.get("citations"), list)
     canvas2 = follow.json()["data"].get("knowledge_canvas") or {}
     assert any(
         n.get("kind") in {"plc_block", "plc_project"} for n in (canvas2.get("nodes") or [])
