@@ -27,6 +27,7 @@ import {
 } from "./api";
 import KnowledgeCanvas, {
   autoLayoutKnowledge,
+  type CanvasFocusRequest,
   type KnowledgeCanvasData,
   type KnowledgeNode,
 } from "./KnowledgeCanvas";
@@ -41,13 +42,32 @@ type Topic = {
   plcJobId?: string | null;
 };
 
+type ChatScope = {
+  nodeId: string;
+  blockName: string;
+  label: string;
+  kind: string;
+  looksLikeOutput?: boolean;
+};
+
 type ChatMsg = {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
   at: number;
   citations?: PlcCitation[];
+  /** Node-scoped user turns render a small `@FB_Motor` prefix. */
+  scopeLabel?: string;
 };
+
+const PLC_SCOPE_KINDS = new Set([
+  "plc_block",
+  "plc_ob",
+  "plc_db",
+  "plc_udt",
+  "plc_instance",
+  "plc_tag",
+]);
 
 const TRI_SIZES_KEY = "researchos.tri.sizes";
 const TRI_DEFAULT = { history: 220, chat: 400 };
@@ -166,7 +186,85 @@ function PlcCoverageStrip({ detail }: { detail: PlcJobDetail | null }) {
   );
 }
 
-function EvidenceChips({ citations }: { citations?: PlcCitation[] }) {
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function looksLikeOutputCoil(node: KnowledgeNode): boolean {
+  const label = String(node.label || "");
+  const summary = String(node.summary || "");
+  const quote = String(node.source?.quote || "");
+  const blob = `${label} ${summary} ${quote}`;
+  if (/WRITE/i.test(summary)) return true;
+  if (/^(Q|%Q|Y)\b/i.test(label)) return true;
+  return /%Q|线圈|coil|output|输出/i.test(blob);
+}
+
+function isPlcScopeNode(node: KnowledgeNode | null | undefined): boolean {
+  if (!node) return false;
+  if (PLC_SCOPE_KINDS.has(String(node.kind || ""))) return true;
+  return Boolean(node.source?.type === "plc" && (node.source.block_name || node.source.quote));
+}
+
+function chatScopeFromNode(node: KnowledgeNode): ChatScope {
+  const blockName =
+    String(node.source?.block_name || "").trim() ||
+    (node.kind === "plc_tag" ? String(node.label || "").trim() : "") ||
+    String(node.label || "").trim();
+  return {
+    nodeId: node.id,
+    blockName,
+    label: String(node.label || blockName || node.id),
+    kind: String(node.kind || ""),
+    looksLikeOutput: looksLikeOutputCoil(node),
+  };
+}
+
+function mentionFromText(text: string): string | null {
+  const hit = text.match(/^@(\S+)/);
+  return hit?.[1] || null;
+}
+
+function userBubbleParts(m: ChatMsg): { prefix?: string; body: string } {
+  if (m.scopeLabel) {
+    const re = new RegExp(`^@${escapeRegExp(m.scopeLabel)}\\s*`);
+    return { prefix: m.scopeLabel, body: m.content.replace(re, "") || m.content };
+  }
+  const hit = m.content.match(/^@(\S+)\s+([\s\S]+)$/);
+  if (hit) return { prefix: hit[1], body: hit[2] };
+  return { body: m.content };
+}
+
+function attachCitationNodes(citations: PlcCitation[] | undefined, nodes: KnowledgeNode[]): PlcCitation[] {
+  if (!citations?.length) return [];
+  return citations.map((c) => {
+    if (c.nodeId) return c;
+    const block = String(c.block || "").trim();
+    const target = String(c.target || "").trim();
+    const hit =
+      nodes.find((n) => n.id === block || n.source?.block_name === block || n.label === block) ||
+      nodes.find((n) => n.id === target || n.source?.block_name === target || n.label === target);
+    return hit ? { ...c, nodeId: hit.id } : c;
+  });
+}
+
+function UserBubbleText({ message }: { message: ChatMsg }) {
+  const parts = userBubbleParts(message);
+  return (
+    <>
+      {parts.prefix ? <span className="bubble-scope">@{parts.prefix}</span> : null}
+      {parts.body}
+    </>
+  );
+}
+
+function EvidenceChips({
+  citations,
+  onFocusNode,
+}: {
+  citations?: PlcCitation[];
+  onFocusNode?: (ref: string) => void;
+}) {
   if (!citations?.length) return null;
   return (
     <div className="evidence-chips" aria-label="图谱证据">
@@ -174,8 +272,27 @@ function EvidenceChips({ citations }: { citations?: PlcCitation[] }) {
         const label = [c.block, c.edge_type, c.target ? `→ ${c.target}` : ""]
           .filter(Boolean)
           .join(" ");
+        const focusRef = c.nodeId || c.block || "";
+        const title = [c.network, c.snippet || c.evidence].filter(Boolean).join(" · ");
+        if (focusRef && onFocusNode) {
+          return (
+            <button
+              key={`${c.block}-${c.edge_type}-${c.target}-${i}`}
+              type="button"
+              className="plc-chip evidence-chip"
+              title={title || "定位到画布节点"}
+              onClick={() => onFocusNode(focusRef)}
+            >
+              {label || c.snippet || "证据"}
+            </button>
+          );
+        }
         return (
-          <span key={`${c.block}-${c.edge_type}-${c.target}-${i}`} className="plc-chip" title={c.snippet || c.evidence || ""}>
+          <span
+            key={`${c.block}-${c.edge_type}-${c.target}-${i}`}
+            className="plc-chip"
+            title={title}
+          >
             {label || c.snippet || "证据"}
           </span>
         );
@@ -305,8 +422,11 @@ export default function App() {
   const [chatW, setChatW] = useState(initialTri.chat);
   const [historyCollapsed, setHistoryCollapsed] = useState(initialTri.historyCollapsed);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [chatScope, setChatScope] = useState<ChatScope | null>(null);
+  const [canvasFocus, setCanvasFocus] = useState<CanvasFocusRequest | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const triRef = useRef<HTMLDivElement | null>(null);
   const historyWRef = useRef(historyW);
@@ -465,11 +585,82 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  function pushMsg(role: ChatMsg["role"], content: string, citations?: PlcCitation[]) {
+  function pushMsg(
+    role: ChatMsg["role"],
+    content: string,
+    extra?: { citations?: PlcCitation[]; scopeLabel?: string },
+  ) {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const at = Date.now();
-    setMessages((prev) => [...prev, { id, role, content, at, citations }]);
+    setMessages((prev) => [
+      ...prev,
+      { id, role, content, at, citations: extra?.citations, scopeLabel: extra?.scopeLabel },
+    ]);
     return id;
+  }
+
+  function focusComposer() {
+    window.requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (!el) return;
+      el.focus();
+      el.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  function applyChatScope(node: KnowledgeNode | null) {
+    if (!node || !isPlcScopeNode(node)) {
+      setChatScope(null);
+      return;
+    }
+    setChatScope(chatScopeFromNode(node));
+  }
+
+  function clearChatScope() {
+    setChatScope(null);
+    setCanvasFocus({ key: Date.now(), clear: true });
+  }
+
+  function onAskInChat(node: KnowledgeNode) {
+    applyChatScope(node);
+    focusComposer();
+  }
+
+  function onFocusNode(ref: string) {
+    const token = String(ref || "").trim();
+    if (!token) return;
+    const node =
+      canvas.nodes.find((n) => n.id === token) ||
+      canvas.nodes.find((n) => n.source?.block_name === token || n.label === token);
+    if (node) applyChatScope(node);
+    setCanvasFocus({
+      key: Date.now(),
+      nodeId: node?.id || (token.startsWith("plc_") || token.startsWith("sig_") ? token : undefined),
+      blockName: node?.source?.block_name || node?.label || token,
+    });
+  }
+
+  function scopedNode(): KnowledgeNode | null {
+    if (!chatScope) return null;
+    return (
+      canvas.nodes.find((n) => n.id === chatScope.nodeId) || {
+        id: chatScope.nodeId,
+        label: chatScope.label,
+        kind: chatScope.kind,
+        x: 0,
+        y: 0,
+        source: { type: "plc", block_name: chatScope.blockName },
+      }
+    );
+  }
+
+  function scopedPrompts(scope: ChatScope): string[] {
+    const tag = scope.kind === "plc_tag";
+    const prompts = tag
+      ? ["这个信号干什么", "谁读写它", "谁读写这些信号"]
+      : ["这个块干什么", "谁调用它 / 它调用谁", "谁读写这些信号"];
+    if (scope.looksLikeOutput) prompts.push("有没有互锁");
+    return prompts;
   }
 
   function startNew() {
@@ -482,6 +673,8 @@ export default function App() {
     setInterrupts([]);
     setPlcJob(null);
     setPlcJobId(null);
+    setChatScope(null);
+    setCanvasFocus(null);
     setCanvas(emptyCanvas());
     if (fileRef.current) fileRef.current.value = "";
   }
@@ -750,6 +943,8 @@ export default function App() {
     setCanvas(emptyCanvas());
     setPlcJob(null);
     setPlcJobId(null);
+    setChatScope(null);
+    setCanvasFocus(null);
     try {
       const body = await fetchTask(topic.id);
       const task = unwrapTask(body);
@@ -790,6 +985,8 @@ export default function App() {
               role: c.role === "user" ? "user" : "assistant",
               content: c.content,
               at: base + i,
+              citations: c.citations,
+              scopeLabel: c.block_name || mentionFromText(c.content) || undefined,
             })),
           );
         }
@@ -853,10 +1050,15 @@ export default function App() {
     focusNodeId?: string | null;
     blockName?: string | null;
     displayUser?: string;
+    scopeLabel?: string;
   }) {
     setBusy(true);
     const display = opts.displayUser || opts.message;
-    if (display) pushMsg("user", display);
+    if (display) {
+      pushMsg("user", display, {
+        scopeLabel: opts.scopeLabel || mentionFromText(display) || undefined,
+      });
+    }
     const parsing =
       Boolean(opts.file) ||
       /\.(zap\d*|ap\d+|xml|zip)\b/i.test(opts.message) ||
@@ -891,7 +1093,9 @@ export default function App() {
       setActiveId(id);
       setStatus(String(task.status || ""));
       setInterrupts((task.interrupts as Record<string, unknown>[]) || []);
-      pushMsg("assistant", turn.assistant_message || "", turn.citations);
+      pushMsg("assistant", turn.assistant_message || "", {
+        citations: attachCitationNodes(turn.citations, canvas.nodes),
+      });
       const linked = turn.plc_job_id || task.plc_job_id;
       // Node deep-dive / describe: keep current galaxy; only hydrate chat/job text.
       const isNodeFocus = Boolean(opts.focusNodeId || opts.blockName);
@@ -941,7 +1145,10 @@ export default function App() {
                     next[i] = {
                       ...next[i],
                       content: welcome.content,
-                      citations: welcome.citations || next[i].citations,
+                      citations: attachCitationNodes(
+                        welcome.citations || next[i].citations,
+                        canvas.nodes,
+                      ),
                     };
                     return next;
                   }
@@ -1008,43 +1215,59 @@ export default function App() {
     setDraft("");
     setFile(null);
     if (fileRef.current) fileRef.current.value = "";
+    const fallback = text || `解析工程文件 ${attached?.name || ""}`.trim();
+    const display = text || (attached ? `（上传 ${attached.name}）` : "");
+    if (attached) {
+      await sendTurn({
+        message: fallback,
+        file: attached,
+        displayUser: display,
+      });
+      return;
+    }
+    const mentioned = mentionFromText(text);
+    if (mentioned) {
+      await sendTurn({
+        message: fallback,
+        file: attached,
+        focusNodeId: chatScope?.nodeId,
+        blockName: mentioned,
+        displayUser: display,
+        scopeLabel: mentioned,
+      });
+      return;
+    }
+    if (chatScope) {
+      await sendTurn({
+        message: `@${chatScope.blockName} ${fallback}`,
+        file: attached,
+        focusNodeId: chatScope.nodeId,
+        blockName: chatScope.blockName,
+        displayUser: display,
+        scopeLabel: chatScope.label,
+      });
+      return;
+    }
     await sendTurn({
-      message: text || `解析工程文件 ${attached?.name || ""}`.trim(),
+      message: fallback,
       file: attached,
-      displayUser: text || (attached ? `（上传 ${attached.name}）` : ""),
+      displayUser: display,
     });
   }
 
   async function onDeepDive(node: KnowledgeNode, question: string) {
-    const block =
-      node.source?.block_name ||
-      (node.kind === "plc_block" ||
-      node.kind === "plc_ob" ||
-      node.kind === "plc_db" ||
-      node.kind === "plc_udt" ||
-      node.kind === "plc_instance"
-        ? node.label
-        : "") ||
-      "";
+    applyChatScope(node);
+    const scope = chatScopeFromNode(node);
+    const block = scope.blockName;
     const q = question.trim();
     const message = block ? `@${block} ${q}` : q;
     await sendTurn({
       message,
       focusNodeId: node.id,
       blockName: block || null,
-      displayUser: message,
+      displayUser: q,
+      scopeLabel: scope.label || undefined,
     });
-  }
-
-  async function onNodeDescribe(node: KnowledgeNode) {
-    const isInstance =
-      node.kind === "plc_instance" || node.source?.entity_kind === "instance";
-    await onDeepDive(
-      node,
-      isInstance
-        ? "请简述该实例的父块、类型块与接口；不要贴源码"
-        : "请简述该块作用、关键 IO 与调用关系；不要贴源码",
-    );
   }
 
   async function onOptimizePropose() {
@@ -1300,10 +1523,10 @@ export default function App() {
                   {m.role === "assistant" ? (
                     <>
                       <MarkdownBody content={m.content} />
-                      <EvidenceChips citations={m.citations} />
+                      <EvidenceChips citations={m.citations} onFocusNode={onFocusNode} />
                     </>
                   ) : (
-                    m.content
+                    <UserBubbleText message={m} />
                   )}
                   {m.role === "assistant" && /展开\s*SCL/.test(m.content) ? (
                     <div className="chat-quick">
@@ -1312,11 +1535,13 @@ export default function App() {
                         disabled={busy}
                         onClick={() => {
                           const hit = m.content.match(/\*\*`([^`]+)`\*\*/);
-                          const block = hit?.[1] || null;
+                          const block = hit?.[1] || chatScope?.blockName || null;
                           void sendTurn({
                             message: block ? `@${block} 展开 SCL` : "展开 SCL",
+                            focusNodeId: chatScope?.nodeId,
                             blockName: block,
-                            displayUser: block ? `@${block} 展开 SCL` : "展开 SCL",
+                            displayUser: "展开 SCL",
+                            scopeLabel: block || undefined,
                           });
                         }}
                       >
@@ -1327,11 +1552,13 @@ export default function App() {
                         disabled={busy}
                         onClick={() => {
                           const hit = m.content.match(/\*\*`([^`]+)`\*\*/);
-                          const block = hit?.[1] || null;
+                          const block = hit?.[1] || chatScope?.blockName || null;
                           void sendTurn({
                             message: block ? `@${block} 优化建议` : "优化建议",
+                            focusNodeId: chatScope?.nodeId,
                             blockName: block,
-                            displayUser: block ? `@${block} 优化建议` : "优化建议",
+                            displayUser: "优化建议",
+                            scopeLabel: block || undefined,
                           });
                         }}
                       >
@@ -1366,12 +1593,48 @@ export default function App() {
             <div ref={chatEndRef} />
           </div>
 
+          {chatScope ? (
+            <div className="chat-scope-prompts" aria-label="针对当前节点的建议">
+              {scopedPrompts(chatScope).map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  className="ghost compact"
+                  disabled={busy}
+                  onClick={() => {
+                    const node = scopedNode();
+                    if (node) void onDeepDive(node, prompt);
+                  }}
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
           <form className="composer composer-plc" onSubmit={onSend}>
             <div className="composer-main">
+              {chatScope ? (
+                <div className="scope-chip" aria-label={`正在问 ${chatScope.label}`}>
+                  <span className="scope-chip-label">正在问 · {chatScope.label}</span>
+                  <button
+                    type="button"
+                    className="scope-chip-clear"
+                    title="回到整工程对话"
+                    aria-label="清除节点范围，回到整工程对话"
+                    onClick={clearChatScope}
+                  >
+                    ×
+                  </button>
+                </div>
+              ) : null}
               <textarea
+                ref={composerRef}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder="需要探索什么吗？"
+                placeholder={
+                  chatScope ? `问 ${chatScope.label}：谁写这个输出？` : "需要探索什么吗？"
+                }
                 rows={2}
                 disabled={busy}
                 onKeyDown={(e) => {
@@ -1502,7 +1765,9 @@ export default function App() {
               knowledgeGraph={plcJob?.knowledge_graph || null}
               onChange={setCanvas}
               onDeepDive={onDeepDive}
-              onNodeDescribe={onNodeDescribe}
+              onSelectNode={applyChatScope}
+              onAskInChat={onAskInChat}
+              focusRequest={canvasFocus}
               busy={busy}
             />
           </div>

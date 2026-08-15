@@ -77,6 +77,7 @@ button.topic,
 .composer button,
 .plc-ingest button,
 .kg-deep button,
+.kg-ask-chat,
 .btn,
 .tabs button {
   transition:
@@ -93,6 +94,7 @@ button.topic:active,
 .composer button:active,
 .plc-ingest button:active,
 .kg-deep button:active,
+.kg-ask-chat:active,
 .btn:active,
 .tabs button:active {
   transform: scale(0.97);
@@ -1022,6 +1024,101 @@ body.col-resizing * {
   flex-wrap: wrap;
   gap: 0.2rem;
   margin-top: 0.4rem;
+}
+
+button.evidence-chip {
+  margin: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
+}
+
+button.evidence-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  padding: 0.12rem 0.2rem 0.12rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-size: 0.78rem;
+  color: var(--accent-hover);
+}
+
+.scope-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope-chip-clear {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  line-height: 1;
+  padding: 0;
+}
+
+.scope-chip-clear:hover {
+  background: color-mix(in srgb, var(--accent) 18%, #fff);
+}
+
+.chat-scope-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.45rem 0.8rem 0;
+  flex-shrink: 0;
+}
+
+.chat-scope-prompts button {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.75rem;
+}
+
+.bubble-scope {
+  display: inline-block;
+  margin-right: 0.35rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 80%, #fff);
+  color: var(--accent-hover);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.4;
+  vertical-align: 0.05em;
+}
+
+.kg-ask-chat {
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.7rem;
+  font-weight: 600;
+}
+
+.kg-ask-chat:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.kg-ask-chat:disabled {
+  opacity: 0.55;
 }
 
 .kg-wrap {

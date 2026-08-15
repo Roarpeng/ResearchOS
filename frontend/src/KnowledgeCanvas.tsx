@@ -4,10 +4,15 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+export type CanvasFocusRequest = {
+  key: number;
+  nodeId?: string;
+  blockName?: string;
+  clear?: boolean;
+};
 
 export type KnowledgeSource = {
   type?: string;
@@ -83,8 +88,12 @@ type Props = {
   knowledgeGraph?: PlcKnowledgeGraphData | null;
   onChange: (next: KnowledgeCanvasData) => void;
   onDeepDive: (node: KnowledgeNode, question: string) => Promise<void> | void;
-  /** Optional: auto-describe when a PLC block node is clicked (not dragged). */
-  onNodeDescribe?: (node: KnowledgeNode) => Promise<void> | void;
+  /** Selecting a PLC node pins chat scope; does not send a turn. */
+  onSelectNode?: (node: KnowledgeNode | null) => void;
+  /** Double-click or inspector「在对话中问」— focus the main composer. */
+  onAskInChat?: (node: KnowledgeNode) => void;
+  /** Citation chip / scope-clear → select or deselect on the canvas. */
+  focusRequest?: CanvasFocusRequest | null;
   busy?: boolean;
 };
 
@@ -1295,6 +1304,7 @@ function GraphPane({
   panning,
   onNodeDown,
   onNodeUp,
+  onNodeDoubleClick,
   onEdgeClick,
   onBgPointerDown,
   onBgPointerMove,
@@ -1327,6 +1337,7 @@ function GraphPane({
   panning: boolean;
   onNodeDown: (e: ReactPointerEvent, id: string) => void;
   onNodeUp: (e: ReactPointerEvent, id: string) => void;
+  onNodeDoubleClick?: (id: string) => void;
   onEdgeClick?: (id: string) => void;
   onBgPointerDown: (e: ReactPointerEvent) => void;
   onBgPointerMove: (e: ReactPointerEvent) => void;
@@ -1593,6 +1604,10 @@ function GraphPane({
               onNodeDown(e, n.id);
             }}
             onPointerUp={(e) => onNodeUp(e, n.id)}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              onNodeDoubleClick?.(n.id);
+            }}
             style={{ cursor: dragId === n.id ? "grabbing" : "grab" }}
           >
             <title>{n.label}</title>
@@ -1621,7 +1636,9 @@ export default function KnowledgeCanvas({
   knowledgeGraph,
   onChange,
   onDeepDive,
-  onNodeDescribe,
+  onSelectNode,
+  onAskInChat,
+  focusRequest,
   busy,
 }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1630,7 +1647,6 @@ export default function KnowledgeCanvas({
   const [highlighted, setHighlighted] = useState<Set<string>>(new Set());
   const [dragId, setDragId] = useState<string | null>(null);
   const [moved, setMoved] = useState(false);
-  const [deepQ, setDeepQ] = useState("");
   /** Left pane (logic) width %. */
   const [splitPct, setSplitPct] = useState(loadKgSplitPct);
   const dragOrigin = useRef<{ x: number; y: number; nx: number; ny: number } | null>(null);
@@ -1770,6 +1786,8 @@ export default function KnowledgeCanvas({
       e.stopPropagation();
       setSelectedId(id);
       setHighlighted(new Set([id, selectedBase?.id].filter(Boolean) as string[]));
+      const sig = byId.get(id);
+      if (sig) onSelectNode?.(sig);
       return;
     }
     e.stopPropagation();
@@ -1815,55 +1833,72 @@ export default function KnowledgeCanvas({
     if (moved) return;
     const node = byId.get(id);
     if (!node) return;
-    setSelectedId(id);
-    setSelectedLogicId(null);
+    applyNodeSelection(node);
+  }
+
+  function knowledgeNodeFromLogicId(id: string): KnowledgeNode | undefined {
+    const kn = matchKnowledgeIds(data.nodes, [id]);
+    const firstKn = [...kn][0] || null;
+    if (firstKn) return byId.get(firstKn) || byIdBase.get(firstKn);
+    const ln = logicLaid.nodes.find((n) => n.id === id);
+    if (!ln) return undefined;
+    const name = ln.label.replace(/^\d+\./, "");
+    return {
+      id: ln.id,
+      label: name,
+      kind: ln.kind || "plc_block",
+      x: ln.x,
+      y: ln.y,
+      source: {
+        type: "plc",
+        block_name: name,
+        block_type: ln.blockType,
+        instance_of: ln.instanceOf,
+      },
+    };
+  }
+
+  function applyNodeSelection(node: KnowledgeNode) {
+    setSelectedId(node.id);
     setSelectedLogicEdge(null);
-    const focus = neighborFocusIds(id);
-    if (
-      node.kind === "plc_block" ||
-      node.kind === "plc_ob" ||
-      node.kind === "plc_db" ||
-      node.kind === "plc_udt" ||
-      node.kind === "plc_instance"
-    ) {
-      const name = node.source?.block_name || node.label;
-      const logicIds = logicLaid.nodes
-        .filter(
-          (ln) =>
-            ln.label === name ||
-            ln.label.replace(/^\d+\./, "") === name ||
-            ln.id.endsWith(`::${name}`) ||
-            ln.label.endsWith(`.${name}`),
-        )
-        .map((ln) => ln.id);
-      if (logicIds[0]) setSelectedLogicId(logicIds[0]);
-      setHighlighted(new Set([...focus, ...logicIds]));
-      if (!busy && onNodeDescribe) void onNodeDescribe(node);
-    } else {
-      setHighlighted(focus);
-    }
+    const focus = neighborFocusIds(node.id);
+    const name = node.source?.block_name || node.label;
+    const logicIds = logicLaid.nodes
+      .filter(
+        (ln) =>
+          ln.id === node.id ||
+          ln.label === name ||
+          ln.label.replace(/^\d+\./, "") === name ||
+          ln.id.endsWith(`::${name}`) ||
+          ln.label.endsWith(`.${name}`),
+      )
+      .map((ln) => ln.id);
+    if (logicIds[0]) setSelectedLogicId(logicIds[0]);
+    else setSelectedLogicId(null);
+    setHighlighted(new Set([...focus, ...logicIds]));
+    onSelectNode?.(node);
+  }
+
+  function askAboutNode(id: string) {
+    const node = byId.get(id) || byIdBase.get(id) || knowledgeNodeFromLogicId(id);
+    if (!node) return;
+    applyNodeSelection(node);
+    onAskInChat?.(node);
   }
 
   function onLogicNodeUp(_e: ReactPointerEvent, id: string) {
+    const node = knowledgeNodeFromLogicId(id);
     setSelectedLogicId(id);
     setSelectedLogicEdge(null);
-    const kn = matchKnowledgeIds(data.nodes, [id]);
-    const firstKn = [...kn][0] || null;
-    setSelectedId(firstKn);
-    setHighlighted(new Set([...kn, id]));
-    const node = firstKn ? byId.get(firstKn) : undefined;
-    if (
-      node &&
-      (node.kind === "plc_block" ||
-        node.kind === "plc_ob" ||
-        node.kind === "plc_db" ||
-        node.kind === "plc_udt" ||
-        node.kind === "plc_instance") &&
-      !busy &&
-      onNodeDescribe
-    ) {
-      void onNodeDescribe(node);
+    if (node) {
+      applyNodeSelection(node);
+      setSelectedLogicId(id);
+      return;
     }
+    const kn = matchKnowledgeIds(data.nodes, [id]);
+    setSelectedId([...kn][0] || null);
+    setHighlighted(new Set([...kn, id]));
+    onSelectNode?.(null);
   }
 
   function onLogicEdgeClick(edgeId: string) {
@@ -1897,15 +1932,36 @@ export default function KnowledgeCanvas({
     window.addEventListener("pointerup", up);
   }
 
-  async function onDeepSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!selected || !deepQ.trim() || busy) return;
-    const q = deepQ.trim();
-    setDeepQ("");
-    const target =
-      selected.id.startsWith("sig_") && selectedBase ? selectedBase : selected;
-    await onDeepDive(target, q);
-  }
+  const diveTarget =
+    selected?.id.startsWith("sig_") && selectedBase ? selectedBase : selected;
+
+  useEffect(() => {
+    if (!focusRequest) return;
+    if (focusRequest.clear) {
+      setSelectedId(null);
+      setSelectedLogicId(null);
+      setSelectedLogicEdge(null);
+      setHighlighted(new Set());
+      return;
+    }
+    const token = focusRequest.nodeId || focusRequest.blockName || "";
+    if (!token) return;
+    const node =
+      (focusRequest.nodeId
+        ? byId.get(focusRequest.nodeId) || byIdBase.get(focusRequest.nodeId)
+        : undefined) ||
+      displayKnowledge.find(
+        (n) =>
+          n.id === token ||
+          n.source?.block_name === focusRequest.blockName ||
+          n.label === focusRequest.blockName ||
+          n.label === token,
+      ) ||
+      knowledgeNodeFromLogicId(token);
+    if (node) applyNodeSelection(node);
+    // focusRequest.key is the trigger; node lookup uses latest maps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRequest?.key]);
 
   const hasSelection =
     Boolean(selectedId || selectedLogicId || selectedLogicEdge) || highlighted.size > 0;
@@ -1962,6 +2018,7 @@ export default function KnowledgeCanvas({
                   panning={z.panning}
                   onNodeDown={() => undefined}
                   onNodeUp={onLogicNodeUp}
+                  onNodeDoubleClick={askAboutNode}
                   onEdgeClick={onLogicEdgeClick}
                   onBgPointerDown={z.onBgPointerDown}
                   onBgPointerMove={z.onBgPointerMove}
@@ -2035,6 +2092,7 @@ export default function KnowledgeCanvas({
                   panning={z.panning}
                   onNodeDown={onKnowledgeDown}
                   onNodeUp={onKnowledgeUp}
+                  onNodeDoubleClick={askAboutNode}
                   onBgPointerDown={z.onBgPointerDown}
                   onBgPointerMove={(e) => {
                     z.onBgPointerMove(e);
@@ -2064,7 +2122,15 @@ export default function KnowledgeCanvas({
         <div className="kg-pop" role="dialog" aria-label="知识节点">
           <div className="kg-pop-head">
             <strong>{selected.label}</strong>
-            <button type="button" className="ghost compact" onClick={() => setSelectedId(null)}>
+            <button
+              type="button"
+              className="ghost compact"
+              onClick={() => {
+                setSelectedId(null);
+                setSelectedLogicId(null);
+                setHighlighted(new Set());
+              }}
+            >
               关闭
             </button>
           </div>
@@ -2089,16 +2155,25 @@ export default function KnowledgeCanvas({
             {selected.source?.path ? <pre className="kg-quote">{selected.source.path}</pre> : null}
             {selected.source?.quote ? <pre className="kg-quote">{selected.source.quote}</pre> : null}
           </div>
+          <button
+            type="button"
+            className="kg-ask-chat"
+            disabled={busy}
+            onClick={() => {
+              if (!selected) return;
+              onAskInChat?.(selected);
+            }}
+          >
+            在对话中问
+          </button>
           <div className="kg-quick">
             <button
               type="button"
               className="ghost compact"
-              disabled={busy}
+              disabled={busy || !diveTarget}
               onClick={() => {
-                if (!selected || busy) return;
-                const target =
-                  selected.id.startsWith("sig_") && selectedBase ? selectedBase : selected;
-                void onDeepDive(target, "展开 SCL");
+                if (!diveTarget || busy) return;
+                void onDeepDive(diveTarget, "展开 SCL");
               }}
             >
               展开 SCL
@@ -2106,12 +2181,10 @@ export default function KnowledgeCanvas({
             <button
               type="button"
               className="ghost compact"
-              disabled={busy}
+              disabled={busy || !diveTarget}
               onClick={() => {
-                if (!selected || busy) return;
-                const target =
-                  selected.id.startsWith("sig_") && selectedBase ? selectedBase : selected;
-                void onDeepDive(target, "谁读写这些信号");
+                if (!diveTarget || busy) return;
+                void onDeepDive(diveTarget, "谁读写这些信号");
               }}
             >
               信号读写
@@ -2119,41 +2192,15 @@ export default function KnowledgeCanvas({
             <button
               type="button"
               className="ghost compact"
-              disabled={busy}
+              disabled={busy || !diveTarget}
               onClick={() => {
-                if (!selected || busy) return;
-                const target =
-                  selected.id.startsWith("sig_") && selectedBase ? selectedBase : selected;
-                void onDeepDive(target, "优化建议");
+                if (!diveTarget || busy) return;
+                void onDeepDive(diveTarget, "优化建议");
               }}
             >
               优化建议
             </button>
           </div>
-          <form className="kg-deep" onSubmit={onDeepSubmit}>
-            <input
-              value={deepQ}
-              onChange={(e) => setDeepQ(e.target.value)}
-              placeholder="就此节点深入追问…"
-              disabled={busy}
-            />
-            <button
-              type="button"
-              className="ghost compact"
-              disabled={busy}
-              onClick={() => {
-                if (!selected || busy) return;
-                const target =
-                  selected.id.startsWith("sig_") && selectedBase ? selectedBase : selected;
-                void onDeepDive(target, "请简述该块作用、关键 IO 与调用关系");
-              }}
-            >
-              简述
-            </button>
-            <button type="submit" disabled={busy || !deepQ.trim()}>
-              深入
-            </button>
-          </form>
         </div>
       ) : null}
     </div>
