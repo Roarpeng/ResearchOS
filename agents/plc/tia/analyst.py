@@ -278,6 +278,8 @@ def analyze_block(job_or_ctx: dict, block_name: str) -> dict:
             }
         )
 
+    findings.extend(_nested_fb_findings(job, block_name))
+
     scl = (job.get("scl_sources") or {}).get(block_name)
     return {
         "block": block_name,
@@ -354,6 +356,7 @@ def analyze_project(job: dict) -> dict:
     findings.extend(interlock_findings)
     safety_findings = _safety_findings(job, writers)
     findings.extend(safety_findings)
+    findings.extend(_project_nested_fb_findings(job))
     return {
         "project": job.get("project_name") or "",
         "findings": findings,
@@ -364,6 +367,119 @@ def analyze_project(job: dict) -> dict:
         "calls_edge_count": len(call_edges),
         "safety_outputs": safety_findings[0]["evidence"] if safety_findings else [],
     }
+
+
+def _typed_as_evidence(job: dict[str, Any], block_name: str) -> tuple[list[dict[str, Any]], list[list[str]], int]:
+    from agents.plc.tia.typed_as import nest_depth_of, typed_as_chains, typed_as_members
+
+    kg = job.get("knowledge_graph") or {}
+    members = typed_as_members(kg, block_name)
+    chains = typed_as_chains(kg, block_name)
+    depth = nest_depth_of(kg, block_name)
+    evidence: list[dict[str, Any]] = []
+    for item in members:
+        evidence.append(
+            {
+                "kind": "typed_as",
+                "edge_type": "TYPED_AS",
+                "source": item.get("source") or f"Block::{block_name}",
+                "target": f"Block::{item.get('type_block')}",
+                "member": item.get("member"),
+                "section": item.get("section"),
+                "evidence": item.get("evidence") or "interface_data_type",
+            }
+        )
+    if chains:
+        evidence.append(
+            {
+                "kind": "multi_instance_chain",
+                "block": block_name,
+                "nest_depth": depth,
+                "chains": chains[:8],
+            }
+        )
+    return evidence, chains, depth
+
+
+def _nested_fb_findings(job: dict[str, Any], block_name: str) -> list[dict[str, Any]]:
+    """Warn/risk for in-block FB-as-type nesting — not instance-DB INSTANCE_OF."""
+    evidence, chains, depth = _typed_as_evidence(job, block_name)
+    if depth < 1:
+        return []
+    from agents.plc.tia.typed_as import format_chain, typed_as_members
+
+    kg = job.get("knowledge_graph") or {}
+    members = typed_as_members(kg, block_name)
+    member_bits = [
+        f"`{m.get('member') or '?'} : {m.get('type_block')}`"
+        for m in members
+        if m.get("type_block")
+    ]
+    findings: list[dict[str, Any]] = [
+        {
+            "code": "NESTED_FB_TYPE",
+            "severity": "warn",
+            "message": (
+                f"`{block_name}` 以多实例成员嵌入 FB/FC/UDT 类型"
+                f"（深度 {depth}）："
+                + ("、".join(member_bits[:8]) or "见 TYPED_AS 边")
+                + "。"
+            ),
+            "evidence": evidence,
+        }
+    ]
+    if depth >= 2:
+        longest = chains[0] if chains else [block_name]
+        findings.append(
+            {
+                "code": "MULTI_INSTANCE_CHAIN",
+                "severity": "risk",
+                "message": (
+                    f"`{block_name}` 多实例嵌套链（深度 {depth}）："
+                    f"{format_chain(longest)}。"
+                ),
+                "evidence": evidence,
+            }
+        )
+    return findings
+
+
+def _project_nested_fb_findings(job: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project-wide deep multi-instance chains (depth ≥ 2). Skip shallow INSTANCE_OF."""
+    from agents.plc.tia.typed_as import format_chain, nest_depth_of, typed_as_chains
+
+    kg = job.get("knowledge_graph") or {}
+    blocks = _block_metadata(job)
+    hits: list[tuple[int, str, list[str]]] = []
+    for name in blocks:
+        depth = nest_depth_of(kg, name)
+        if depth < 2:
+            continue
+        chains = typed_as_chains(kg, name)
+        longest = chains[0] if chains else [name]
+        hits.append((depth, name, longest))
+    if not hits:
+        return []
+    hits.sort(key=lambda item: (-item[0], item[1]))
+    shown = hits[:12]
+    bits = [f"`{name}`（深度 {depth}：{format_chain(chain)}）" for depth, name, chain in shown]
+    evidence = [
+        {
+            "kind": "multi_instance_chain",
+            "block": name,
+            "nest_depth": depth,
+            "chain": chain,
+        }
+        for depth, name, chain in shown
+    ]
+    return [
+        {
+            "code": "MULTI_INSTANCE_CHAIN",
+            "severity": "risk",
+            "message": "工程中存在深度≥2 的多实例 FB 类型嵌套：" + "；".join(bits) + "。",
+            "evidence": evidence,
+        }
+    ]
 
 
 def _block_is_safety(job: dict[str, Any], name: str) -> bool:

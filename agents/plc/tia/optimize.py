@@ -49,8 +49,9 @@ def propose_optimization_changeset(
 ) -> PlcChangeSet:
     """Build a proposed changeset: dead + decouple + SCL rewrite (HITL)."""
     from agents.plc.tia.analyst import analyze_block, analyze_project
-    from agents.plc.tia.decouple import propose_decouple
+    from agents.plc.tia.decouple import nested_fb_coupling_notes, propose_decouple
     from agents.plc.tia.scl_rewrite import rewrite_job_to_importable_scl
+    from agents.plc.tia.typed_as import format_chain
     from agents.plc.tia.xml_patch import match_xml_for_block
 
     blocks = _block_map(job)
@@ -169,6 +170,51 @@ def propose_optimization_changeset(
                         },
                     )
                 )
+        plan_lines.append("")
+
+    nest_notes = nested_fb_coupling_notes(job, focus=focus or None)
+    if nest_notes:
+        plan_lines.append("## 多实例嵌套（TYPED_AS，非 CALLS / 非实例 DB INSTANCE_OF）")
+        plan_lines.append(
+            "Siemens 多实例：块内成员的 data_type 为另一个 FB/FC/UDT。"
+            "不为此压平嵌套；无安全 SCL 改写时仍给出 HITL 计划。"
+        )
+        for note in nest_notes:
+            name = str(note.get("block") or "")
+            depth = int(note.get("depth") or 0)
+            chains = note.get("chains") or []
+            chain_s = format_chain(chains[0]) if chains else f"`{name}`"
+            plan_lines.append(f"- `{name}` 深度 {depth}：{chain_s}")
+            for mem in (note.get("members") or [])[:8]:
+                plan_lines.append(
+                    f"  - 成员 `{mem.get('member')}` : `{mem.get('type_block')}`"
+                    f"（{mem.get('section') or 'Static'}）"
+                )
+            parent_skip = note.get("parent_skip")
+            if parent_skip:
+                plan_lines.append(f"  - 父块跳过写程序体：{_skip_label(str(parent_skip))}")
+            for sk in note.get("skip") or []:
+                plan_lines.append(
+                    f"  - 嵌套 `{sk.get('block')}`：{_skip_label(str(sk.get('reason')))}，"
+                    "不写其程序体；仅报告耦合"
+                )
+            if note.get("writable_parent") and depth >= 2:
+                plan_lines.append(
+                    "  - 父块可写：若 folded 网络有既有 I/O，可提取 helper；"
+                    "禁止发明 I/O 或 CALLS，禁止为改数字而扁平化多实例"
+                )
+            else:
+                plan_lines.append("  - 本链无安全 XML/SCL 落地操作；本提案仅记录耦合与跳过原因")
+            text = (
+                f"[OPT:MULTI_INSTANCE_CHAIN] 多实例嵌套深度 {depth}：{chain_s}"
+            )
+            ops.append(
+                PlcChangeOp(
+                    kind="annotate",
+                    payload={"block_name": name, "text": text},
+                )
+            )
+            notes.append(f"optimize:nested_fb:{name}:depth={depth}")
         plan_lines.append("")
 
     extracts = propose_decouple(job)

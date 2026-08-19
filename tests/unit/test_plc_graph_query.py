@@ -7,9 +7,11 @@ from agents.plc.tia.graph_query import (
     callers_of,
     dead_blocks,
     derive_depends_on_edges,
+    nest_depth,
     query,
     reachable_from,
     readers_of_tag,
+    typed_as_of,
     writers_of_tag,
 )
 
@@ -75,3 +77,39 @@ def test_depends_query_returns_access_evidence_not_derived_edges():
 
     assert result["result"]["depends"] is True
     assert {edge["type"] for edge in result["evidence"]} == {"WRITES", "READS"}
+
+
+def test_typed_as_query_walks_member_type_chain():
+    kg = _kg()
+    kg["nodes"].extend(
+        [
+            {
+                "id": "Variable::FB_A::Static::Child",
+                "type": "Variable",
+                "props": {"name": "Child", "section": "Static", "data_type": '"FB_B"'},
+            },
+        ]
+    )
+    kg["edges"].append(
+        {
+            "source": "Variable::FB_A::Static::Child",
+            "target": "Block::FB_B",
+            "type": "TYPED_AS",
+            "props": {"kind": "multi_instance", "member": "Child", "section": "Static"},
+        }
+    )
+    kg["edges"].append(
+        {
+            "source": "Block::FB_A",
+            "target": "Block::FB_B",
+            "type": "TYPED_AS",
+            "props": {"kind": "multi_instance", "member": "Child", "section": "Static"},
+        }
+    )
+    members = typed_as_of(kg, "FB_A")
+    assert any(m["type_block"] == "FB_B" and m["member"] == "Child" for m in members)
+    assert nest_depth(kg, "FB_A") == 1
+    result = query(kg, "typed_as", block_name="FB_A")
+    assert result["result"]["nest_depth"] == 1
+    assert result["result"]["children"] == ["FB_B"]
+

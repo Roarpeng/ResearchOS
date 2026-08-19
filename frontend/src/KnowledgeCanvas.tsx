@@ -24,6 +24,7 @@ export type KnowledgeSource = {
   block_type?: string;
   entity_kind?: string;
   instance_of?: string | null;
+  nest_depth?: number | null;
   project?: string;
   path?: string;
   plc_job_id?: string;
@@ -546,6 +547,7 @@ export function autoLayoutKnowledge(
     return (
       lab === "DEPENDS_ON" ||
       lab === "INSTANCE_OF" ||
+      lab === "TYPED_AS" ||
       lab === "CALLS" ||
       lab === "USES" ||
       e.user_created
@@ -1550,7 +1552,7 @@ function GraphPane({
               } ${et === "DEPENDS_ON" ? "depends" : ""} ${
                 et === "CALLS" ? "calls" : ""
               } ${et === "USES" ? "uses" : ""} ${
-                et === "INSTANCE_OF" ? "instance" : ""
+                et === "INSTANCE_OF" || et === "TYPED_AS" ? "instance" : ""
               } ${et === "NEXT" ? "next" : ""} ${active || hi ? "lit" : ""}`}
             />
             {showEdgeLabels &&
@@ -1693,6 +1695,7 @@ export default function KnowledgeCanvas({
         label === "CALLS" ||
         label === "USES" ||
         label === "INSTANCE_OF" ||
+        label === "TYPED_AS" ||
         label === "DEPENDS_ON"
       );
     });
@@ -1707,7 +1710,13 @@ export default function KnowledgeCanvas({
     const hints = knowledgeEdges
       .filter((e) => {
         const lab = e.label || "";
-        return lab === "CALLS" || lab === "USES" || lab === "INSTANCE_OF" || lab === "DEPENDS_ON";
+        return (
+          lab === "CALLS" ||
+          lab === "USES" ||
+          lab === "INSTANCE_OF" ||
+          lab === "TYPED_AS" ||
+          lab === "DEPENDS_ON"
+        );
       })
       .map((e) => {
         const sn = displayKnowledge.find((n) => n.id === e.source);
@@ -2150,6 +2159,9 @@ export default function KnowledgeCanvas({
                 : selected.source?.entity_kind === "instance"
                   ? " · 实例 DB"
                   : ""}
+              {selected.source?.nest_depth
+                ? ` · 嵌套深度 ${selected.source.nest_depth}`
+                : ""}
               {selected.source?.project ? ` · ${selected.source.project}` : ""}
             </div>
             {selected.source?.path ? <pre className="kg-quote">{selected.source.path}</pre> : null}
