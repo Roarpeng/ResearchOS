@@ -73,6 +73,7 @@ _MARKER_KIND: tuple[tuple[str, str], ...] = (
     ("OpcUa", "opcua"),
     ("Hmi.Screen", "hmi"),
     ("Hmi.Tag", "hmi"),
+    ("Hmi.Cycle", "hmi"),
     ("HmiUnified", "hmi"),
     ("ProjectTexts", "project"),
     ("HardwareTree", "hardware"),
@@ -127,6 +128,60 @@ def classify_export_rel(rel: str, head: str = "") -> str | None:
         if marker in blob:
             return kind
     return None
+
+
+def classify_xml_kind(rel: str = "", head: str = "") -> str:
+    """Classify SimaticML / AML / HMI XML for Openness Import routing."""
+    blob = f"{rel} {head}"
+    if "CAEXFile" in blob or "HardwareTree" in blob:
+        return "hardware"
+    if "PlcWatchTable" in blob or "SW.WatchAndForceTables.PlcWatchTable" in blob:
+        return "watch"
+    if "PlcForceTable" in blob or "SW.WatchAndForceTables.PlcForceTable" in blob:
+        return "force"
+    if "SW.Types.PlcStruct" in blob or "PlcStruct" in blob or "TypeTable" in blob:
+        return "type"
+    if "SW.Tags.PlcTagTable" in blob or "PlcTagTable" in blob:
+        return "tag"
+    if "Hmi." in blob or "HmiUnified" in blob:
+        return "hmi"
+    if "CfcChart" in blob or "SW.Cfc" in blob:
+        return "cfc"
+    if "TechnologicalObject" in blob or "TO_PositioningAxis" in blob:
+        return "to"
+    folder = _folder_category(rel)
+    if folder in {"watch", "force", "to", "cfc", "hardware", "hmi"}:
+        return folder
+    if folder == "types":
+        return "type"
+    if folder == "tags":
+        return "tag"
+    return "block"
+
+
+def xml_looks_like_safety(xml_path: Path | str) -> bool:
+    """Mirror C# XmlLooksLikeSafety — refuse F-block write without decrypting."""
+    import re
+
+    from agents.plc.tia.safety import is_safety_name
+
+    path = Path(xml_path)
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    if re.search(r"<(?:ProgrammingLanguage)>\s*F[-_]", text, re.I):
+        return True
+    for m in re.finditer(r"<Name>\s*([^<]+)\s*</Name>", text, re.I):
+        if is_safety_name(m.group(1).strip()):
+            return True
+    return bool(
+        re.search(
+            r"<(?:ProgrammingLanguage)>\s*(?:F-LAD|F-FBD|F-SCL|F-STL|FSCL|FLAD)\s*</",
+            text,
+            re.I,
+        )
+    )
 
 
 def try_parse_surface(xml_file: Path, export_path: Path, rel: str) -> SurfaceHit | None:
@@ -362,6 +417,8 @@ def _screen_kind(rel: str, tag: str) -> str:
         return "faceplate"
     if "permanent" in blob:
         return "permanent"
+    if "cycle" in blob:
+        return "cycle"
     if "script" in blob or "vbscript" in blob:
         return "script"
     if "textlist" in blob:
@@ -408,6 +465,9 @@ def _parse_hmi(root: ET.Element, path: Path, rel: str) -> HmiDevice:
         return device
     if kind == "connection":
         device.connections.append(primary)
+        return device
+    if kind == "cycle":
+        device.cycles.append(primary)
         return device
     linked: list[str] = []
     for node in root.iter():

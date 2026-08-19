@@ -661,6 +661,24 @@ def resolve_project_input(
     p = Path(path).expanduser().resolve()
     kind = classify_input(p)
     if kind == "archive":
+        retrieved_dir = Path(tempfile.mkdtemp(prefix="researchos_tia_retrieve_"))
+        from agents.plc.tia.openness_cli import try_retrieve_archive_via_openness_cli
+
+        retrieved = try_retrieve_archive_via_openness_cli(p, out=retrieved_dir)
+        if retrieved is not None:
+            nested = resolve_project_input(
+                retrieved,
+                export_dir=export_dir,
+                tia_version=tia_version,
+                plc_name=plc_name,
+                auto_export=auto_export,
+            )
+            nested.notes = list(nested.notes or [])
+            nested.notes.insert(
+                0,
+                f"retrieved Siemens archive {p.name} via Projects.Retrieve → {retrieved}",
+            )
+            return nested
         extracted, unzip_timings = extract_tia_archive_timed(p)
         try:
             nested = resolve_project_input(

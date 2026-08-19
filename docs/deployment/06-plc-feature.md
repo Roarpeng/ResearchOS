@@ -181,7 +181,7 @@ researchos-tia-cli --exports tests/fixtures/tia_exports --result-dir ./ResearchO
 
 写回仍是 HITL：`POST /optimize` 提案 → 确认 → `POST /writeback` → 下载 `.zap`。Know-how 保护体从不解密或猜测。
 
-仍为 TODO / 有限覆盖：稀有 STL 助记符、GRAPH 可执行语义（当前是步序注释）。硬件 AML 缺失**不**导致程序块解析失败。HMI 只解析结构（名称 / 文件夹 / 关联标签），不重建画面编辑器。Know-how / CFC 密码不解密。HMI/AML **Import 写回**本 PR 不做（现有 HITL **块**导入保留）。增量 Openness 导出缓存 / `extract_stream` 已在主干落地，此处不重复实现。
+仍为 TODO / 有限覆盖：稀有 STL 助记符、GRAPH 可执行语义（当前是步序注释）。硬件 AML 缺失**不**导致程序块解析失败。HMI 只解析结构（名称 / 文件夹 / 关联标签），不重建画面编辑器。Know-how / CFC 密码不解密。HMI 只解析结构（名称 / 文件夹 / 关联标签 / 循环），不重建画面像素。HMI / CAx AML **Import** 仅当本机 Openness 类型上确实存在 `Import` 时调用，否则 `no_import`（不伪造）。HITL 块 / UDT / 标签表写回走 C# `TiaOpenness.Server`（见 `tools/industrial-mcp/tia-openness/README.md`）。增量 Openness 导出缓存 / `extract_stream` 已在主干落地。
 
 ### 官方 Openness 对象 vs ResearchOS（chapter 6）
 

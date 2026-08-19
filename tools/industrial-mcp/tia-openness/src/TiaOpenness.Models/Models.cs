@@ -192,8 +192,17 @@ public sealed class ImportBlockResult
     [JsonPropertyName("overwrite")]
     public bool Overwrite { get; set; }
 
+    [JsonPropertyName("kind")]
+    public string? Kind { get; set; }
+
     [JsonPropertyName("importedNames")]
     public List<string>? ImportedNames { get; set; }
+
+    [JsonPropertyName("api")]
+    public string? Api { get; set; }
+
+    [JsonPropertyName("skipReason")]
+    public string? SkipReason { get; set; }
 
     [JsonPropertyName("message")]
     public string? Message { get; set; }
@@ -295,6 +304,101 @@ public sealed class ArchiveProjectResult
 
     [JsonPropertyName("archivePath")]
     public string? ArchivePath { get; set; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+
+    [JsonPropertyName("error")]
+    public ToolError? Error { get; set; }
+}
+
+/// <summary>
+/// Official Openness <c>Projects.Retrieve(FileInfo, DirectoryInfo)</c> (chapter 5.x).
+/// Unpacks a compressed <c>.zap*</c> into an on-disk <c>.apxx</c> project.
+/// </summary>
+public sealed class RetrieveProjectResult
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; set; }
+
+    [JsonPropertyName("archivePath")]
+    public string? ArchivePath { get; set; }
+
+    [JsonPropertyName("targetDirectory")]
+    public string? TargetDirectory { get; set; }
+
+    [JsonPropertyName("projectPath")]
+    public string? ProjectPath { get; set; }
+
+    [JsonPropertyName("projectName")]
+    public string? ProjectName { get; set; }
+
+    [JsonPropertyName("plcName")]
+    public string? PlcName { get; set; }
+
+    [JsonPropertyName("api")]
+    public string? Api { get; set; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+
+    [JsonPropertyName("error")]
+    public ToolError? Error { get; set; }
+}
+
+/// <summary>
+/// Official reverse of GenerateBlocksFromSource:
+/// <c>PlcBlock.GenerateSourceFromBlocks(FileInfo)</c> (Openness 5.11.3.18).
+/// </summary>
+public sealed class GenerateSourceFromBlockResult
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; set; }
+
+    [JsonPropertyName("blockName")]
+    public string? BlockName { get; set; }
+
+    [JsonPropertyName("sourcePath")]
+    public string? SourcePath { get; set; }
+
+    [JsonPropertyName("api")]
+    public string? Api { get; set; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+
+    [JsonPropertyName("error")]
+    public ToolError? Error { get; set; }
+}
+
+public sealed class CreateProjectResult
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; set; }
+
+    [JsonPropertyName("projectPath")]
+    public string? ProjectPath { get; set; }
+
+    [JsonPropertyName("projectName")]
+    public string? ProjectName { get; set; }
+
+    [JsonPropertyName("api")]
+    public string? Api { get; set; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+
+    [JsonPropertyName("error")]
+    public ToolError? Error { get; set; }
+}
+
+public sealed class CloseProjectResult
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; set; }
+
+    [JsonPropertyName("api")]
+    public string? Api { get; set; }
 
     [JsonPropertyName("message")]
     public string? Message { get; set; }

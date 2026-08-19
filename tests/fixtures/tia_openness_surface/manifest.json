@@ -3,7 +3,7 @@
   "mode": "full",
   "projectName": "OpennessSurface",
   "counts": {
-    "blocks": {"exported": 1, "failed": 0, "skipped": 1},
+    "blocks": {"exported": 2, "failed": 0, "skipped": 1},
     "types": {"exported": 1, "failed": 0, "skipped": 0},
     "tags": {"exported": 1, "failed": 0, "skipped": 0},
     "watch": {"exported": 1, "failed": 0, "skipped": 0},
@@ -13,7 +13,7 @@
     "cfc": {"exported": 1, "failed": 0, "skipped": 1},
     "safety": {"exported": 1, "failed": 0, "skipped": 0},
     "hardware": {"exported": 2, "failed": 0, "skipped": 0},
-    "hmi": {"exported": 5, "failed": 0, "skipped": 0},
+    "hmi": {"exported": 6, "failed": 0, "skipped": 0},
     "opcua": {"exported": 1, "failed": 0, "skipped": 0},
     "project": {"exported": 1, "failed": 0, "skipped": 0}
   },

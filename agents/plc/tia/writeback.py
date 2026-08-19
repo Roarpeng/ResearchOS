@@ -11,7 +11,9 @@ from agents.plc.tia.openness_cli import (
     compile_plc_via_openness_cli,
     generate_from_source_via_openness_cli,
     import_block_via_openness_cli,
+    import_xml_via_openness_cli,
 )
+from agents.plc.tia.surface import classify_xml_kind, xml_looks_like_safety
 
 
 def prepare_writeback(
@@ -66,16 +68,46 @@ def execute_writeback(
     import_ok = True
 
     for xml in xmls:
-        try:
-            payload = import_block_via_openness_cli(
-                project_path,
-                xml,
-                plc_name=plc_name,
-                overwrite=True,
+        if xml_looks_like_safety(xml):
+            results.append(
+                {
+                    "xml": str(xml),
+                    "result": {
+                        "ok": False,
+                        "skipReason": "safety_block",
+                        "error": "Refusing Import for Safety/F-block XML. Never write F-block bodies.",
+                    },
+                }
             )
-            results.append({"xml": str(xml), "result": payload})
+            import_ok = False
+            continue
+        kind = "block"
+        try:
+            head = xml.read_text(encoding="utf-8", errors="ignore")[:8192]
+            kind = classify_xml_kind(xml.name, head)
+        except OSError:
+            kind = "block"
+        try:
+            if kind == "block":
+                payload = import_block_via_openness_cli(
+                    project_path,
+                    xml,
+                    plc_name=plc_name,
+                    overwrite=True,
+                )
+            else:
+                payload = import_xml_via_openness_cli(
+                    project_path,
+                    xml,
+                    kind=kind,
+                    plc_name=plc_name,
+                    overwrite=True,
+                )
+            results.append({"xml": str(xml), "kind": kind, "result": payload})
         except Exception as exc:  # noqa: BLE001
-            results.append({"xml": str(xml), "result": {"ok": False, "error": str(exc)}})
+            results.append(
+                {"xml": str(xml), "kind": kind, "result": {"ok": False, "error": str(exc)}}
+            )
             import_ok = False
             continue
         if not payload.get("ok"):
@@ -122,10 +154,10 @@ def execute_writeback(
 
     ok = import_ok and (compiled_ok if compile_after else import_ok)
     note = (
-        "XML: Blocks.Import + Save. "
+        "XML: Blocks.Import / TypeGroup.Types.Import / TagTables.Import when present + Save. "
         "SCL: ExternalSourceGroup.CreateFromFile + GenerateBlocksFromSource + Save. "
         "Compile: ICompilable.Compile (fail closed). "
-        "Linux Docker cannot run these Openness calls."
+        "F-block / know-how decrypt refused. Linux Docker cannot run these Openness calls."
     )
     return {
         "ok": ok,

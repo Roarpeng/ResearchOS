@@ -2,7 +2,7 @@
 
 ## 定位
 
-`tools/industrial-mcp/tia-openness` 是 ResearchOS **TIA Openness MCP Foundation**：把 Siemens TIA Portal Openness 暴露为 stdio MCP，供 Agent 只读访问工程结构与块导出。
+`tools/industrial-mcp/tia-openness` 是 ResearchOS **TIA Openness MCP Foundation**：把 Siemens TIA Portal Openness 暴露为 stdio MCP。导出走 chapter-6 walker；写回（Import / GenerateBlocksFromSource / Retrieve / Archive）在 **Windows HostGateway** 上运行，见包内 README 的 implemented vs out-of-scope 表。
 
 ```text
 ResearchOS Agent
@@ -38,9 +38,16 @@ XML → PLC Parser → PLC-IR → Neo4j → PLC Agent
 | `tia.list_blocks` | none | 列出 OB / FB / FC / DB |
 | `tia.export_block` | export | 导出 SimaticML XML |
 | `tia.export_project` | export | 批量导出全部块到目录 |
-| `tia.import_block` | write | 导入 SimaticML XML |
+| `tia.import_block` | write | `Blocks.Import`；拒绝 F-block XML |
+| `tia.import_xml` | write | UDT/标签表/监视强制表等，**仅当**该 composition 有 `Import` |
+| `tia.generate_from_source` | write | `CreateFromFile` + `GenerateBlocksFromSource` |
+| `tia.generate_source_from_block` | export | `PlcBlock.GenerateSourceFromBlocks`（5.11.3.18） |
+| `tia.compile_plc` | none* | `ICompilable.Compile`；失败不得 Archive |
 | `tia.save_project` | write | `Project.Save()` |
 | `tia.archive_project` | export | `Project.Archive(..., Compressed)` → `.zap*` |
+| `tia.retrieve_project` | write | `Projects.Retrieve(FileInfo, DirectoryInfo)` |
+| `tia.create_project` | write | `Projects.Create`（API 缺失则失败关闭） |
+| `tia.close_project` | none | `Project.Close()` |
 
 \*打开工程会附着或拉起 Openness 会话，但不写 PLC、不改工程内容。
 
@@ -56,7 +63,9 @@ XML → PLC Parser → PLC-IR → Neo4j → PLC Agent
 
 ## 安全
 
-- 默认只读导出；禁止程序下载到 PLC
+- 禁止程序下载到 PLC（`plc.program.download` / Online download 明确 out of scope）
+- F-block 写回拒绝（`XmlLooksLikeSafety`）
+- 运行账户须在 **Siemens TIA Portal Openness** 组
 - 运行账户须在 **Siemens TIA Portal Openness** 组
 - 审计由 Runtime `tool_traces` 记录工具名与参数摘要
 

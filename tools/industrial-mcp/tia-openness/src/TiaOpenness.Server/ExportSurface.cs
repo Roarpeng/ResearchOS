@@ -91,7 +91,7 @@ public sealed class ExportSurface
                 projectPath = _projects.ProjectPath,
                 counts = _counts,
                 skipped = _skipped,
-                layout = "plc/<plc>/blocks|types|tags|watch|force|to|alarms|cfc|safety + hardware/ + hmi/<hmi>/ + project/",
+                layout = "plc/<plc>/blocks(+system)|types|tags|watch|force|to|alarms|cfc|safety|units + hardware/ + hmi/<hmi>/ + project/",
             };
             var manifestPath = Path.Combine(root, "manifest.json");
             File.WriteAllText(
@@ -136,6 +136,23 @@ public sealed class ExportSurface
             Path.Combine(plcRoot, "blocks"),
             OpennessExport.CatBlocks,
             new[] { "Blocks" });
+        // Official 6.4.2.10 SystemBlockGroup — dedicated walker, not BlockGroup.
+        var systemBlocks = OpennessExport.GetFirstProp(plc, "SystemBlockGroup");
+        if (systemBlocks is not null)
+        {
+            ExportGroupTree(
+                systemBlocks,
+                Path.Combine(plcRoot, "blocks", "system"),
+                OpennessExport.CatBlocks,
+                new[] { "Blocks" });
+        }
+        else
+        {
+            NoteMissing(OpennessExport.CatBlocks, "SystemBlockGroup", "no_export");
+        }
+
+        ExportSoftwareUnits(plc, plcRoot);
+
         ExportGroupTree(
             OpennessExport.GetFirstProp(plc, "TypeGroup"),
             Path.Combine(plcRoot, "types"),
@@ -256,13 +273,56 @@ public sealed class ExportSurface
                      ("SlideInScreenFolder", "slideins"),
                      ("FaceplateFolder", "faceplates"),
                      ("PermanentAreaFolder", "permanent"),
+                     ("CycleFolder", "cycles"),
+                     ("CyclesFolder", "cycles"),
                  })
         {
+            var group = OpennessExport.GetProp(hmi, prop);
+            if (group is null) continue;
             ExportGroupTree(
-                OpennessExport.GetProp(hmi, prop),
+                group,
                 Path.Combine(hmiRoot, folder),
                 OpennessExport.CatHmi,
-                new[] { "Screens", "Templates", "Popups", "SlideIns", "Faceplates", "PermanentAreas", "Items" });
+                new[] { "Screens", "Templates", "Popups", "SlideIns", "Faceplates", "PermanentAreas", "Cycles", "Items" });
+        }
+    }
+
+    private void ExportSoftwareUnits(object plc, string plcRoot)
+    {
+        var units = OpennessExport.GetFirstProp(plc, "SoftwareUnitGroup", "SoftwareUnits", "UnitGroup");
+        if (units is null)
+        {
+            NoteMissing(OpennessExport.CatBlocks, "SoftwareUnitGroup", "no_export");
+            return;
+        }
+
+        var any = false;
+        foreach (var unit in OpennessExport.Enumerate(units, "SoftwareUnits", "Units", "Items"))
+        {
+            any = true;
+            var uname = OpennessExport.Sanitize(OpennessExport.GetPropString(unit, "Name") ?? "Unit");
+            var unitRoot = Path.Combine(plcRoot, "units", uname);
+            Directory.CreateDirectory(unitRoot);
+            ExportGroupTree(
+                OpennessExport.GetFirstProp(unit, "BlockGroup"),
+                Path.Combine(unitRoot, "blocks"),
+                OpennessExport.CatBlocks,
+                new[] { "Blocks" });
+            ExportGroupTree(
+                OpennessExport.GetFirstProp(unit, "TypeGroup"),
+                Path.Combine(unitRoot, "types"),
+                OpennessExport.CatTypes,
+                new[] { "Types", "PlcTypes", "DataTypes" });
+            ExportGroupTree(
+                OpennessExport.GetFirstProp(unit, "TagTableGroup"),
+                Path.Combine(unitRoot, "tags"),
+                OpennessExport.CatTags,
+                new[] { "TagTables", "ConstantTables" });
+        }
+
+        if (!any && !OpennessExport.HasExport(units))
+        {
+            NoteMissing(OpennessExport.CatBlocks, "SoftwareUnitGroup", "no_export");
         }
     }
 
@@ -366,10 +426,7 @@ public sealed class ExportSurface
         }
         foreach (var net in OpennessExport.Enumerate(device, "Subnets", "NetworkInterfaces", "IoSystems"))
         {
-            el.Add(new XElement(
-                "Subnet",
-                new XAttribute("Name", OpennessExport.GetPropString(net, "Name") ?? ""),
-                new XAttribute("Kind", net.GetType().Name)));
+            el.Add(NetworkElement(net, "Subnet"));
         }
         return el;
     }
@@ -390,14 +447,35 @@ public sealed class ExportSurface
         }
         foreach (var net in OpennessExport.Enumerate(item, "Subnets", "NetworkInterfaces", "IoSystems", "Addresses"))
         {
-            var n = OpennessExport.GetPropString(net, "Name")
-                ?? OpennessExport.GetPropString(net, "Address")
-                ?? net.ToString();
-            if (!string.IsNullOrWhiteSpace(n))
-            {
-                el.Add(new XElement("Subnet", new XAttribute("Name", n!), new XAttribute("Kind", net.GetType().Name)));
-            }
+            el.Add(NetworkElement(net, "Subnet"));
         }
+        return el;
+    }
+
+    private static XElement NetworkElement(object net, string fallbackTag)
+    {
+        var typeName = net.GetType().Name;
+        var tag = typeName.IndexOf("NetworkInterface", StringComparison.OrdinalIgnoreCase) >= 0
+            ? "NetworkInterface"
+            : typeName.IndexOf("Address", StringComparison.OrdinalIgnoreCase) >= 0
+                ? "Address"
+                : fallbackTag;
+        var name = OpennessExport.GetPropString(net, "Name")
+                   ?? OpennessExport.GetPropString(net, "Address")
+                   ?? OpennessExport.GetPropString(net, "IpAddress")
+                   ?? net.ToString()
+                   ?? "";
+        var el = new XElement(
+            tag,
+            new XAttribute("Name", name),
+            new XAttribute("Kind", typeName));
+        var ip = OpennessExport.GetPropString(net, "IpAddress")
+                 ?? OpennessExport.GetPropString(net, "Address")
+                 ?? OpennessExport.GetPropString(net, "LogicalAddress");
+        if (!string.IsNullOrWhiteSpace(ip)) el.SetAttributeValue("Address", ip);
+        var iface = OpennessExport.GetPropString(net, "InterfaceType")
+                    ?? OpennessExport.GetPropString(net, "TypeIdentifier");
+        if (!string.IsNullOrWhiteSpace(iface)) el.SetAttributeValue("InterfaceType", iface);
         return el;
     }
 

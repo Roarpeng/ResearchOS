@@ -48,6 +48,7 @@ def test_extract_project_fills_official_ir():
     assert "F-ESTOP" in project.safety_units[0].supervisions
     assert any(d.failsafe for d in project.hardware)
     assert any(d.modules for d in project.hardware)
+    assert any(getattr(d, "network_interfaces", None) for d in project.hardware)
     assert project.hmi_devices
     hmi = project.hmi_devices[0]
     assert hmi.name == "HMI_1"
@@ -58,6 +59,9 @@ def test_extract_project_fills_official_ir():
     assert hmi.scripts
     assert hmi.text_lists
     assert hmi.connections
+    assert hmi.cycles
+    assert "Cycle_100" in hmi.cycles
+    assert "CompleteRestart" in project.blocks
     assert "Motor.Running" in project.opcua_nodes
     assert project.project_texts.get("en-US") == "Line 1"
     assert project.export_manifest.get("mode") == "full"

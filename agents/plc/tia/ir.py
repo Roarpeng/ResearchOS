@@ -129,6 +129,9 @@ class GraphStep:
     uuid: str = ""
     actions: list[str] = field(default_factory=list)
     comment: str = ""
+    interlock: str = ""
+    supervision: str = ""
+    evidence: str = "graph_xml"
 
 
 @dataclass
@@ -142,6 +145,7 @@ class GraphTransition:
     target_step: str = ""
     condition: str = ""
     comment: str = ""
+    evidence: str = "graph_xml"
 
 
 @dataclass
@@ -299,6 +303,7 @@ class HardwareDevice:
     rack: str = ""
     modules: list[str] = field(default_factory=list)
     subnets: list[str] = field(default_factory=list)
+    network_interfaces: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -385,6 +390,7 @@ class HmiDevice:
     text_lists: list[str] = field(default_factory=list)
     graphic_lists: list[str] = field(default_factory=list)
     connections: list[str] = field(default_factory=list)
+    cycles: list[str] = field(default_factory=list)
     screens: list[HmiScreen] = field(default_factory=list)
     source_file: str = ""
 
