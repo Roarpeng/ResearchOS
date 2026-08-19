@@ -281,3 +281,24 @@ def test_fallback_variable_data_type_without_typed_as_edges():
     text = answer_block_chat(job, "优化", "FB_A")
     assert "未发现" not in text
     assert "FB_B" in text and "FB_C" in text
+
+
+def test_optimize_scl_on_nested_fixture_never_empty_after_title():
+    job = _job_from_project(_nested_project())
+    text = answer_block_chat(job, "@FB_A 优化SCL", "FB_A")
+    assert text.strip().startswith("**优化SCL")
+    after = text.split("\n", 1)[1].strip() if "\n" in text else ""
+    assert after
+    assert "先不编造改写" not in text
+    writable = "```diff" in text or "```scl" in text
+    skipped = any(
+        k in text
+        for k in ("跳过", "interface-only", "无程序体", "无可写", "不要动", "必须保留")
+    )
+    assert writable or skipped
+    # 分析逻辑 still dumps IR; 理解逻辑 does not steal it
+    analyze = answer_block_chat(job, "@FB_A 分析逻辑", "FB_A")
+    assert "FB_A" in analyze and "FB_B" in analyze
+    understand = answer_block_chat(job, "@FB_A 理解逻辑", "FB_A")
+    assert "待确认假设" in understand or "请确认" in understand
+    assert "完整 SCL：" not in understand

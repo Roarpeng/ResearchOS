@@ -687,7 +687,7 @@ export default function App() {
     const tag = scope.kind === "plc_tag";
     const prompts = tag
       ? ["这个信号干什么", "谁读写它", "谁读写这些信号"]
-      : ["这个块干什么", "展开 SCL", "分析逻辑", "嵌套链", "谁调用它 / 它调用谁", "谁读写这些信号", "优化建议"];
+      : ["这个块干什么", "展开 SCL", "分析逻辑", "嵌套链", "理解逻辑", "优化逻辑", "优化SCL", "谁调用它 / 它调用谁", "谁读写这些信号", "优化建议"];
     if (scope.looksLikeOutput) prompts.push("有没有互锁");
     return prompts;
   }
@@ -1317,6 +1317,8 @@ export default function App() {
     try {
       const data = await optimizePlcJob(plcJobId, {
         message: "优化工程逻辑并准备反写",
+        blockName:
+          chatScope && chatScope.kind !== "plc_tag" ? chatScope.blockName : undefined,
       });
       const detail = await hydratePlc(plcJobId);
       const plan =
