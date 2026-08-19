@@ -192,3 +192,40 @@ def test_filter_changeset_for_focus_unit():
     names = {o.payload.get("block_name") for o in focused.ops if o.payload.get("block_name")}
     assert names == {"FB_A", "FC_H"}
     assert filter_changeset_for_focus(cs, "").ops == cs.ops
+
+
+def test_filter_scl_diffs_for_focus_keeps_helpers():
+    from agents.plc.tia.changeset import PlcChangeOp, PlcChangeSet, filter_scl_diffs_for_focus
+
+    cs = PlcChangeSet(
+        id="d",
+        ops=[
+            PlcChangeOp(kind="rewrite_scl", payload={"block_name": "FB_A", "scl_text": "A"}),
+            PlcChangeOp(
+                kind="stage_scl_source",
+                payload={"block_name": "FC_H", "scl_text": "H", "new_block": True},
+            ),
+            PlcChangeOp(
+                kind="add_edge",
+                payload={
+                    "source": "Block::FB_A",
+                    "target": "Block::FC_H",
+                    "type": "CALLS",
+                    "props": {"evidence": "decouple_extract"},
+                },
+            ),
+        ],
+        notes=["optimize:decouple:FB_A->FC_H"],
+    )
+    diffs = [
+        {"block": "FB_A", "diff": "-a\n+b\n", "after": "b"},
+        {"block": "FC_H", "diff": "+new\n", "after": "new", "new_block": True},
+        {"block": "Dead", "diff": "-x\n"},
+    ]
+    kept = filter_scl_diffs_for_focus(diffs, cs, "FB_A")
+    assert [d["block"] for d in kept] == ["FB_A", "FC_H"]
+    assert [d["block"] for d in filter_scl_diffs_for_focus(diffs, cs, None)] == [
+        "FB_A",
+        "FC_H",
+        "Dead",
+    ]

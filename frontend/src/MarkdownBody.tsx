@@ -1,15 +1,23 @@
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
+import { DiffLines } from "./SclDiffPreview";
 
 const components: Components = {
-  pre({ children }) {
-    return <pre className="md-pre">{children}</pre>;
+  pre({ children, ...props }) {
+    return (
+      <pre className="md-pre" {...props}>
+        {children}
+      </pre>
+    );
   },
   code({ className, children, ...props }) {
     const text = String(children).replace(/\n$/, "");
     const isBlock = Boolean(className) || text.includes("\n");
     if (isBlock) {
       const lang = (className || "").replace(/^language-/, "") || "scl";
+      if (lang === "diff") {
+        return <DiffLines text={text} />;
+      }
       return (
         <code className={`md-code-block language-${lang}`} {...props}>
           {text}

@@ -207,6 +207,33 @@ def helper_block_names_for_focus(cs: PlcChangeSet, focus: str) -> set[str]:
     return {h for h in helpers if h and h != focus}
 
 
+def filter_scl_diffs_for_focus(
+    diffs: list[dict[str, Any]],
+    cs: PlcChangeSet | dict[str, Any] | None,
+    focus: str | None,
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """HITL SCL preview: focused block plus helper FCs extracted for it."""
+    items = [d for d in diffs if isinstance(d, dict)]
+    name = (focus or "").strip()
+    if not name:
+        return items[:limit]
+    parsed: PlcChangeSet | None
+    if isinstance(cs, PlcChangeSet):
+        parsed = cs
+    elif isinstance(cs, dict) and (cs.get("ops") or cs.get("id")):
+        parsed = PlcChangeSet.from_dict(cs)
+    else:
+        parsed = None
+    helpers = helper_block_names_for_focus(parsed, name) if parsed else set()
+    allowed = {name} | helpers
+    kept = [d for d in items if str(d.get("block") or "") in allowed]
+    if not kept:
+        kept = [d for d in items if str(d.get("block") or "") == name]
+    return kept[:limit]
+
+
 def filter_changeset_for_focus(cs: PlcChangeSet, focus: str | None) -> PlcChangeSet:
     """Keep ops for the focused block and helper FCs created for that block.
 

@@ -2695,12 +2695,25 @@ def _format_optimize_scl_chat(
     diffs = list(job.get("scl_diffs") or [])
     files = dict(job.get("scl_files") or {})
     skipped = list(job.get("scl_skipped") or [])
+    from agents.plc.tia.changeset import (
+        PlcChangeSet,
+        filter_scl_diffs_for_focus,
+        helper_block_names_for_focus,
+    )
+
+    raw_cs = job.get("changeset")
+    parsed_cs = None
+    if isinstance(raw_cs, dict) and (raw_cs.get("ops") or raw_cs.get("id")):
+        parsed_cs = PlcChangeSet.from_dict(raw_cs)
+    diffs_f = filter_scl_diffs_for_focus(diffs, parsed_cs, focus, limit=8)
     if focus:
-        diffs_f = [d for d in diffs if isinstance(d, dict) and str(d.get("block") or "") == focus]
-        skipped_f = [s for s in skipped if isinstance(s, dict) and str(s.get("block") or "") == focus]
+        helpers = helper_block_names_for_focus(parsed_cs, focus) if parsed_cs else set()
+        allowed = {focus} | helpers
+        skipped_f = [
+            s for s in skipped if isinstance(s, dict) and str(s.get("block") or "") in allowed
+        ]
         file_text = files.get(focus)
     else:
-        diffs_f = [d for d in diffs if isinstance(d, dict)][:6]
         skipped_f = [s for s in skipped if isinstance(s, dict)][:12]
         file_text = None
 
