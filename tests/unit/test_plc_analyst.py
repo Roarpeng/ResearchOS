@@ -139,6 +139,73 @@ def test_answer_expand_scl_returns_full_source():
     assert "完整 SCL：" in text
     assert "FUNCTION_BLOCK" in text
     assert "#q := TRUE" in text
+    after = text.split("完整 SCL：", 1)[1].strip()
+    assert after
+    assert "```scl" in text
+
+
+def test_answer_expand_scl_missing_sources_dumps_folded_or_reason():
+    job = _job()
+    job["scl_sources"] = {}
+    job["folded_logic"] = {
+        "FB_A": [
+            {
+                "title": "启动保持",
+                "statements": [{"kind": "assign", "target": "#q", "value": "TRUE"}],
+            }
+        ]
+    }
+    text = answer_block_chat(job, "@FB_A 展开 SCL", "FB_A")
+    assert "完整 SCL：" in text
+    after = text.split("完整 SCL：", 1)[1].strip()
+    assert after
+    assert "```scl" in text
+    assert "#q" in text or "程序体不可用" in text
+
+    empty = _job()
+    empty["scl_sources"] = {}
+    empty["folded_logic"] = {}
+    empty["blocks"][1]["interface_only"] = True
+    empty["blocks"][1]["body_available"] = False
+    locked = answer_block_chat(empty, "@FB_A 展开 SCL", "FB_A")
+    assert "完整 SCL：" in locked
+    assert locked.split("完整 SCL：", 1)[1].strip()
+    assert "程序体不可用" in locked
+    assert "```scl" in locked
+
+
+def test_answer_analyze_node_includes_runtime_logic_not_truncated():
+    job = _job()
+    job["blocks"][1]["comment"] = "用于电机自锁保持的功能块，注释足够长以免被 160 字截断路径当成唯一答案。" * 3
+    job["scl_sources"]["FB_A"] = (
+        "FUNCTION_BLOCK \"FB_A\"\n"
+        "BEGIN\n"
+        "  // NETWORK 1: 启动保持\n"
+        "  #q := #en OR #q;\n"
+        "END_FUNCTION_BLOCK\n"
+    )
+    job["folded_logic"] = {
+        "FB_A": [
+            {
+                "title": "启动保持",
+                "statements": [{"kind": "assign", "target": "#q", "value": "#en OR #q"}],
+            }
+        ]
+    }
+    job["blocks"][1]["inputs"] = ["#en"]
+    job["blocks"][1]["outputs"] = ["#q"]
+    for phrase in ("分析节点", "这个块干什么"):
+        text = answer_block_chat(job, f"@FB_A {phrase}", "FB_A")
+        assert "完整 SCL：" not in text
+        assert "启动保持" in text
+        assert "逻辑：" in text or "运行步骤：" in text or "主要逻辑" in text
+        assert "```scl" in text
+        assert "#q" in text
+        # Must not be only a truncated 理解 line
+        understanding = next((ln for ln in text.splitlines() if ln.startswith("理解：")), "")
+        assert understanding
+        assert not understanding.endswith("…") or "主要逻辑" in text
+        assert "FUNCTION_BLOCK" not in text.upper() or "主要逻辑" in text
 
 
 def test_answer_optimize_and_signal_trace_shortcuts():

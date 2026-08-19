@@ -186,6 +186,26 @@ def test_chat_optimize_and_node_card_mention_chain():
     assert fb_a.get("nest_depth") == 2
 
 
+def test_analyze_and_nest_chip_show_full_typed_as_chain():
+    job = _job_from_project(_nested_project())
+    for phrase in ("分析节点", "这个块干什么"):
+        text = answer_block_chat(job, f"@FB_A {phrase}", "FB_A")
+        assert "FB_A" in text and "FB_B" in text and "FB_C" in text
+        assert "→" in text
+        assert "FB_A" in text.split("→")[0] or "`FB_A`" in text
+    nest = answer_block_chat(job, "@FB_A 嵌套链", "FB_A")
+    assert "FB-as-type" in nest or "嵌套" in nest
+    assert "`FB_A`" in nest and "`FB_B`" in nest and "`FB_C`" in nest
+    assert "→" in nest
+    assert "Child" in nest
+    leaf = answer_block_chat(job, "@FB_C 嵌套链", "FB_C")
+    assert "无 FB-as-type 嵌套" in leaf
+    member = answer_block_chat(job, "@Child 嵌套链", "Child")
+    assert "未找到与" not in member
+    assert "FB_A" in member and "FB_B" in member and "FB_C" in member
+    assert "Child" in member
+
+
 def test_optimize_plan_documents_chain_skips_interface_only_body():
     job = _job_from_project(_nested_project(interface_only_leaf=True))
     fb_c = next(b for b in job["blocks"] if b["name"] == "FB_C")

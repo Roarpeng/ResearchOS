@@ -312,16 +312,110 @@ def _annotate_block_nest_depth(job: dict[str, Any]) -> None:
         block["nest_depth"] = nest_depth_of(kg, name, _memo=memo)
 
 
-def _format_nested_fb_line(job: dict[str, Any], block_name: str) -> str | None:
-    """One card line: embedded FB types + one more nesting level."""
-    from agents.plc.tia.typed_as import nest_depth_of, one_level_embed_bits
+def _typed_as_nest_payload(
+    job: dict[str, Any],
+    block_name: str,
+    *,
+    through_member: str | None = None,
+) -> dict[str, Any]:
+    """Full TYPED_AS chains + STAT member names for a block (or one member)."""
+    from agents.plc.tia.typed_as import (
+        format_chain,
+        nest_depth_of,
+        typed_as_chains,
+        typed_as_members,
+    )
 
     kg = job.get("knowledge_graph") or {}
-    bits = one_level_embed_bits(kg, block_name)
-    if not bits:
-        return None
     depth = nest_depth_of(kg, block_name)
-    return f"嵌套 FB 类型（深度 {depth}）：" + "；".join(bits)
+    members = typed_as_members(kg, block_name)
+    if through_member:
+        want = through_member.strip().lstrip("#")
+        want_l = want.lower()
+        members = [
+            m
+            for m in members
+            if str(m.get("member") or "").strip().lstrip("#").lower() == want_l
+        ]
+    member_bits: list[str] = []
+    chain_lines: list[str] = []
+    child_types = {str(item.get("type_block") or "") for item in members if item.get("type_block")}
+    for item in members:
+        member = str(item.get("member") or "?")
+        child = str(item.get("type_block") or "")
+        if not child:
+            continue
+        rest = typed_as_chains(kg, child)
+        if rest:
+            for path in rest:
+                tail = " → ".join(f"`{n}`" for n in path[1:] if n)
+                bit = f"`{block_name}.{member} : {child}`"
+                member_bits.append(f"{bit} → {tail}" if tail else bit)
+        else:
+            member_bits.append(f"`{block_name}.{member} : {child}`")
+    for path in typed_as_chains(kg, block_name):
+        if through_member:
+            if not child_types or len(path) < 2 or path[1] not in child_types:
+                continue
+        rendered = format_chain(path)
+        if rendered:
+            chain_lines.append(rendered)
+    # De-dupe while preserving order
+    member_bits = list(dict.fromkeys(member_bits))
+    chain_lines = list(dict.fromkeys(chain_lines))
+    return {
+        "depth": depth,
+        "members": member_bits,
+        "chains": chain_lines,
+        "has_nest": bool(member_bits or chain_lines or depth),
+    }
+
+
+def _format_typed_as_nest_lines(
+    job: dict[str, Any],
+    block_name: str,
+    *,
+    through_member: str | None = None,
+    compact: bool = False,
+    always: bool = False,
+) -> list[str]:
+    """Engineer-facing nest listing. ``always`` prints 无 FB-as-type when depth 0."""
+    payload = _typed_as_nest_payload(job, block_name, through_member=through_member)
+    depth = int(payload.get("depth") or 0)
+    members = list(payload.get("members") or [])
+    chains = list(payload.get("chains") or [])
+    if not members and not chains:
+        if always:
+            who = f"`{block_name}`"
+            if through_member:
+                who = f"`{block_name}.{through_member}`"
+            return [f"{who} 无 FB-as-type 嵌套（STAT 成员类型不是另一个 FB）"]
+        return []
+    if compact:
+        bits = members or chains
+        # Card keeps the existing ``Child : FB_B`` shape plus remaining types.
+        short: list[str] = []
+        for bit in bits:
+            short.append(bit.replace(f"{block_name}.", "", 1) if bit.startswith(f"`{block_name}.") else bit)
+        return [f"嵌套 FB 类型（深度 {depth}）：" + "；".join(short[:6])]
+    lines = [f"**FB-as-type 嵌套链**（`{block_name}`，深度 {depth}）"]
+    if through_member:
+        lines[0] += f" · 经成员 `{through_member}`"
+    if members:
+        lines.append("成员：")
+        for bit in members:
+            lines.append(f"- {bit}")
+    if chains:
+        lines.append("链：")
+        for chain in chains:
+            lines.append(f"- {chain}")
+    return lines
+
+
+def _format_nested_fb_line(job: dict[str, Any], block_name: str) -> str | None:
+    """Node-card line: full TYPED_AS path, not one embed level only."""
+    lines = _format_typed_as_nest_lines(job, block_name, compact=True)
+    return lines[0] if lines else None
 
 
 def create_job_record(
@@ -1572,32 +1666,197 @@ def _format_scl_logic_block(statements: list[str]) -> list[str]:
     except Exception:  # noqa: BLE001
         explain_scl_statement = lambda _s: ""  # type: ignore[misc, assignment]
     body: list[str] = []
+    last_title = ""
     for raw in statements:
         line = str(raw).strip()
+        title = ""
         if line.startswith("[") and "]" in line:
-            line = line.split("]", 1)[1].strip()
+            title, line = line[1:].split("]", 1)
+            title = title.strip()
+            line = line.strip()
         if not line:
             continue
+        if title and title != last_title:
+            body.append(f"// 网络：{title}")
+            last_title = title
         if not line.endswith(";"):
             line = f"{line};"
         meaning = explain_scl_statement(line)
         if meaning:
             body.append(f"// {meaning}")
         body.append(line)
-        if len(body) >= 24:
+        if len(body) >= 28:
             break
     if not body:
         return []
     return ["主要逻辑（摘录，含中文说明）：", "```scl", *body, "```"]
 
 
+def _block_meta(job: dict[str, Any], block_name: str) -> dict[str, Any]:
+    for b in job.get("blocks") or []:
+        if isinstance(b, dict) and str(b.get("name") or "") == block_name:
+            return b
+    return {}
+
+
+def _program_body_unavailable_reason(block: dict[str, Any] | None) -> str:
+    b = block or {}
+    if b.get("interface_only"):
+        return "程序体不可用（接口开放 / interface_only）"
+    if b.get("protected"):
+        return "程序体不可用（Know-how / 保护）"
+    if b.get("body_available") is False:
+        return "程序体不可用（未导出）"
+    if b.get("is_safety"):
+        return "程序体不可用（Safety / F 块不展开）"
+    return "程序体不可用（无已导出 SCL / 无折叠语句）"
+
+
+def _folded_scl_dump(job: dict[str, Any], block_name: str) -> str:
+    """Whatever folded / TODO SCL we already have — not new Siemens semantics."""
+    lines: list[str] = []
+    folded = job.get("folded_logic") or {}
+    nets = folded.get(block_name) if isinstance(folded, dict) else None
+    if isinstance(nets, list):
+        for net in nets:
+            if not isinstance(net, dict):
+                continue
+            title = str(net.get("title") or net.get("network_id") or "").strip()
+            if title:
+                lines.append(f"// NETWORK: {title}")
+            for stmt in net.get("statements") or []:
+                if isinstance(stmt, dict):
+                    target = str(stmt.get("target") or stmt.get("target_scl") or "").strip()
+                    kind = str(stmt.get("kind") or "coil")
+                    expr = _expr_dict_to_scl(stmt.get("value"))
+                    if kind == "call":
+                        piece = target.rstrip(";")
+                    elif kind == "move":
+                        en = stmt.get("enable")
+                        if en:
+                            piece = f"IF {_expr_dict_to_scl(en)} THEN {target} := {expr}; END_IF"
+                        else:
+                            piece = f"{target} := {expr}"
+                    else:
+                        piece = f"{target} := {expr}" if target else expr
+                else:
+                    piece = str(stmt).strip()
+                if piece:
+                    if not piece.endswith(";"):
+                        piece = f"{piece};"
+                    lines.append(piece)
+            for todo in net.get("unresolved_parts") or []:
+                text = str(todo).strip()
+                if text:
+                    lines.append(f"(* TODO: {text} *)")
+    if lines:
+        return "\n".join(lines)
+    stmts = _folded_logic_lines(job, block_name)
+    out: list[str] = []
+    for raw in stmts:
+        line = str(raw).strip()
+        if line.startswith("[") and "]" in line:
+            title, line = line[1:].split("]", 1)
+            title = title.strip()
+            line = line.strip()
+            if title:
+                out.append(f"// NETWORK: {title}")
+        if line:
+            if not line.endswith(";"):
+                line = f"{line};"
+            out.append(line)
+    return "\n".join(out)
+
+
+def _scl_from_ir_translator(job: dict[str, Any], block_name: str) -> str:
+    """Reuse existing LAD/FBD→SCL translator when ingest skipped scl_sources."""
+    try:
+        from agents.plc.tia.flgnet_fold import attach_folded
+        from agents.plc.tia.ir import PlcProject
+        from agents.plc.tia.scl import translate_block_to_scl
+        from agents.plc.tia.scl_rewrite import _load_ir_blocks, refuse_body_write_reason
+    except Exception:  # noqa: BLE001
+        return ""
+    try:
+        ir_blocks = _load_ir_blocks(job)
+    except Exception:  # noqa: BLE001
+        return ""
+    block = ir_blocks.get(block_name)
+    if block is None:
+        return ""
+    if refuse_body_write_reason(block):
+        # Still try translate when networks exist — chat dump, not writeback.
+        if not getattr(block, "networks", None) and not str(getattr(block, "source_text", "") or "").strip():
+            return ""
+    try:
+        project = PlcProject(name=str(job.get("project_name") or "job"))
+        project.add_block(block)
+        attach_folded(project)
+        block = project.blocks.get(block_name) or block
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return str(translate_block_to_scl(block) or "").strip()
+    except Exception:  # noqa: BLE001
+        logger.warning("IR SCL translate failed for %s", block_name, exc_info=True)
+        return ""
+
+
+def _scl_from_export_package(job: dict[str, Any], block_name: str) -> str:
+    export_dir = str(job.get("export_dir") or "").strip()
+    if not export_dir:
+        return ""
+    try:
+        from agents.plc.tia.package import _safe_filename
+    except Exception:  # noqa: BLE001
+        def _safe_filename(name: str) -> str:  # type: ignore[misc]
+            return re.sub(r'[\\/:*?"<>|]', "_", name)
+
+    path = Path(export_dir) / "converted_scl" / f"{_safe_filename(block_name)}.scl"
+    try:
+        if path.is_file():
+            return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return ""
+
+
+def _resolve_block_scl_text(job: dict[str, Any], block_name: str) -> tuple[str, str | None]:
+    """SCL unit for chat: scl_sources → IR translator → package → folded dump.
+
+    Second value is a one-line 程序体不可用 reason when the body is missing/TODO-only.
+    """
+    from agents.plc.tia.scl_rewrite import scl_is_untranslated
+
+    stored = str((job.get("scl_sources") or {}).get(block_name) or "").strip()
+    if stored:
+        reason = "程序体不可用（仅 TODO / 占位）" if scl_is_untranslated(stored) else None
+        return stored, reason
+
+    ir_scl = _scl_from_ir_translator(job, block_name)
+    if ir_scl:
+        reason = "程序体不可用（仅 TODO / 占位）" if scl_is_untranslated(ir_scl) else None
+        return ir_scl, reason
+
+    pkg = _scl_from_export_package(job, block_name)
+    if pkg:
+        reason = "程序体不可用（仅 TODO / 占位）" if scl_is_untranslated(pkg) else None
+        return pkg, reason
+
+    folded = _folded_scl_dump(job, block_name).strip()
+    meta = _block_meta(job, block_name)
+    if folded:
+        # Body excerpt exists even though ingest did not store a compilation unit.
+        return folded, None
+    return "(* 无已导出程序体 / 无折叠语句 *)", _program_body_unavailable_reason(meta)
+
+
 def _format_block_scl_markdown(job: dict[str, Any], block_name: str) -> list[str]:
-    """Full standard SCL unit (VAR_INPUT…END_VAR + commented body) — never truncate."""
-    scl = str((job.get("scl_sources") or {}).get(block_name) or "").strip()
-    if not scl:
-        return []
-    lines = scl.splitlines()
-    return ["完整 SCL：", "```scl", *lines, "```"]
+    """Full SCL fence — never an empty card after the title."""
+    scl, reason = _resolve_block_scl_text(job, block_name)
+    title = f"完整 SCL：{reason}" if reason else "完整 SCL："
+    body = (scl or "(* 无已导出程序体 / 无折叠语句 *)").splitlines() or ["(* 无已导出程序体 / 无折叠语句 *)"]
+    return [title, "```scl", *body, "```"]
 
 
 def _wants_full_scl(message: str) -> bool:
@@ -1611,8 +1870,31 @@ def _wants_full_scl(message: str) -> bool:
     )
 
 
+def _wants_brief_card(message: str) -> bool:
+    """Canvas-style「简述 / 不要贴源码」stays the ≤12-line card."""
+    msg = message or ""
+    if "简述" in msg:
+        return True
+    if re.search(r"不要.{0,16}(贴源码|完整\s*SCL|粘贴|复述|只贴)", msg):
+        return True
+    return False
+
+
+def _wants_nest_chains(message: str) -> bool:
+    msg = message or ""
+    return any(k in msg for k in ("嵌套链", "FB-as-type", "TYPED_AS 链", "TYPED_AS链"))
+
+
+def _wants_node_analyze(message: str) -> bool:
+    """Inspector/chip phrases that must dump runtime logic (not the short card)."""
+    msg = message or ""
+    return any(k in msg for k in ("分析节点", "分析逻辑", "这个块干什么", "运行逻辑"))
+
+
 def _wants_block_explain(message: str) -> bool:
     msg = message or ""
+    if _wants_brief_card(msg) or _wants_full_scl(msg) or _wants_nest_chains(msg):
+        return False
     return any(
         k in msg
         for k in (
@@ -1623,9 +1905,12 @@ def _wants_block_explain(message: str) -> bool:
             "逻辑",
             "做什么",
             "干嘛",
+            "干什么",
             "功能",
             "深入",
             "分析",
+            "分析节点",
+            "运行逻辑",
         )
     )
 
@@ -1891,7 +2176,7 @@ def _describe_block_function(
         if line.startswith("使用") or line.startswith("被使用"):
             lines.append(line)
 
-    nest_line = _format_nested_fb_line(job, block_name)
+    nest_line = None if include_full_scl else _format_nested_fb_line(job, block_name)
     if nest_line:
         lines.append(nest_line)
 
@@ -1910,12 +2195,103 @@ def _describe_block_function(
 
     if interface_only or (protected and not body_available):
         lines.append("程序体：不可用（未解密 / 未导出）— 不做 SCL 展开")
+        if include_full_scl:
+            lines.extend(_format_block_scl_markdown(job, block_name))
+            lines.extend(
+                _format_typed_as_nest_lines(job, block_name, compact=False, always=False)
+            )
     elif include_full_scl:
         lines.extend(_format_block_scl_markdown(job, block_name))
+        lines.extend(
+            _format_typed_as_nest_lines(job, block_name, compact=False, always=False)
+        )
     elif (job.get("scl_sources") or {}).get(block_name):
         lines.append("_下一步：说「展开 SCL」看完整源码；或问「谁读写这些信号」/「优化建议」。_")
     else:
         lines.append("_下一步：可选中画布查看信号子图；或问「优化建议」。_")
+    return lines
+
+
+def _format_block_runtime_explain(
+    job: dict[str, Any],
+    block_name: str,
+    block: dict[str, Any],
+    *,
+    through_member: str | None = None,
+    nest_block: str | None = None,
+) -> list[str]:
+    """分析 / 这个块干什么 / 运行逻辑：role, IO, CALLS, 网络步序, folded SCL, 全链."""
+    comment = str(block.get("comment") or "").strip()
+    interface_only = bool(block.get("interface_only"))
+    protected = bool(block.get("protected"))
+    body_available = block.get("body_available")
+    if body_available is None:
+        body_available = not interface_only and not (
+            protected and int(block.get("networks") or 0) == 0
+        )
+    reads, writes, iface_inout = _block_io_lists(job, block_name, block)
+    folded = _folded_logic_lines(job, block_name)
+    if not folded:
+        scl = (job.get("scl_sources") or {}).get(block_name) or ""
+        folded = [
+            ln.strip().rstrip(";")
+            for ln in str(scl).splitlines()
+            if (":=" in ln or "=>" in ln or "(" in ln)
+            and not ln.strip().startswith("//")
+            and not ln.strip().startswith("(*")
+            and not ln.strip().upper().startswith("NETWORK")
+            and "VAR" not in ln.upper().split()[:1]
+        ][:16]
+    titles = _block_network_titles(job, block_name)
+    callers, callees = _call_relation_names(job, block_name)
+    lines: list[str] = []
+
+    if interface_only or (protected and not body_available):
+        lines.append("状态：接口开放 · 程序体不可用（不臆测内部逻辑）")
+        purpose = comment or "封装功能块；结合接口与上下游调用理解角色。"
+        lines.append(f"理解：{purpose}")
+        lines.append(f"作用：{purpose}")
+    else:
+        understanding = _explain_block_understanding(
+            job, block_name, block, folded=folded, reads=reads, writes=writes
+        )
+        lines.append(f"理解：{understanding}")
+        lines.append(f"作用：{_purpose_from_fold(folded, reads, writes)}")
+
+    lines.append(f"输入：{_join_capped(reads) if reads else '（无已验证读取）'}")
+    lines.append(f"输出：{_join_capped(writes) if writes else '（无已验证写入）'}")
+    if iface_inout and not (set(iface_inout) <= set(reads) & set(writes)):
+        lines.append(f"InOut：{_join_capped(iface_inout, limit=4)}")
+
+    call_bits: list[str] = []
+    if callers:
+        call_bits.append("被调用：" + _join_capped(callers, limit=8))
+    if callees:
+        call_bits.append("调用：" + _join_capped(callees, limit=8))
+    if call_bits:
+        lines.append("；".join(call_bits))
+    for line in _block_assoc_lines(job, block_name):
+        if line.startswith("使用") or line.startswith("被使用"):
+            if line not in lines:
+                lines.append(line)
+
+    if titles:
+        lines.append("逻辑：" + " → ".join(titles[:16]))
+        lines.append("运行步骤：" + " → ".join(titles[:16]))
+    if not (interface_only or (protected and not body_available)):
+        lines.extend(_format_scl_logic_block(folded))
+    else:
+        lines.append("程序体：不可用（未解密 / 未导出）")
+
+    lines.extend(
+        _format_typed_as_nest_lines(
+            job,
+            nest_block or block_name,
+            through_member=through_member,
+            compact=False,
+            always=True,
+        )
+    )
     return lines
 
 
@@ -1964,6 +2340,8 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         and not _wants_optimize_hints(msg)
         and not _wants_full_scl(msg)
         and not _wants_signal_trace(msg)
+        and not _wants_nest_chains(msg)
+        and not _wants_node_analyze(msg)
         and (
             looks_like_confirmation_reply(msg)
             or any(str(item.get("kind") or "") == "process_narrative" for item in stored)
@@ -1971,13 +2349,40 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
     ):
         return format_confirmation_ack(job, stored)
 
+    through_member: str | None = None
+    nest_origin: str | None = None
     # Explicit canvas/@ name that is NOT an IR block → multi-instance / external KG entity
+    inst = None
     for candidate in (block_name, hint):
         cand = (candidate or "").strip()
         if not cand or cand in blocks:
             continue
         inst = _lookup_instance_entity(job, cand)
         if inst is not None:
+            break
+    if inst is not None and not (focus and focus in blocks):
+        parents = [str(p) for p in (inst.get("parents") or []) if p]
+        type_name = str(inst.get("type_block") or "")
+        member_name = str(inst.get("name") or "")
+        parent = next((p for p in parents if p in blocks), "")
+        remap_chips = _wants_full_scl(msg) or _wants_nest_chains(msg) or _wants_node_analyze(msg)
+        if remap_chips and _wants_nest_chains(msg):
+            origin = parent or (type_name if type_name in blocks else "")
+            if origin:
+                title = f"**`{member_name or origin}`**"
+                body = _format_typed_as_nest_lines(
+                    job,
+                    origin,
+                    through_member=member_name or None,
+                    compact=False,
+                    always=True,
+                )
+                return "\n".join([title, *body])
+        if remap_chips and (type_name in blocks or parent in blocks):
+            focus = type_name if type_name in blocks else parent
+            through_member = member_name or None
+            nest_origin = parent or focus
+        else:
             return _describe_instance_from_kg(job, inst)
 
     if (at or block_name) and not focus:
@@ -2005,7 +2410,13 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         return "\n".join(lines)
 
     # Project-level interview: do not dump architecture as if already understood
-    if _wants_project_interview(msg) and not _wants_optimize_hints(msg) and not _wants_full_scl(msg):
+    if (
+        _wants_project_interview(msg)
+        and not _wants_optimize_hints(msg)
+        and not _wants_full_scl(msg)
+        and not _wants_nest_chains(msg)
+        and not _wants_node_analyze(msg)
+    ):
         interview = format_interview_block(job, focus_block=focus or None, limit=3)
         return interview or format_optimize_advice(job, focus)
 
@@ -2021,6 +2432,16 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
             return "\n".join(_format_signal_trace(job, focus))
         if _wants_optimize_hints(msg) and not include_scl:
             return format_optimize_advice(job, focus)
+        if _wants_nest_chains(msg) and not include_scl:
+            title = f"**`{focus}`**"
+            body = _format_typed_as_nest_lines(
+                job,
+                focus,
+                through_member=through_member,
+                compact=False,
+                always=True,
+            )
+            return "\n".join([title, *body])
         meta = " · ".join(
             p
             for p in [
@@ -2032,12 +2453,33 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
             if p
         )
         fact_lines = [f"**`{focus}`**（{meta}）" if meta else f"**`{focus}`**"]
+        if _wants_block_explain(msg) and not include_scl:
+            fact_lines.extend(
+                _format_block_runtime_explain(
+                    job,
+                    focus,
+                    b,
+                    through_member=through_member,
+                    nest_block=nest_origin or focus,
+                )
+            )
+            return maybe_append_interview(job, "\n".join(fact_lines), focus_block=focus)
         fact_lines.extend(
             _describe_block_function(job, focus, b, include_full_scl=include_scl)
         )
         # Concise by default: no LLM essay + evidence appendix on canvas click
         card = "\n".join(fact_lines)
         if include_scl:
+            if through_member and nest_origin:
+                extra = _format_typed_as_nest_lines(
+                    job,
+                    nest_origin,
+                    through_member=through_member,
+                    compact=False,
+                    always=False,
+                )
+                if extra:
+                    card = card.rstrip() + "\n" + "\n".join(extra)
             return card
         return maybe_append_interview(job, card, focus_block=focus)
 
