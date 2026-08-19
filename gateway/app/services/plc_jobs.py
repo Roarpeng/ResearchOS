@@ -1891,9 +1891,29 @@ def _wants_node_analyze(message: str) -> bool:
     return any(k in msg for k in ("分析节点", "分析逻辑", "这个块干什么", "运行逻辑"))
 
 
+def _wants_understand_logic(message: str) -> bool:
+    """Engineer interview about this node's runtime — not the IR dump of 分析逻辑."""
+    msg = message or ""
+    return any(k in msg for k in ("理解逻辑", "理解这块", "确认逻辑", "这块逻辑"))
+
+
+def _wants_optimize_scl(message: str) -> bool:
+    compact = re.sub(r"\s+", "", message or "")
+    return "优化SCL" in compact or "改写SCL" in compact
+
+
+def _wants_optimize_logic(message: str) -> bool:
+    msg = message or ""
+    if _wants_optimize_scl(msg):
+        return False
+    return any(k in msg for k in ("优化逻辑", "优化建议"))
+
+
 def _wants_block_explain(message: str) -> bool:
     msg = message or ""
     if _wants_brief_card(msg) or _wants_full_scl(msg) or _wants_nest_chains(msg):
+        return False
+    if _wants_understand_logic(msg) or _wants_optimize_logic(msg) or _wants_optimize_scl(msg):
         return False
     return any(
         k in msg
@@ -2005,6 +2025,8 @@ def _join_capped(items: list[str], *, limit: int = 6) -> str:
 
 def _wants_optimize_hints(message: str) -> bool:
     msg = message or ""
+    if _wants_optimize_scl(msg):
+        return False
     return any(
         k in msg
         for k in ("优化", "改进", "风险", "死代码", "不可达", "建议改", "怎么改")
@@ -2315,6 +2337,162 @@ def _block_risk_notes(job: dict[str, Any], block_name: str) -> list[str]:
     return notes[:4]
 
 
+def _excerpt_optimize_plan(plan: str, *, limit: int = 40) -> str:
+    """Keep engineer facts / focus / skip / next-step; drop Openness preamble and SCL dump."""
+    text = (plan or "").strip()
+    if not text:
+        return ""
+    keep_prefixes = (
+        "## 工程师已确认",
+        "## 焦点块",
+        "## 多实例嵌套",
+        "## 未从 OB",
+        "## 解耦",
+        "## 跳过",
+        "## 按工程师确认跳过",
+        "## 程序体不可写",
+        "## 下一步",
+    )
+    collected: list[str] = []
+    capturing = False
+    for ln in text.splitlines():
+        if ln.startswith("# ") and not ln.startswith("## "):
+            collected.append(ln)
+            continue
+        if ln.startswith("## "):
+            capturing = any(ln.startswith(p) for p in keep_prefixes) and not ln.startswith(
+                "## SCL diff"
+            )
+            if capturing:
+                collected.append(ln)
+            continue
+        if capturing:
+            collected.append(ln)
+    body = collected if any(ln.startswith("## ") for ln in collected) else text.splitlines()[:limit]
+    out = body[:limit]
+    return "\n".join(out).strip()
+
+
+def _format_optimize_scl_chat(
+    job: dict[str, Any],
+    block_name: str | None,
+    *,
+    message: str = "",
+) -> str:
+    """HITL SCL rewrite preview for the focused block — never a silent empty card."""
+    from agents.plc.tia.understanding import (
+        is_block_understanding_thin,
+        is_understanding_thin,
+        must_keep_nested,
+        must_not_touch,
+        skip_write_reason,
+    )
+
+    focus = (block_name or "").strip() or None
+    title = "**优化SCL**" + (f"（`{focus}`）" if focus else "（工程）")
+    lines = [title]
+
+    thin = (
+        is_block_understanding_thin(job, focus)
+        if focus
+        else is_understanding_thin(job)
+    )
+    if thin:
+        lines.append(
+            "理解尚未由工程师确认：以下是 HITL **预览**，不是已批准改写。"
+            "可用「理解逻辑」补确认；Know-how / F 块体仍不写。"
+        )
+    else:
+        lines.append("已按你确认的事实约束生成预览；确认反写.zap 前请审阅 diff。不会自动导入或归档。")
+
+    if focus and must_not_touch(job, focus):
+        lines.append(f"`{focus}` 你确认**不要动**，跳过该块写回操作。")
+
+    try:
+        propose_job_optimize(job, block_name=focus, message=message or "优化SCL")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("optimize SCL chat failed: %s", exc)
+        lines.append(f"优化引擎暂不可用：{exc}")
+        lines.append("请稍后重试，或改用画布「优化提案」。")
+        return "\n".join(lines)
+
+    plan = str(job.get("optimize_plan") or "").strip()
+    excerpt = _excerpt_optimize_plan(plan)
+    if excerpt:
+        lines.append("")
+        lines.append(excerpt)
+
+    diffs = list(job.get("scl_diffs") or [])
+    files = dict(job.get("scl_files") or {})
+    skipped = list(job.get("scl_skipped") or [])
+    if focus:
+        diffs_f = [d for d in diffs if isinstance(d, dict) and str(d.get("block") or "") == focus]
+        skipped_f = [s for s in skipped if isinstance(s, dict) and str(s.get("block") or "") == focus]
+        file_text = files.get(focus)
+    else:
+        diffs_f = [d for d in diffs if isinstance(d, dict)][:6]
+        skipped_f = [s for s in skipped if isinstance(s, dict)][:12]
+        file_text = None
+
+    skip_reason = skip_write_reason(job, focus, kind="rewrite_scl") if focus else None
+    if focus and must_keep_nested(job, focus) and skip_reason:
+        lines.append(f"`{focus}`：{skip_reason}，不拍平该多实例。")
+
+    if skipped_f:
+        lines.append("")
+        lines.append("**跳过写程序体**")
+        for s in skipped_f[:12]:
+            reason = str(s.get("reason") or "").strip()
+            detail = str(s.get("detail") or "").strip()
+            bit = reason
+            if detail and detail not in bit:
+                bit = f"{reason} — {detail}" if reason else detail
+            lines.append(f"- `{s.get('block') or '?'}`：{bit or '跳过'}")
+    elif skip_reason:
+        lines.append("")
+        lines.append(f"**跳过写程序体**：`{focus}` — {skip_reason}")
+
+    shown = False
+    for d in diffs_f[:4]:
+        name = str(d.get("block") or focus or "?")
+        diff = str(d.get("diff") or "").strip()
+        after = str(d.get("after") or files.get(name) or "").strip()
+        if diff:
+            lines.append("")
+            lines.append(f"**SCL diff（`{name}`）**")
+            lines.append("```diff")
+            lines.append(diff)
+            lines.append("```")
+            shown = True
+        elif after:
+            lines.append("")
+            lines.append(f"**SCL（`{name}`）**")
+            lines.append("```scl")
+            lines.append(after)
+            lines.append("```")
+            shown = True
+    if not shown and file_text:
+        lines.append("")
+        lines.append(f"**SCL（`{focus}`）**")
+        lines.append("```scl")
+        lines.append(str(file_text))
+        lines.append("```")
+        shown = True
+
+    if not shown:
+        why = skip_reason or (
+            "该块没有可落地的 SCL 改写（Know-how / 安全块 / interface-only / 不要动 / 必须保留嵌套）"
+            if focus
+            else "当前工程没有可落地的 SCL 改写"
+        )
+        lines.append("")
+        lines.append(f"无可写 SCL diff：{why}。上方仍是优化计划，不会静默空卡。")
+
+    lines.append("")
+    lines.append("审阅后点「确认反写.zap」才会导入/归档；本步只预览。")
+    return "\n".join(lines)
+
+
 def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None) -> str:
     """Understand the user question, retrieve from KG, then answer (LLM if configured)."""
     import re
@@ -2323,6 +2501,7 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         format_confirmation_ack,
         format_interview_block,
         format_optimize_advice,
+        format_understand_logic,
         ingest_engineer_reply,
         looks_like_confirmation_reply,
         maybe_append_interview,
@@ -2338,6 +2517,9 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
     if (
         stored
         and not _wants_optimize_hints(msg)
+        and not _wants_optimize_scl(msg)
+        and not _wants_optimize_logic(msg)
+        and not _wants_understand_logic(msg)
         and not _wants_full_scl(msg)
         and not _wants_signal_trace(msg)
         and not _wants_nest_chains(msg)
@@ -2365,7 +2547,15 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         type_name = str(inst.get("type_block") or "")
         member_name = str(inst.get("name") or "")
         parent = next((p for p in parents if p in blocks), "")
-        remap_chips = _wants_full_scl(msg) or _wants_nest_chains(msg) or _wants_node_analyze(msg)
+        remap_chips = (
+            _wants_full_scl(msg)
+            or _wants_nest_chains(msg)
+            or _wants_node_analyze(msg)
+            or _wants_understand_logic(msg)
+            or _wants_optimize_logic(msg)
+            or _wants_optimize_scl(msg)
+            or _wants_optimize_hints(msg)
+        )
         if remap_chips and _wants_nest_chains(msg):
             origin = parent or (type_name if type_name in blocks else "")
             if origin:
@@ -2409,6 +2599,13 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         lines.append("也可点击知识图谱节点；多实例成员会按图谱边（USES / INSTANCE_OF / 接口变量）作答。")
         return "\n".join(lines)
 
+    if _wants_optimize_scl(msg):
+        return _format_optimize_scl_chat(job, focus or None, message=msg)
+    if _wants_understand_logic(msg):
+        return format_understand_logic(job, focus or None)
+    if _wants_optimize_logic(msg):
+        return format_optimize_advice(job, focus or None)
+
     # Project-level interview: do not dump architecture as if already understood
     if (
         _wants_project_interview(msg)
@@ -2416,6 +2613,7 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         and not _wants_full_scl(msg)
         and not _wants_nest_chains(msg)
         and not _wants_node_analyze(msg)
+        and not _wants_understand_logic(msg)
     ):
         interview = format_interview_block(job, focus_block=focus or None, limit=3)
         return interview or format_optimize_advice(job, focus)
@@ -2430,7 +2628,11 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         include_scl = _wants_full_scl(msg)
         if _wants_signal_trace(msg) and not include_scl:
             return "\n".join(_format_signal_trace(job, focus))
-        if _wants_optimize_hints(msg) and not include_scl:
+        if _wants_optimize_scl(msg):
+            return _format_optimize_scl_chat(job, focus, message=msg)
+        if _wants_understand_logic(msg):
+            return format_understand_logic(job, focus)
+        if (_wants_optimize_logic(msg) or _wants_optimize_hints(msg)) and not include_scl:
             return format_optimize_advice(job, focus)
         if _wants_nest_chains(msg) and not include_scl:
             title = f"**`{focus}`**"
@@ -2484,7 +2686,7 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         return maybe_append_interview(job, card, focus_block=focus)
 
     # Project-level optimize without @block
-    if _wants_optimize_hints(msg) and not at:
+    if (_wants_optimize_logic(msg) or _wants_optimize_hints(msg)) and not at:
         return format_optimize_advice(job, None)
 
     from agents.plc.tia.chat_retrieve import answer_query_pack

@@ -128,3 +128,118 @@ def test_nested_fb_questions_distinguish_required_vs_accidental():
     acc = answer_block_chat(other, "@FB_A 优化建议", "FB_A")
     assert "意外耦合" in acc
     assert "拍平" in acc or "提取" in acc
+
+
+def test_understand_logic_asks_and_recaps_without_claiming_architecture():
+    job = _job_from_project(_nested_project())
+    text = answer_block_chat(job, "@FB_A 理解逻辑", "FB_A")
+    assert "**理解逻辑" in text
+    assert "待确认假设" in text or "请确认" in text
+    assert "不是「程序就是 X」" in text or "待确认假设" in text
+    assert "扫描调用链（顺序来自逻辑图 CALLS）" not in text
+    assert "本工程整体结构" not in text
+    assert "完整 SCL：" not in text
+    assert "？" in text
+    assert "必须的西门子多实例" in text or "意外耦合" in text or "工艺主控" in text
+
+    ingest_engineer_reply(job, "工艺主控", "FB_A")
+    recap = answer_block_chat(job, "@FB_A 理解这块", "FB_A")
+    assert "工艺主控" in recap
+    assert "已确认" in recap or "工程师确认" in recap
+    # nested still unknown — ask next, do not restart as if nothing is known
+    assert "多实例" in recap or "意外耦合" in recap
+
+    ack = answer_block_chat(job, "@FB_A 必须的多实例", "FB_A")
+    assert "已记下" in ack
+    ready = answer_block_chat(job, "@FB_A 确认逻辑", "FB_A")
+    assert "够用来优化" in ready
+    assert "优化逻辑" in ready and "优化SCL" in ready
+
+
+def test_optimize_logic_asks_when_thin_cites_when_confirmed():
+    job = _analyst_job()
+    thin = answer_block_chat(job, "@FB_A 优化逻辑", "FB_A")
+    assert "**优化逻辑" in thin
+    assert "确认还不够" in thin or "需要你确认" in thin
+    assert "编造" in thin or "只提问" in thin
+    assert "```diff" not in thin
+    assert "```scl" not in thin
+
+    ingest_engineer_reply(job, "工艺主控", "FB_A")
+    ingest_engineer_reply(job, "不要动", "FB_orphan")
+    rich = answer_block_chat(job, "@FB_A 优化逻辑", "FB_A")
+    assert "工艺主控" in rich
+    assert "你确认" in rich or "工程师确认" in rich
+    assert "不要动" in rich or "跳过" in rich
+    assert "优化SCL" in rich
+    assert "不是 SCL 文件" in rich or "逻辑上拟改" in rich
+
+    nested = _job_from_project(_nested_project())
+    ingest_engineer_reply(nested, "工艺主控", "FB_A")
+    ingest_engineer_reply(nested, "必须的多实例", "FB_A")
+    plan = answer_block_chat(nested, "@FB_A 优化建议", "FB_A")
+    assert "必须" in plan and "多实例" in plan
+    assert "不建议拍平" in plan or "不拍平" in plan
+    assert "优化SCL" in plan
+
+
+def test_optimize_scl_returns_plan_and_diff_or_skip_never_empty():
+    job = _job_from_project(_nested_project())
+    text = answer_block_chat(job, "@FB_A 优化SCL", "FB_A")
+    assert "**优化SCL" in text
+    body = text.split("**优化SCL", 1)[1].strip()
+    assert body
+    assert "先不编造改写" not in text
+    assert "确认还不够，先不编造改写" not in text
+    assert job.get("changeset")
+    assert job.get("optimize_plan") or "焦点块" in text or "多实例" in text
+    has_fence = "```diff" in text or "```scl" in text
+    has_skip = any(
+        k in text
+        for k in (
+            "跳过",
+            "interface-only",
+            "无程序体",
+            "不要动",
+            "必须保留",
+            "无可写",
+            "Know-how",
+            "安全",
+        )
+    )
+    assert has_fence or has_skip
+    assert "确认反写" in text
+
+    # Must not take the warn-only hints path
+    alias = answer_block_chat(job, "@FB_A 改写 SCL", "FB_A")
+    assert "**优化SCL" in alias
+    assert "```diff" in alias or "```scl" in alias or "跳过" in alias or "无可写" in alias
+
+
+def test_optimize_scl_skips_do_not_touch_and_keep_nested():
+    job = _analyst_job()
+    ingest_engineer_reply(job, "不要动", "FB_A")
+    text = answer_block_chat(job, "@FB_A 优化SCL", "FB_A")
+    assert "不要动" in text
+    assert "```diff" in text or "跳过" in text or "无可写" in text
+    cs = job.get("changeset") or {}
+    writes = [
+        o
+        for o in (cs.get("ops") or [])
+        if (o.get("payload") or {}).get("block_name") == "FB_A"
+        and o.get("kind") in {"rewrite_scl", "stage_scl_source", "stage_xml_import"}
+    ]
+    assert writes == []
+
+    nested = _job_from_project(_nested_project())
+    ingest_engineer_reply(nested, "必须的多实例", "FB_A")
+    kept = answer_block_chat(nested, "@FB_A 优化SCL", "FB_A")
+    assert "多实例" in kept
+    assert "不拍平" in kept or "跳过" in kept or "必须保留" in kept
+    flatten = [
+        o
+        for o in (nested.get("changeset") or {}).get("ops") or []
+        if (o.get("payload") or {}).get("block_name") == "FB_A"
+        and o.get("kind") in {"rewrite_scl", "stage_scl_source", "stage_xml_import"}
+    ]
+    assert flatten == []

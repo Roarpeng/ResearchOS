@@ -8,9 +8,12 @@ must cite those facts (or ask), never claim "the program is X".
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
+
+logger = logging.getLogger("researchos.plc.understanding")
 
 ROLE_LABELS: dict[str, str] = {
     "process_main": "工艺主控",
@@ -45,7 +48,8 @@ _NESTED_ACCIDENTAL_RE = re.compile(
 )
 
 _QUESTION_RE = re.compile(
-    r"[？?]|(什么|谁|怎么|如何|请描述|请简述|优化建议|展开\s*SCL|谁读写|"
+    r"[？?]|(什么|谁|怎么|如何|请描述|请简述|优化建议|优化逻辑|优化\s*SCL|改写\s*SCL|"
+    r"理解逻辑|理解这块|确认逻辑|这块逻辑|展开\s*SCL|谁读写|"
     r"分析节点|分析逻辑|运行逻辑|嵌套链|这个块干什么)"
 )
 _CONFIRM_ONLY_RE = re.compile(
@@ -337,6 +341,31 @@ def is_understanding_thin(job: dict[str, Any]) -> bool:
     cons = u.get("constraints") or {}
     if any(cons.get(k) for k in ("must_keep_nested", "do_not_touch", "may_extract")):
         return False
+    return True
+
+
+def is_block_understanding_thin(job: dict[str, Any], block_name: str | None) -> bool:
+    """True when this focused block has no engineer-confirmed role/nest/fact."""
+    name = (block_name or "").strip()
+    if not name:
+        return is_understanding_thin(job)
+    if confirmed_role(job, name) or confirmed_nested(job, name):
+        return False
+    u = ensure_understanding(job)
+    for fact in u.get("facts") or []:
+        if isinstance(fact, dict) and str(fact.get("block") or "") == name:
+            return False
+    return True
+
+
+def block_understanding_ready(job: dict[str, Any], block_name: str) -> bool:
+    """Role confirmed; nested FB intent confirmed when this block hosts a chain."""
+    name = (block_name or "").strip()
+    if not name or not confirmed_role(job, name):
+        return False
+    nested_parents = {n for n, _, _ in _nested_parent_names(job)}
+    if name in nested_parents:
+        return bool(confirmed_nested(job, name))
     return True
 
 
@@ -687,7 +716,10 @@ def format_confirmation_ack(job: dict[str, Any], stored: list[dict[str, Any]]) -
     )
     if nxt:
         return f"{ack}\n\n{nxt}"
-    return ack + "\n\n目前没有更高优先级的待确认项。可以问「优化建议」，或点「优化提案」。"
+    return (
+        ack
+        + "\n\n目前没有更高优先级的待确认项。可以点「优化逻辑」看改动计划，或「优化SCL」出 HITL diff。"
+    )
 
 
 def format_role_prompt(job: dict[str, Any], block_name: str) -> str:
@@ -765,13 +797,131 @@ def _format_confirmed_facts(job: dict[str, Any], *, focus: str | None = None) ->
     return lines
 
 
-def format_optimize_advice(job: dict[str, Any], block_name: str | None = None) -> str:
-    """Chat 「优化建议」: ask if thin; cite engineer facts + evidence if present."""
+def _hypothesis_call_bits(job: dict[str, Any], block_name: str) -> str:
+    callers: list[str] = []
+    callees: list[str] = []
+    bid = f"Block::{block_name}"
+    for e in (job.get("knowledge_graph") or {}).get("edges") or []:
+        if not isinstance(e, dict) or e.get("type") != "CALLS":
+            continue
+        src = str(e.get("source") or "")
+        tgt = str(e.get("target") or "")
+        if tgt == bid and src.startswith("Block::"):
+            callers.append(src.split("::", 1)[-1])
+        elif src == bid and tgt.startswith("Block::"):
+            callees.append(tgt.split("::", 1)[-1])
+    bits: list[str] = []
+    if callers:
+        bits.append("被调用 " + "、".join(f"`{c}`" for c in sorted(set(callers))[:4]))
+    if callees:
+        bits.append("调用 " + "、".join(f"`{c}`" for c in sorted(set(callees))[:4]))
+    return "；".join(bits)
+
+
+def format_understand_logic(job: dict[str, Any], block_name: str | None = None) -> str:
+    """Chat 「理解逻辑」: interview about this node's runtime, never claim IR as truth."""
     ensure_understanding(job)
     focus = (block_name or "").strip() or None
-    thin = is_understanding_thin(job)
-    title = "**优化建议**" + (f"（`{focus}`）" if focus else "（工程）")
-    lines = [title, "优化提示须引用你确认的事实；未确认的只提问，不当作「程序就是 X」。"]
+    if not focus:
+        interview = format_interview_block(
+            job,
+            limit=3,
+            heading="请先在画布选中一个块（或 @块名）。图谱/IR 只是待确认假设，不是结论：",
+        )
+        return interview or (
+            "请先在画布选中一个块，再点「理解逻辑」。"
+            "我不会把 SCL/IR 当成已经理解的工艺。"
+        )
+
+    lines = [
+        f"**理解逻辑（`{focus}`）**",
+        "折叠网络 / IO / CALLS / 嵌套只是**待确认假设**，不是「程序就是 X」。请你拍板。",
+    ]
+    facts = _format_confirmed_facts(job, focus=focus)
+    if facts:
+        lines.append("已确认（工程师为准）：")
+        lines.extend(facts[:8])
+
+    hypo: list[str] = []
+    titles: list[str] = []
+    folded = job.get("folded_logic") or {}
+    nets = folded.get(focus) if isinstance(folded, dict) else None
+    if isinstance(nets, list):
+        for net in nets:
+            if not isinstance(net, dict):
+                continue
+            t = str(net.get("title") or "").strip().strip('"')
+            if t:
+                titles.append(t)
+    if titles:
+        chain = " → ".join(f"`{t}`" for t in titles[:6])
+        hypo.append(f"- 网络标题线索：{chain}。这些网络在工艺里各自干什么？")
+
+    try:
+        from agents.plc.tia.typed_as import format_chain, nest_depth_of, typed_as_chains
+
+        kg = job.get("knowledge_graph") or {}
+        depth = int(nest_depth_of(kg, focus) or 0)
+        if depth >= 1 and not confirmed_nested(job, focus):
+            chains = typed_as_chains(kg, focus) or []
+            chain_s = format_chain(chains[0]) if chains else f"`{focus}`"
+            hypo.append(
+                f"- 嵌套线索（深度 {depth}：{chain_s}）：是**必须的西门子多实例**，还是**意外耦合**？"
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("understand-logic nest hypothesis skipped: %s", exc)
+
+    call_s = _hypothesis_call_bits(job, focus)
+    if call_s and not confirmed_role(job, focus):
+        hypo.append(f"- 调用关系线索：{call_s}。这块是工艺主控 / 设备驱动 / 厂商库 / 可拆辅助，还是不要动？")
+
+    meta = (_block_meta(job).get(focus) or {}) if focus else {}
+    reads = [str(x) for x in (meta.get("inputs") or []) if x]
+    writes = [str(x) for x in (meta.get("outputs") or []) if x]
+    if (reads or writes) and not confirmed_role(job, focus):
+        io_s = []
+        if reads:
+            io_s.append("入 " + "、".join(f"`{x}`" for x in reads[:4]))
+        if writes:
+            io_s.append("出 " + "、".join(f"`{x}`" for x in writes[:4]))
+        hypo.append("- IO 线索：" + "；".join(io_s) + "。这些针脚在现场对应什么？")
+
+    if hypo:
+        lines.append("待确认假设（请拍板，不当作结论）：")
+        lines.extend(hypo[:4])
+
+    if block_understanding_ready(job, focus):
+        lines.append("")
+        lines.append(
+            f"`{focus}` 的关键事实已确认，够用来优化。"
+            "下一步可点「优化逻辑」看改动计划，或「优化SCL」出该块 HITL diff（不自动反写）。"
+        )
+        return "\n".join(lines)
+
+    interview = format_interview_block(
+        job,
+        focus_block=focus,
+        limit=3,
+        heading=(
+            "请确认这 1–3 点（也可用芯片：工艺主控 / 设备驱动 / 厂商库 / 可拆辅助 / 不要动"
+            " / 必须的多实例 / 意外耦合）："
+        ),
+    )
+    lines.append("")
+    lines.append(interview or format_role_prompt(job, focus))
+    return "\n".join(lines)
+
+
+def format_optimize_advice(job: dict[str, Any], block_name: str | None = None) -> str:
+    """Chat 「优化逻辑」/「优化建议」: plan only. Ask if thin; cite facts if present."""
+    ensure_understanding(job)
+    focus = (block_name or "").strip() or None
+    thin = is_block_understanding_thin(job, focus) if focus else is_understanding_thin(job)
+    title = "**优化逻辑**" + (f"（`{focus}`）" if focus else "（工程）")
+    lines = [
+        title,
+        "优化提示须引用你确认的事实；这是控制逻辑计划，不是 SCL 文件。未确认的只提问，不当作「程序就是 X」。",
+    ]
 
     facts = _format_confirmed_facts(job, focus=focus)
     findings: list[dict[str, Any]] = []
@@ -813,12 +963,23 @@ def format_optimize_advice(job: dict[str, Any], block_name: str | None = None) -
         if hint_lines:
             lines.append("**优化提示（待你确认，不是结论）**")
             lines.extend(hint_lines)
+        lines.append("")
+        lines.append("确认后再点「优化SCL」可出 HITL 预览（未确认不会被当成已批准改写）。")
         return "\n".join(lines)
 
     lines.append("已确认（工程师为准）：")
     lines.extend(facts or ["- （尚无结构化事实，但已有部分确认）"])
     lines.append("")
-    lines.append("建议（同时引用图谱证据和你的确认）：")
+    lines.append("逻辑上拟改（还不是 SCL 文件；引用你的确认 + 图谱证据）：")
+    lines.append("- 必须的西门子多实例保持嵌套，不拍平、不发明 I/O。")
+    lines.append("- 你标「不要动」的块跳过写回。")
+    lines.append("- 未从 OB 到达且未标不要动的死块可注释（HITL），不静默删除。")
+    if focus and may_extract_block(job, focus):
+        lines.append(
+            f"- `{focus}` 你确认可拆/意外耦合：仅在 folded 网络已有 I/O 时提取 helper，仍禁止发明 CALLS。"
+        )
+    else:
+        lines.append("- 提取 helper 仅当工程师确认可拆辅助或意外耦合。")
 
     suggested = 0
     for f in findings:
@@ -897,7 +1058,12 @@ def format_optimize_advice(job: dict[str, Any], block_name: str | None = None) -
             lines.append(format_question_line(q))
 
     if not suggested:
-        lines.append("- 未发现与已确认事实相符的 warn/risk；可点「优化提案」做 HITL 预览。")
+        lines.append("- 未发现与已确认事实相符的 warn/risk；可点「优化SCL」做该块 HITL 预览。")
+    lines.append("")
+    if focus:
+        lines.append("下一步可点「优化SCL」出该块 diff（不自动反写；仍须「确认反写.zap」）。")
+    else:
+        lines.append("下一步可点「优化SCL」或画布「优化提案」出 HITL SCL diff（不自动反写）。")
     return "\n".join(lines)
 
 
