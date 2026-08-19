@@ -151,3 +151,10 @@ class PlcWritebackRequest(BaseModel):
         default_factory=list,
         description="Optional XML files to stage; defaults to job source XML",
     )
+    block_name: str | None = Field(
+        default=None,
+        description=(
+            "Optional node-scoped confirm: apply only this block and helper FCs "
+            "created for it. Empty = whole-project changeset."
+        ),
+    )

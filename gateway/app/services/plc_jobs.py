@@ -843,10 +843,19 @@ def propose_job_changeset(
     from agents.plc.tia.changeset import propose_changeset_from_message
 
     text = (message or "").strip()
+    # Explicit confirm is HITL writeback, never a silent re-propose.
+    if _wants_confirm_writeback(text):
+        existing = job.get("changeset")
+        if not isinstance(existing, dict) or not existing:
+            raise ValueError("No proposed changeset; preview 优化SCL first, then 确认反写")
+        return existing
     # Route optimization intents to evidence-gated optimizer (not bare「反写」alone)
-    if any(k in text for k in ("优化", "optimize", "死块", "dead block")) or (
-        ("反写" in text or "writeback" in text.lower())
-        and any(k in text for k in ("优化", "逻辑", "工程", "项目"))
+    if _wants_optimize_scl(text) or any(
+        k in text for k in ("优化", "optimize", "死块", "dead block")
+    ):
+        return propose_job_optimize(job, block_name=block_name, message=text)
+    if ("反写" in text or "writeback" in text.lower()) and any(
+        k in text for k in ("优化", "逻辑", "工程", "项目")
     ):
         return propose_job_optimize(job, block_name=block_name, message=text)
 
@@ -889,38 +898,58 @@ def confirm_job_writeback(
     execute_openness_import: bool = True,
     archive_zap: bool = True,
     xml_paths: list[str] | None = None,
+    block_name: str | None = None,
 ) -> dict[str, Any]:
-    """HITL: apply KG changeset, stage import bundle, optionally Openness import+save+archive."""
-    from agents.plc.tia.changeset import PlcChangeSet, apply_changeset_to_kg
+    """HITL: apply KG changeset, stage import bundle, optionally Openness import+save+archive.
+
+    ``block_name`` scopes to that block plus helper FCs created for it. Empty
+    focus applies the full changeset (whole-project confirm).
+    """
+    from agents.plc.tia.changeset import (
+        PlcChangeSet,
+        apply_changeset_to_kg,
+        filter_changeset_for_focus,
+        helper_block_names_for_focus,
+    )
     from agents.plc.tia.openness_cli import archive_project_via_openness_cli
+    from agents.plc.tia.understanding import filter_optimize_ops
     from agents.plc.tia.writeback import execute_writeback, prepare_writeback
 
     settings = get_settings()
-    resolved_project = (project_path or job.get("project_path") or "").strip()
-    target: Path | None = None
-    if resolved_project:
-        target = resolve_allowed_path(resolved_project, settings)
-        if target.suffix.lower() not in {".ap17", ".ap18", ".ap19", ".ap20", ".apxx"}:
-            raise ValueError(f"Write-back target must be a TIA .apxx project, got {target.suffix}")
-    elif execute_openness_import:
-        raise ValueError(
-            "project_path required: pass in request or ingest from .zap/.apxx so job.project_path is set"
-        )
-
+    focus = (block_name or "").strip() or None
     raw_cs = job.get("changeset")
     if not raw_cs:
         raise ValueError("No proposed changeset; call propose first")
-    cs = PlcChangeSet.from_dict(raw_cs)
+    original = PlcChangeSet.from_dict(raw_cs)
+    scoped = filter_changeset_for_focus(original, focus)
+    kept_ops, eng_skips = filter_optimize_ops(job, list(scoped.ops))
+    cs = PlcChangeSet(id=original.id, ops=kept_ops, status=original.status, notes=list(original.notes))
+    helpers = sorted(helper_block_names_for_focus(original, focus)) if focus else []
+    scope = f"block:{focus}" if focus else "project"
+    skip_reason = _openness_skip_reason(job, cs, focus=focus, extra_skips=eng_skips)
 
     result: dict[str, Any] = {
-        "project_path": str(target) if target else None,
+        "project_path": None,
         "changeset_id": cs.id,
         "kg_applied": False,
         "openness": None,
         "bundle_dir": None,
         "zap_path": None,
         "zap_archive": None,
+        "scope": scope,
+        "focus_block": focus,
+        "helper_blocks": helpers,
+        "applied_ops": len(cs.ops),
+        "skipped_ops": eng_skips,
     }
+
+    resolved_project = (project_path or job.get("project_path") or "").strip()
+    target: Path | None = None
+    if resolved_project:
+        target = resolve_allowed_path(resolved_project, settings)
+        if target.suffix.lower() not in {".ap17", ".ap18", ".ap19", ".ap20", ".apxx"}:
+            raise ValueError(f"Write-back target must be a TIA .apxx project, got {target.suffix}")
+    result["project_path"] = str(target) if target else None
 
     if accept_changeset:
         cs.status = "accepted"
@@ -948,7 +977,8 @@ def confirm_job_writeback(
             if op.payload.get("xml_path"):
                 sources.append(str(op.payload["xml_path"]))
     else:
-        sources = list(job.get("source_xmls") or [])
+        # SCL-only: do not legacy-stage the whole source XML pool
+        sources = []
 
     bundle = prepare_writeback(export_root, cs, sources)
     result["bundle_dir"] = str(bundle)
@@ -956,16 +986,30 @@ def confirm_job_writeback(
         str(p) for p in (bundle / "external_sources").glob("*.scl")
     ] if (bundle / "external_sources").is_dir() else []
 
+    has_xml = list(bundle.glob("*.xml"))
+    has_scl = (
+        list((bundle / "external_sources").glob("*.scl"))
+        if (bundle / "external_sources").is_dir()
+        else []
+    )
+    if execute_openness_import and not has_xml and not has_scl:
+        why = skip_reason or (
+            f"`{focus}` 没有可落地的 XML/SCL 写回，不调用 Openness。"
+            if focus
+            else "当前变更集没有可导入的 XML/SCL，不调用 Openness。"
+        )
+        result["skipped"] = True
+        result["skip_reason"] = why
+        result["openness"] = {"ok": False, "skipped": True, "reason": why}
+        result["zap_archive"] = {"ok": False, "skipped": True, "reason": why}
+        job["changeset"] = original.to_dict()
+        job["writeback"] = result
+        job["updated_at"] = _now()
+        return result
+
     if execute_openness_import:
         if target is None:
             raise ValueError("project_path required for Openness import")
-        has_xml = list(bundle.glob("*.xml"))
-        has_scl = list((bundle / "external_sources").glob("*.scl")) if (bundle / "external_sources").is_dir() else []
-        if not has_xml and not has_scl:
-            raise ValueError(
-                "No XML or SCL staged for Openness import. "
-                "Provide xml_paths, ingest from .xml, or run optimize (SCL rewrite) first."
-            )
         openness = execute_writeback(target, bundle, plc_name=plc_name)
         result["openness"] = openness
         result["compile"] = openness.get("compile")
@@ -976,16 +1020,22 @@ def confirm_job_writeback(
         else:
             # Import may have succeeded; compile gate failed — do not archive.
             compile = openness.get("compile") or {}
+            inner = compile.get("compile") if isinstance(compile, dict) else None
+            inconsistent = None
+            if isinstance(inner, dict):
+                inconsistent = inner.get("inconsistentBlocks")
+            elif isinstance(compile, dict):
+                inconsistent = compile.get("inconsistentBlocks")
             result["zap_archive"] = {
                 "ok": False,
                 "skipped": True,
                 "reason": "compile_failed",
                 "compile": compile,
-                "inconsistent_blocks": (compile.get("compile") or compile).get("inconsistentBlocks")
-                if isinstance(compile, dict)
-                else None,
+                "inconsistent_blocks": inconsistent,
             }
-            job["changeset"] = cs.to_dict()
+            stored = original.to_dict()
+            stored["status"] = cs.status
+            job["changeset"] = stored
             job["writeback"] = result
             job["updated_at"] = _now()
             return result
@@ -1008,7 +1058,9 @@ def confirm_job_writeback(
             "note": "KG/bundle only; Openness import not requested",
         }
 
-    job["changeset"] = cs.to_dict()
+    stored = original.to_dict()
+    stored["status"] = cs.status
+    job["changeset"] = stored
     job["writeback"] = result
     job["updated_at"] = _now()
     return result
@@ -1902,9 +1954,23 @@ def _wants_optimize_scl(message: str) -> bool:
     return "优化SCL" in compact or "改写SCL" in compact
 
 
+def _wants_confirm_writeback(message: str) -> bool:
+    """Explicit HITL confirm. Never true for 「优化SCL」 / 准备反写."""
+    if _wants_optimize_scl(message):
+        return False
+    compact = re.sub(r"\s+", "", message or "")
+    if any(k in compact for k in ("确认反写", "执行反写")):
+        return True
+    lower = compact.lower()
+    return any(
+        k in lower
+        for k in ("confirmwriteback", "executewriteback", "confirm-writeback")
+    )
+
+
 def _wants_optimize_logic(message: str) -> bool:
     msg = message or ""
-    if _wants_optimize_scl(msg):
+    if _wants_optimize_scl(msg) or _wants_confirm_writeback(msg):
         return False
     return any(k in msg for k in ("优化逻辑", "优化建议"))
 
@@ -1914,6 +1980,8 @@ def _wants_block_explain(message: str) -> bool:
     if _wants_brief_card(msg) or _wants_full_scl(msg) or _wants_nest_chains(msg):
         return False
     if _wants_understand_logic(msg) or _wants_optimize_logic(msg) or _wants_optimize_scl(msg):
+        return False
+    if _wants_confirm_writeback(msg):
         return False
     return any(
         k in msg
@@ -2025,7 +2093,7 @@ def _join_capped(items: list[str], *, limit: int = 6) -> str:
 
 def _wants_optimize_hints(message: str) -> bool:
     msg = message or ""
-    if _wants_optimize_scl(msg):
+    if _wants_optimize_scl(msg) or _wants_confirm_writeback(msg):
         return False
     return any(
         k in msg
@@ -2373,6 +2441,208 @@ def _excerpt_optimize_plan(plan: str, *, limit: int = 40) -> str:
     return "\n".join(out).strip()
 
 
+def _openness_skip_reason(
+    job: dict[str, Any],
+    cs: Any,
+    *,
+    focus: str | None,
+    extra_skips: list[str] | None = None,
+) -> str | None:
+    """Human skip reason when Openness must not run. None = may import if files exist."""
+    from agents.plc.tia.changeset import changeset_has_importable_writes
+    from agents.plc.tia.scl_rewrite import refuse_body_write_reason
+    from agents.plc.tia.understanding import skip_write_reason
+
+    if changeset_has_importable_writes(cs):
+        return None
+    if extra_skips:
+        return extra_skips[0].lstrip("- ").strip()
+    name = (focus or "").strip()
+    if name:
+        eng = skip_write_reason(job, name, kind="rewrite_scl")
+        if eng:
+            return f"`{name}`：{eng}，不调用 Openness。"
+        meta = next(
+            (
+                b
+                for b in (job.get("blocks") or [])
+                if isinstance(b, dict) and b.get("name") == name
+            ),
+            None,
+        )
+        body = refuse_body_write_reason(meta)
+        if body:
+            label = {
+                "safety": "Safety/F-block，拒绝写程序体",
+                "know_how": "Know-how / protected，拒绝写程序体",
+                "interface_only": "interface-only，无程序体",
+                "no_body": "无程序体",
+                "untranslated": "仅 TODO / 未翻译，不静默丢逻辑",
+            }.get(body, body)
+            return f"`{name}`：{label}，不调用 Openness。"
+        for s in job.get("scl_skipped") or []:
+            if isinstance(s, dict) and str(s.get("block") or "") == name:
+                reason = str(s.get("reason") or "").strip()
+                detail = str(s.get("detail") or "").strip()
+                bit = " — ".join(p for p in (reason, detail) if p) or "跳过"
+                return f"`{name}`：{bit}，无可写 SCL，不调用 Openness。"
+        return f"`{name}` 没有可落地的 XML/SCL 写回（空程序体或仅注释），不调用 Openness。"
+    skipped = [s for s in (job.get("scl_skipped") or []) if isinstance(s, dict)]
+    if skipped:
+        bits = []
+        for s in skipped[:4]:
+            bits.append(f"`{s.get('block') or '?'}` {s.get('reason') or '跳过'}")
+        return "当前变更集没有可导入的 XML/SCL（" + "；".join(bits) + "），不调用 Openness。"
+    return (
+        "当前变更集没有可导入的 XML/SCL"
+        "（Know-how / F 块 / interface-only / 不要动 / 必须保留嵌套），不调用 Openness。"
+    )
+
+
+def _format_writeback_recap(
+    result: dict[str, Any],
+    *,
+    focus: str | None = None,
+) -> str:
+    """Engineer-facing recap after HITL confirm — never a silent empty card."""
+    lines = ["**确认反写**"]
+    scope = str(result.get("scope") or ("block:" + focus if focus else "project"))
+    helpers = [str(h) for h in (result.get("helper_blocks") or []) if h]
+    if scope.startswith("block:"):
+        block = scope.split(":", 1)[-1] or (focus or "?")
+        extra = f"（含 helper {', '.join(f'`{h}`' for h in helpers)}）" if helpers else ""
+        lines.append(f"范围：焦点块 `{block}`{extra}。未应用工程级死块删除/无关块写回。")
+    else:
+        lines.append("范围：**整工程变更集**（含死块标注等全部 ops）。")
+
+    skip = str(result.get("skip_reason") or "").strip()
+    openness = result.get("openness") if isinstance(result.get("openness"), dict) else {}
+    compile_payload = result.get("compile")
+    if compile_payload is None and isinstance(openness, dict):
+        compile_payload = openness.get("compile")
+    zap = result.get("zap_path") or (
+        (result.get("zap_archive") or {}).get("path")
+        if isinstance(result.get("zap_archive"), dict)
+        else None
+    )
+    zap_archive = result.get("zap_archive") if isinstance(result.get("zap_archive"), dict) else {}
+
+    if result.get("skipped"):
+        lines.append("")
+        lines.append(f"**跳过 Openness**：{skip or (openness.get('reason') if isinstance(openness, dict) else '') or '无可写操作'}")
+        lines.append("未导入、未编译、未归档 .zap。")
+        return "\n".join(lines)
+
+    import_ok = None
+    if isinstance(openness, dict):
+        if "import_ok" in openness:
+            import_ok = bool(openness.get("import_ok"))
+        elif "ok" in openness and not openness.get("skipped"):
+            import_ok = bool(openness.get("ok"))
+    if isinstance(openness, dict) and openness.get("skipped"):
+        lines.append(
+            f"导入：跳过（{openness.get('note') or openness.get('reason') or '未请求 Openness'}）"
+        )
+    elif import_ok is True:
+        lines.append("导入：**成功**")
+    elif import_ok is False:
+        err = ""
+        if isinstance(openness, dict):
+            err = str(openness.get("error") or openness.get("reason") or "").strip()
+        lines.append("导入：**失败**" + (f"（{err}）" if err else ""))
+    else:
+        lines.append("导入：未执行")
+
+    inconsistent: list[str] = []
+    compile_obj = compile_payload
+    if isinstance(compile_payload, dict) and isinstance(compile_payload.get("compile"), dict):
+        compile_obj = compile_payload.get("compile")
+    if isinstance(compile_obj, dict):
+        if compile_obj.get("skipped"):
+            cmsg = str(compile_obj.get("message") or compile_obj.get("reason") or "").strip()
+            lines.append("编译门控：跳过" + (f"（{cmsg}）" if cmsg else ""))
+        else:
+            compile_ok = bool(compile_obj.get("ok"))
+            if isinstance(compile_payload, dict) and compile_payload.get("ok") is False:
+                compile_ok = False
+            if isinstance(openness, dict) and openness.get("compiled_ok") is False:
+                compile_ok = False
+            if isinstance(openness, dict) and openness.get("compiled_ok") is True:
+                compile_ok = True
+            raw_inc = compile_obj.get("inconsistentBlocks") or []
+            if isinstance(raw_inc, list):
+                inconsistent = [str(x) for x in raw_inc if x]
+            if compile_ok:
+                lines.append("编译门控：**通过**")
+            else:
+                bits = "、".join(f"`{b}`" for b in inconsistent[:8]) or "见 compile 详情"
+                lines.append(f"编译门控：**未通过**（不一致块：{bits}）")
+                lines.append("编译失败时**不会**归档 .zap。")
+    elif isinstance(openness, dict) and openness.get("ok") is False and not openness.get("skipped"):
+        lines.append("编译门控：**未通过**（导入或编译失败）")
+        lines.append("编译失败时**不会**归档 .zap。")
+
+    if zap:
+        lines.append(f"归档 .zap：`{zap}`")
+    elif isinstance(zap_archive, dict) and zap_archive.get("skipped"):
+        reason = str(zap_archive.get("reason") or skip or "").strip()
+        lines.append("归档 .zap：**跳过**" + (f"（{reason}）" if reason else ""))
+    elif isinstance(zap_archive, dict) and zap_archive.get("ok") is False:
+        err = str(zap_archive.get("error") or zap_archive.get("reason") or "").strip()
+        lines.append("归档 .zap：**失败**" + (f"（{err}）" if err else ""))
+    elif isinstance(openness, dict) and openness.get("ok") and not zap:
+        lines.append("归档 .zap：未生成")
+
+    if not any(ln.startswith(("导入", "**跳过")) for ln in lines):
+        lines.append("无反写结果（空卡已避免）。")
+    return "\n".join(lines)
+
+
+def _format_confirm_writeback_chat(
+    job: dict[str, Any],
+    block_name: str | None,
+    *,
+    message: str = "",
+) -> str:
+    """HITL confirm from chat — never auto-runs from 「优化SCL」."""
+    _ = message
+    focus = (block_name or "").strip() or None
+    raw = job.get("changeset")
+    if not isinstance(raw, dict) or not raw:
+        return (
+            "**确认反写**\n"
+            "还没有可确认的变更集。请先点「优化SCL」或画布「优化提案」生成 HITL 预览"
+            "（不会自动导入或归档）。"
+        )
+
+    try:
+        result = confirm_job_writeback(
+            job,
+            project_path=str(job.get("project_path") or "") or None,
+            block_name=focus,
+            accept_changeset=True,
+            execute_openness_import=True,
+            archive_zap=True,
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if "project_path" in msg or "Write-back target" in msg:
+            return (
+                "**确认反写**\n"
+                "已有变更集，但缺少 TIA 工程路径（`.ap19`/`.apxx`）。"
+                "请用画布「确认反写.zap」填写路径，或从 `.zap`/`.apxx` 解析后再确认。"
+                "尚未调用 Openness，也不会自动导入。"
+            )
+        return f"**确认反写**\n无法执行：{exc}\n未调用 Openness。"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("confirm writeback chat failed: %s", exc)
+        return f"**确认反写**\n反写失败：{exc}\n未归档 .zap。"
+    recap = _format_writeback_recap(result, focus=focus)
+    if recap.strip():
+        return recap
+    return "**确认反写**\n已处理确认请求，但没有可展示的导入/编译/归档结果。"
+
+
 def _format_optimize_scl_chat(
     job: dict[str, Any],
     block_name: str | None,
@@ -2489,7 +2759,7 @@ def _format_optimize_scl_chat(
         lines.append(f"无可写 SCL diff：{why}。上方仍是优化计划，不会静默空卡。")
 
     lines.append("")
-    lines.append("审阅后点「确认反写.zap」才会导入/归档；本步只预览。")
+    lines.append("审阅后点节点「确认反写」或画布「确认反写.zap」才会导入/归档；本步只预览。")
     return "\n".join(lines)
 
 
@@ -2518,6 +2788,7 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         stored
         and not _wants_optimize_hints(msg)
         and not _wants_optimize_scl(msg)
+        and not _wants_confirm_writeback(msg)
         and not _wants_optimize_logic(msg)
         and not _wants_understand_logic(msg)
         and not _wants_full_scl(msg)
@@ -2554,6 +2825,7 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
             or _wants_understand_logic(msg)
             or _wants_optimize_logic(msg)
             or _wants_optimize_scl(msg)
+            or _wants_confirm_writeback(msg)
             or _wants_optimize_hints(msg)
         )
         if remap_chips and _wants_nest_chains(msg):
@@ -2599,6 +2871,8 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         lines.append("也可点击知识图谱节点；多实例成员会按图谱边（USES / INSTANCE_OF / 接口变量）作答。")
         return "\n".join(lines)
 
+    if _wants_confirm_writeback(msg):
+        return _format_confirm_writeback_chat(job, focus or None, message=msg)
     if _wants_optimize_scl(msg):
         return _format_optimize_scl_chat(job, focus or None, message=msg)
     if _wants_understand_logic(msg):
@@ -2628,6 +2902,8 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         include_scl = _wants_full_scl(msg)
         if _wants_signal_trace(msg) and not include_scl:
             return "\n".join(_format_signal_trace(job, focus))
+        if _wants_confirm_writeback(msg):
+            return _format_confirm_writeback_chat(job, focus, message=msg)
         if _wants_optimize_scl(msg):
             return _format_optimize_scl_chat(job, focus, message=msg)
         if _wants_understand_logic(msg):

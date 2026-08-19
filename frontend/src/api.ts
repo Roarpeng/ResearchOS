@@ -639,6 +639,7 @@ export async function writebackPlcJob(
     executeOpennessImport?: boolean;
     archiveZap?: boolean;
     xmlPaths?: string[];
+    blockName?: string | null;
   },
 ) {
   const res = await fetch(`${GATEWAY_BASE}/api/v1/plc/jobs/${jobId}/writeback`, {
@@ -651,6 +652,7 @@ export async function writebackPlcJob(
       execute_openness_import: options?.executeOpennessImport ?? true,
       archive_zap: options?.archiveZap ?? true,
       xml_paths: options?.xmlPaths || [],
+      block_name: options?.blockName || null,
     }),
   });
   return parseJson<Record<string, unknown>>(res);
