@@ -2196,6 +2196,28 @@ export default function KnowledgeCanvas({
               disabled={busy || !diveTarget}
               onClick={() => {
                 if (!diveTarget || busy) return;
+                void onDeepDive(diveTarget, "分析节点");
+              }}
+            >
+              分析逻辑
+            </button>
+            <button
+              type="button"
+              className="ghost compact"
+              disabled={busy || !diveTarget}
+              onClick={() => {
+                if (!diveTarget || busy) return;
+                void onDeepDive(diveTarget, "嵌套链");
+              }}
+            >
+              嵌套链
+            </button>
+            <button
+              type="button"
+              className="ghost compact"
+              disabled={busy || !diveTarget}
+              onClick={() => {
+                if (!diveTarget || busy) return;
                 void onDeepDive(diveTarget, "谁读写这些信号");
               }}
             >
