@@ -33,6 +33,12 @@ import KnowledgeCanvas, {
 } from "./KnowledgeCanvas";
 import MarkdownBody from "./MarkdownBody";
 import SettingsPanel from "./SettingsPanel";
+import SclDiffPreview, {
+  looksLikeSclPreviewMessage,
+  previewFocusFromMessage,
+  stripSclPreviewFences,
+  type SclDiffItem,
+} from "./SclDiffPreview";
 
 type Topic = {
   id: string;
@@ -323,6 +329,18 @@ function writebackHintForBlock(
     return { canWrite: false, reason: "interface-only / 无程序体，无可写 SCL" };
   }
   return { canWrite: false, reason: "该块没有可落地的 XML/SCL 写回" };
+}
+
+function sclDiffsForFocus(job: PlcJobDetail | null | undefined, focus?: string | null): SclDiffItem[] {
+  const diffs = job?.scl_diffs || [];
+  const name = String(focus || "").trim();
+  if (!name) return diffs.slice(0, 8);
+  const cs = job?.changeset as { ops?: CsOp[]; notes?: unknown[] } | undefined;
+  const helpers = helperNamesFromChangeset(cs?.ops || [], cs?.notes || [], name);
+  const allowed = new Set([name, ...helpers]);
+  const kept = diffs.filter((d) => allowed.has(String(d.block || "")));
+  const fallback = diffs.filter((d) => String(d.block || "") === name);
+  return (kept.length ? kept : fallback).slice(0, 8);
 }
 
 function formatWritebackRecap(
@@ -1724,7 +1742,24 @@ export default function App() {
                 <div className="bubble-body">
                   {m.role === "assistant" ? (
                     <>
-                      <MarkdownBody content={m.content} />
+                      <MarkdownBody
+                        content={
+                          looksLikeSclPreviewMessage(m.content)
+                            ? stripSclPreviewFences(m.content)
+                            : m.content
+                        }
+                      />
+                      {looksLikeSclPreviewMessage(m.content) ? (
+                        <SclDiffPreview
+                          diffs={sclDiffsForFocus(
+                            plcJob,
+                            previewFocusFromMessage(m.content) ||
+                              (chatScope && chatScope.kind !== "plc_tag"
+                                ? chatScope.blockName
+                                : null),
+                          )}
+                        />
+                      ) : null}
                       <EvidenceChips citations={m.citations} onFocusNode={onFocusNode} />
                     </>
                   ) : (
@@ -2018,6 +2053,7 @@ export default function App() {
                 return onConfirmWriteback(name || undefined);
               }}
               writebackHint={(blockName) => writebackHintForBlock(plcJob, blockName)}
+              getSclPreview={(blockName) => sclDiffsForFocus(plcJob, blockName)}
               onSelectNode={applyChatScope}
               onAskInChat={onAskInChat}
               focusRequest={canvasFocus}

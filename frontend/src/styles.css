@@ -786,6 +786,122 @@ body.col-resizing * {
   min-width: min-content;
 }
 
+.language-diff .scl-diff-add {
+  display: block;
+  background: rgba(22, 163, 74, 0.18);
+  color: #bbf7d0;
+}
+
+.language-diff .scl-diff-del {
+  display: block;
+  background: rgba(220, 38, 38, 0.18);
+  color: #fecaca;
+}
+
+.language-diff .scl-diff-hunk {
+  display: block;
+  color: #7dd3fc;
+}
+
+.language-diff .scl-diff-meta {
+  display: block;
+  color: #94a3b8;
+}
+
+.language-diff .scl-diff-ctx {
+  display: block;
+  color: #e2e8f0;
+}
+
+.scl-preview-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin: 0.45rem 0 0.2rem;
+}
+
+.scl-preview-card {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.scl-preview-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.75rem;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.scl-preview-title {
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.scl-preview-badge {
+  margin-left: 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 0.08rem 0.4rem;
+}
+
+.scl-preview-tabs {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.scl-preview-tabs button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  transition:
+    color var(--dur-fast) var(--ease-color),
+    background-color var(--dur-fast) var(--ease-color);
+}
+
+.scl-preview-tabs button.is-active {
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+.scl-preview-tabs button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.scl-preview-pane {
+  padding: 0;
+}
+
+.scl-preview-pane .md-pre,
+.scl-preview-pane .scl-diff-pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.scl-preview-empty {
+  margin: 0.4rem 0.6rem 0.55rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scl-preview-tabs button {
+    transition: none;
+  }
+}
+
 .lg-edge.uses,
 .kg-edge.uses {
   stroke: #6d28d9;
@@ -1647,6 +1763,13 @@ button.evidence-chip:hover {
     opacity: 0;
     transform: scale(0.96) translateY(6px);
   }
+}
+
+.kg-scl-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.35;
 }
 
 .kg-pop-head {

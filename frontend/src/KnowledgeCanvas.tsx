@@ -98,6 +98,8 @@ type Props = {
   onConfirmWriteback?: (node: KnowledgeNode) => Promise<void> | void;
   /** Disable/skip-reason for 「确认反写」 when the focused block has no writable ops. */
   writebackHint?: (blockName: string) => WritebackChipHint;
+  /** HITL SCL preview available for this block (shown in chat). */
+  getSclPreview?: (blockName: string) => Array<{ block?: string }>;
   /** Selecting a PLC node pins chat scope; does not send a turn. */
   onSelectNode?: (node: KnowledgeNode | null) => void;
   /** Double-click or inspector「在对话中问」— focus the main composer. */
@@ -1649,6 +1651,7 @@ export default function KnowledgeCanvas({
   onDeepDive,
   onConfirmWriteback,
   writebackHint,
+  getSclPreview,
   onSelectNode,
   onAskInChat,
   focusRequest,
@@ -2314,6 +2317,11 @@ export default function KnowledgeCanvas({
               优化建议
             </button>
           </div>
+          {diveTarget && getSclPreview?.(
+            String(diveTarget.source?.block_name || diveTarget.label || ""),
+          ).length ? (
+            <p className="kg-scl-hint">对话栏已给出该块 SCL 预览（Diff / 改写前 / 改写后）</p>
+          ) : null}
         </div>
       ) : null}
     </div>
