@@ -82,6 +82,11 @@ export type PlcKnowledgeGraphData = {
   }>;
 };
 
+export type WritebackChipHint = {
+  canWrite: boolean;
+  reason: string;
+};
+
 type Props = {
   data: KnowledgeCanvasData;
   logicGraph?: LogicGraphData | null;
@@ -89,6 +94,10 @@ type Props = {
   knowledgeGraph?: PlcKnowledgeGraphData | null;
   onChange: (next: KnowledgeCanvasData) => void;
   onDeepDive: (node: KnowledgeNode, question: string) => Promise<void> | void;
+  /** Node-scoped HITL confirm (same gate as header 「确认反写.zap」). */
+  onConfirmWriteback?: (node: KnowledgeNode) => Promise<void> | void;
+  /** Disable/skip-reason for 「确认反写」 when the focused block has no writable ops. */
+  writebackHint?: (blockName: string) => WritebackChipHint;
   /** Selecting a PLC node pins chat scope; does not send a turn. */
   onSelectNode?: (node: KnowledgeNode | null) => void;
   /** Double-click or inspector「在对话中问」— focus the main composer. */
@@ -1638,6 +1647,8 @@ export default function KnowledgeCanvas({
   knowledgeGraph,
   onChange,
   onDeepDive,
+  onConfirmWriteback,
+  writebackHint,
   onSelectNode,
   onAskInChat,
   focusRequest,
@@ -2233,6 +2244,41 @@ export default function KnowledgeCanvas({
               }}
             >
               优化SCL
+            </button>
+            <button
+              type="button"
+              className="ghost compact"
+              disabled={
+                busy ||
+                !diveTarget ||
+                diveTarget.kind === "plc_tag" ||
+                (writebackHint
+                  ? !writebackHint(
+                      String(diveTarget.source?.block_name || diveTarget.label || ""),
+                    ).canWrite
+                  : false)
+              }
+              title={
+                diveTarget
+                  ? writebackHint?.(
+                      String(diveTarget.source?.block_name || diveTarget.label || ""),
+                    )?.reason || "确认 changeset 并 Openness 反写归档 .zap"
+                  : undefined
+              }
+              onClick={() => {
+                if (!diveTarget || busy || diveTarget.kind === "plc_tag") return;
+                const hint = writebackHint?.(
+                  String(diveTarget.source?.block_name || diveTarget.label || ""),
+                );
+                if (hint && !hint.canWrite) return;
+                if (onConfirmWriteback) {
+                  void onConfirmWriteback(diveTarget);
+                  return;
+                }
+                void onDeepDive(diveTarget, "确认反写");
+              }}
+            >
+              确认反写
             </button>
             <button
               type="button"

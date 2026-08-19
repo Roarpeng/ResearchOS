@@ -50,7 +50,8 @@ _NESTED_ACCIDENTAL_RE = re.compile(
 _QUESTION_RE = re.compile(
     r"[？?]|(什么|谁|怎么|如何|请描述|请简述|优化建议|优化逻辑|优化\s*SCL|改写\s*SCL|"
     r"理解逻辑|理解这块|确认逻辑|这块逻辑|展开\s*SCL|谁读写|"
-    r"分析节点|分析逻辑|运行逻辑|嵌套链|这个块干什么)"
+    r"分析节点|分析逻辑|运行逻辑|嵌套链|这个块干什么|"
+    r"确认反写|执行反写)"
 )
 _CONFIRM_ONLY_RE = re.compile(
     r"^(工艺主控|设备驱动|厂商库|可拆辅助|不要动|必须的多实例|必须的西门子多实例|意外耦合)$"
@@ -1061,7 +1062,7 @@ def format_optimize_advice(job: dict[str, Any], block_name: str | None = None) -
         lines.append("- 未发现与已确认事实相符的 warn/risk；可点「优化SCL」做该块 HITL 预览。")
     lines.append("")
     if focus:
-        lines.append("下一步可点「优化SCL」出该块 diff（不自动反写；仍须「确认反写.zap」）。")
+        lines.append("下一步可点「优化SCL」出该块 diff（不自动反写；仍须节点「确认反写」或画布「确认反写.zap」）。")
     else:
         lines.append("下一步可点「优化SCL」或画布「优化提案」出 HITL SCL diff（不自动反写）。")
     return "\n".join(lines)

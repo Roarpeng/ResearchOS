@@ -156,6 +156,95 @@ def apply_changeset_to_kg(kg_json: dict[str, Any], changeset: PlcChangeSet) -> d
     return out
 
 
+IMPORT_WRITE_KINDS: frozenset[str] = frozenset(
+    {"rewrite_scl", "stage_scl_source", "stage_xml_import"}
+)
+
+
+def _block_name_from_node_id(nid: str) -> str:
+    s = str(nid or "").strip()
+    if s.startswith("Block::"):
+        return s.split("::", 1)[-1]
+    return s
+
+
+def payload_block_name(payload: dict[str, Any] | None) -> str:
+    p = payload or {}
+    name = str(p.get("block_name") or "").strip()
+    if name:
+        return name
+    return _block_name_from_node_id(str(p.get("node_id") or ""))
+
+
+def helper_block_names_for_focus(cs: PlcChangeSet, focus: str) -> set[str]:
+    """Helper FCs extracted *for* ``focus`` (decouple notes / new_block CALLS)."""
+    focus = (focus or "").strip()
+    helpers: set[str] = set()
+    if not focus:
+        return helpers
+    prefix = f"optimize:decouple:{focus}->"
+    for note in cs.notes:
+        s = str(note)
+        if s.startswith(prefix):
+            helpers.add(s[len(prefix) :].split(":")[0].strip())
+    new_blocks = {
+        str(op.payload.get("block_name") or "")
+        for op in cs.ops
+        if op.payload.get("new_block") and op.payload.get("block_name")
+    }
+    for op in cs.ops:
+        if op.kind != "add_edge":
+            continue
+        src = _block_name_from_node_id(str(op.payload.get("source") or ""))
+        tgt = _block_name_from_node_id(str(op.payload.get("target") or ""))
+        props = op.payload.get("props") if isinstance(op.payload.get("props"), dict) else {}
+        evidence = str(props.get("evidence") or "")
+        etype = str(op.payload.get("type") or op.payload.get("edge_type") or "")
+        if src != focus or not tgt:
+            continue
+        if evidence == "decouple_extract" or (etype == "CALLS" and tgt in new_blocks):
+            helpers.add(tgt)
+    return {h for h in helpers if h and h != focus}
+
+
+def filter_changeset_for_focus(cs: PlcChangeSet, focus: str | None) -> PlcChangeSet:
+    """Keep ops for the focused block and helper FCs created for that block.
+
+    Drops unrelated whole-project dead-block XML/comment/annotate ops.
+    Empty ``focus`` returns the original set (whole-project confirm).
+    """
+    name = (focus or "").strip()
+    if not name:
+        return cs
+    allowed = {name} | helper_block_names_for_focus(cs, name)
+    kept: list[PlcChangeOp] = []
+    for op in cs.ops:
+        bname = payload_block_name(op.payload)
+        if bname and bname in allowed:
+            kept.append(op)
+            continue
+        if op.kind in {"add_edge", "remove_edge"}:
+            src = _block_name_from_node_id(str(op.payload.get("source") or ""))
+            tgt = _block_name_from_node_id(str(op.payload.get("target") or ""))
+            if src in allowed and tgt in allowed:
+                kept.append(op)
+    return PlcChangeSet(id=cs.id, ops=kept, status=cs.status, notes=list(cs.notes))
+
+
+def changeset_has_importable_writes(cs: PlcChangeSet) -> bool:
+    """True when Openness would have XML/SCL to import (not annotate-only)."""
+    for op in cs.ops:
+        if op.kind in IMPORT_WRITE_KINDS:
+            if op.kind == "stage_xml_import":
+                if op.payload.get("xml_path"):
+                    return True
+            else:
+                scl = str(op.payload.get("scl_text") or op.payload.get("scl") or "")
+                if scl.strip():
+                    return True
+    return False
+
+
 _XML_PATH_RE = re.compile(
     r"""(?P<path>(?:[A-Za-z]:)?[^\s"'<>]+\.xml)""",
     re.IGNORECASE,

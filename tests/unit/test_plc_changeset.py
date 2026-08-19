@@ -158,3 +158,37 @@ def test_write_import_bundle(tmp_path: Path):
     assert meta["ops"][0]["kind"] == "set_block_comment"
     comments = json.loads((bundle / "comments.json").read_text(encoding="utf-8"))
     assert comments["FB_Motor"] == "MVP sidecar comment"
+
+
+def test_filter_changeset_for_focus_unit():
+    from agents.plc.tia.changeset import (
+        PlcChangeOp,
+        PlcChangeSet,
+        filter_changeset_for_focus,
+    )
+
+    cs = PlcChangeSet(
+        id="f",
+        ops=[
+            PlcChangeOp(kind="rewrite_scl", payload={"block_name": "FB_A", "scl_text": "A"}),
+            PlcChangeOp(
+                kind="stage_scl_source",
+                payload={"block_name": "FC_H", "scl_text": "H", "new_block": True},
+            ),
+            PlcChangeOp(
+                kind="add_edge",
+                payload={
+                    "source": "Block::FB_A",
+                    "target": "Block::FC_H",
+                    "type": "CALLS",
+                    "props": {"evidence": "decouple_extract"},
+                },
+            ),
+            PlcChangeOp(kind="annotate", payload={"block_name": "Dead", "text": "x"}),
+        ],
+        notes=["optimize:decouple:FB_A->FC_H"],
+    )
+    focused = filter_changeset_for_focus(cs, "FB_A")
+    names = {o.payload.get("block_name") for o in focused.ops if o.payload.get("block_name")}
+    assert names == {"FB_A", "FC_H"}
+    assert filter_changeset_for_focus(cs, "").ops == cs.ops

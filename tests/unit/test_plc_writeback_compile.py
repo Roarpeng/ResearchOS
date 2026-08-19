@@ -147,3 +147,218 @@ def test_confirm_job_writeback_no_zap_on_compile_fail(tmp_path: Path, monkeypatc
     assert result.get("zap_archive", {}).get("ok") is False
     assert archived["called"] is False
     assert result["openness"]["ok"] is False
+
+
+def test_filter_changeset_for_focus_keeps_helpers_drops_dead_blocks():
+    from agents.plc.tia.changeset import filter_changeset_for_focus, helper_block_names_for_focus
+
+    cs = PlcChangeSet(
+        id="mix",
+        ops=[
+            PlcChangeOp(
+                kind="rewrite_scl",
+                payload={
+                    "block_name": "FB_A",
+                    "scl_text": 'FUNCTION_BLOCK "FB_A"\nBEGIN\nEND_FUNCTION_BLOCK\n',
+                },
+            ),
+            PlcChangeOp(
+                kind="stage_scl_source",
+                payload={
+                    "block_name": "FC_A_Extract",
+                    "scl_text": 'FUNCTION "FC_A_Extract" : Void\nEND_FUNCTION\n',
+                    "new_block": True,
+                },
+            ),
+            PlcChangeOp(
+                kind="add_edge",
+                payload={
+                    "source": "Block::FB_A",
+                    "target": "Block::FC_A_Extract",
+                    "type": "CALLS",
+                    "props": {"evidence": "decouple_extract"},
+                },
+            ),
+            PlcChangeOp(
+                kind="annotate",
+                payload={"block_name": "FB_orphan", "text": "[OPT] dead"},
+            ),
+            PlcChangeOp(
+                kind="stage_xml_import",
+                payload={"block_name": "FB_orphan", "xml_path": "/tmp/FB_orphan.xml"},
+            ),
+            PlcChangeOp(
+                kind="rewrite_scl",
+                payload={
+                    "block_name": "FB_Motor",
+                    "scl_text": 'FUNCTION_BLOCK "FB_Motor"\nEND_FUNCTION_BLOCK\n',
+                },
+            ),
+        ],
+        notes=["optimize:decouple:FB_A->FC_A_Extract", "optimize:dead_block:FB_orphan"],
+    )
+    assert helper_block_names_for_focus(cs, "FB_A") == {"FC_A_Extract"}
+    focused = filter_changeset_for_focus(cs, "FB_A")
+    names = {str(o.payload.get("block_name") or "") for o in focused.ops if o.payload.get("block_name")}
+    assert "FB_A" in names
+    assert "FC_A_Extract" in names
+    assert "FB_orphan" not in names
+    assert "FB_Motor" not in names
+    assert any(o.kind == "add_edge" for o in focused.ops)
+    whole = filter_changeset_for_focus(cs, None)
+    assert len(whole.ops) == len(cs.ops)
+
+
+def test_confirm_skip_write_does_not_execute_openness(tmp_path: Path, monkeypatch):
+    from gateway.app.services import plc_jobs as plc
+
+    export = tmp_path / "job_export"
+    export.mkdir()
+    job = {
+        "id": "plc_skip",
+        "status": "ready",
+        "export_dir": str(export),
+        "knowledge_graph": {"nodes": [], "edges": []},
+        "blocks": [
+            {
+                "name": "FB_Locked",
+                "type": "FB",
+                "protected": True,
+                "body_available": False,
+                "interface_only": True,
+            }
+        ],
+        "source_xmls": [str(tmp_path / "unrelated.xml")],
+        "scl_skipped": [
+            {"block": "FB_Locked", "reason": "know_how", "detail": "Know-how / protected"}
+        ],
+        "changeset": PlcChangeSet(
+            id="cs-kh",
+            ops=[
+                PlcChangeOp(
+                    kind="annotate",
+                    payload={"block_name": "FB_Locked", "text": "[OPT] know-how, report only"},
+                )
+            ],
+        ).to_dict(),
+        "engineer_understanding": {
+            "constraints": {"do_not_touch": [], "must_keep_nested": [], "may_extract": []}
+        },
+    }
+    (tmp_path / "unrelated.xml").write_text("<SW.Blocks.FB/>", encoding="utf-8")
+    opened = {"n": 0}
+
+    def boom(*_a, **_k):
+        opened["n"] += 1
+        raise AssertionError("Openness must not run when there is nothing to write")
+
+    monkeypatch.setattr("agents.plc.tia.writeback.execute_writeback", boom)
+    monkeypatch.setattr(
+        "agents.plc.tia.openness_cli.archive_project_via_openness_cli", boom
+    )
+    result = plc.confirm_job_writeback(
+        job,
+        block_name="FB_Locked",
+        execute_openness_import=True,
+        archive_zap=True,
+    )
+    assert opened["n"] == 0
+    assert result.get("skipped") is True
+    assert result.get("zap_path") is None
+    assert result.get("openness", {}).get("skipped") is True
+    reason = str(result.get("skip_reason") or result.get("openness", {}).get("reason") or "")
+    assert reason
+    assert "Openness" in reason or "Know-how" in reason or "程序体" in reason or "无可写" in reason
+
+
+def test_confirm_focus_does_not_apply_unrelated_dead_block(tmp_path: Path, monkeypatch):
+    from gateway.app.services import plc_jobs as plc
+
+    export = tmp_path / "job_export"
+    export.mkdir()
+    ap = tmp_path / "Line.ap19"
+    ap.write_bytes(b"fake")
+    job = {
+        "id": "plc_focus",
+        "status": "ready",
+        "project_path": str(ap),
+        "export_dir": str(export),
+        "knowledge_graph": {"nodes": [], "edges": []},
+        "blocks": [
+            {"name": "FB_A", "type": "FB", "body_available": True},
+            {"name": "FB_orphan", "type": "FB", "body_available": True},
+        ],
+        "source_xmls": [],
+        "changeset": PlcChangeSet(
+            id="cs-mix",
+            ops=[
+                PlcChangeOp(
+                    kind="rewrite_scl",
+                    payload={
+                        "block_name": "FB_A",
+                        "scl_text": 'FUNCTION_BLOCK "FB_A"\nBEGIN\n    #Q := TRUE;\nEND_FUNCTION_BLOCK\n',
+                    },
+                ),
+                PlcChangeOp(
+                    kind="stage_scl_source",
+                    payload={
+                        "block_name": "FC_A_Extract",
+                        "scl_text": 'FUNCTION "FC_A_Extract" : Void\nBEGIN\nEND_FUNCTION\n',
+                        "new_block": True,
+                    },
+                ),
+                PlcChangeOp(
+                    kind="add_edge",
+                    payload={
+                        "source": "Block::FB_A",
+                        "target": "Block::FC_A_Extract",
+                        "type": "CALLS",
+                        "props": {"evidence": "decouple_extract"},
+                    },
+                ),
+                PlcChangeOp(
+                    kind="rewrite_scl",
+                    payload={
+                        "block_name": "FB_orphan",
+                        "scl_text": 'FUNCTION_BLOCK "FB_orphan"\nEND_FUNCTION_BLOCK\n',
+                    },
+                ),
+            ],
+            notes=["optimize:decouple:FB_A->FC_A_Extract", "optimize:dead_block:FB_orphan"],
+        ).to_dict(),
+    }
+    staged: list[str] = []
+
+    def fake_scl(_project, scl_path, **_k):
+        staged.append(Path(scl_path).stem)
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        "agents.plc.tia.writeback.generate_from_source_via_openness_cli", fake_scl
+    )
+    monkeypatch.setattr(
+        "agents.plc.tia.writeback.compile_plc_via_openness_cli",
+        lambda *_a, **_k: {"ok": True, "compile": {"ok": True, "apiAvailable": True}},
+    )
+    monkeypatch.setattr(
+        "agents.plc.tia.openness_cli.archive_project_via_openness_cli",
+        lambda *_a, **_k: tmp_path / "out.zap",
+    )
+    monkeypatch.setattr(
+        plc,
+        "resolve_allowed_path",
+        lambda path, settings=None: Path(path),
+    )
+    result = plc.confirm_job_writeback(
+        job,
+        project_path=str(ap),
+        block_name="FB_A",
+        execute_openness_import=True,
+        archive_zap=True,
+    )
+    assert result.get("scope") == "block:FB_A"
+    assert "FC_A_Extract" in (result.get("helper_blocks") or [])
+    assert "FB_A" in staged
+    assert "FC_A_Extract" in staged
+    assert "FB_orphan" not in staged
+

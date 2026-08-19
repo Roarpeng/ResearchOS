@@ -243,3 +243,91 @@ def test_optimize_scl_skips_do_not_touch_and_keep_nested():
         and o.get("kind") in {"rewrite_scl", "stage_scl_source", "stage_xml_import"}
     ]
     assert flatten == []
+
+
+def test_confirm_intent_vs_propose_and_optimize_scl_never_auto_writes(monkeypatch):
+    from gateway.app.services.plc_jobs import (
+        _wants_confirm_writeback,
+        _wants_optimize_scl,
+        propose_job_changeset,
+    )
+
+    assert _wants_confirm_writeback("确认反写")
+    assert _wants_confirm_writeback("@FB_A 确认反写.zap")
+    assert _wants_confirm_writeback("执行反写")
+    assert not _wants_confirm_writeback("优化SCL")
+    assert not _wants_confirm_writeback("@FB_A 优化 SCL")
+    assert not _wants_confirm_writeback("优化工程逻辑并准备反写")
+    assert _wants_optimize_scl("优化SCL")
+    assert not _wants_confirm_writeback("优化SCL 并确认反写")  # 优化SCL wins; never auto-confirm
+
+    job = _analyst_job()
+    job["changeset"] = {
+        "id": "keep-me",
+        "ops": [
+            {
+                "kind": "rewrite_scl",
+                "payload": {
+                    "block_name": "FB_A",
+                    "scl_text": 'FUNCTION_BLOCK "FB_A"\nEND_FUNCTION_BLOCK\n',
+                },
+            }
+        ],
+        "status": "proposed",
+        "notes": [],
+    }
+    out = propose_job_changeset(job, "确认反写", "FB_A")
+    assert out["id"] == "keep-me"
+    propose_job_changeset(job, "@FB_A 执行反写", "FB_A")
+    assert job["changeset"]["id"] == "keep-me"
+
+    def boom_confirm(*_a, **_k):
+        raise AssertionError("优化SCL must not auto-confirm writeback")
+
+    from gateway.app.services import plc_jobs as plc
+
+    monkeypatch.setattr(plc, "confirm_job_writeback", boom_confirm)
+    text = answer_block_chat(job, "@FB_A 优化SCL", "FB_A")
+    assert "**优化SCL" in text
+    assert "只预览" in text or "确认反写" in text
+
+
+def test_confirm_writeback_chat_recap_and_skip_reason(monkeypatch):
+    job = _analyst_job()
+    ingest_engineer_reply(job, "不要动", "FB_A")
+    job["changeset"] = {
+        "id": "cs-skip",
+        "ops": [
+            {"kind": "annotate", "payload": {"block_name": "FB_A", "text": "[OPT] skip"}},
+            {
+                "kind": "rewrite_scl",
+                "payload": {
+                    "block_name": "FB_orphan",
+                    "scl_text": 'FUNCTION_BLOCK "FB_orphan"\nEND_FUNCTION_BLOCK\n',
+                },
+            },
+        ],
+        "status": "proposed",
+        "notes": ["optimize:dead_block:FB_orphan"],
+    }
+    opened = {"n": 0}
+
+    def boom_exec(*_a, **_k):
+        opened["n"] += 1
+        raise AssertionError("skip-write must not execute Openness")
+
+    monkeypatch.setattr("agents.plc.tia.writeback.execute_writeback", boom_exec)
+    text = answer_block_chat(job, "@FB_A 确认反写", "FB_A")
+    assert "**确认反写" in text
+    assert "跳过" in text or "不要动" in text
+    assert "Openness" in text or "不调用" in text or "未导入" in text
+    assert opened["n"] == 0
+    wb = job.get("writeback") or {}
+    assert wb.get("skipped") or (wb.get("openness") or {}).get("skipped")
+
+    job2 = _analyst_job()
+    job2["changeset"] = dict(job["changeset"])
+    recap = answer_block_chat(job2, "确认反写.zap", None)
+    assert "**确认反写" in recap
+    assert "整工程" in recap or "跳过" in recap or "变更集" in recap
+

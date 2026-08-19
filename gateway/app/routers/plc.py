@@ -188,7 +188,9 @@ async def chat_plc_job(
     answer = plc.answer_block_chat(job, body.message, body.block_name)
     citations = list(job.pop("_last_citations", None) or [])
     lower = body.message.lower()
-    if any(k in body.message for k in ("注释", "依赖", "导入")) or any(
+    if plc._wants_confirm_writeback(body.message):
+        pass
+    elif any(k in body.message for k in ("注释", "依赖", "导入")) or any(
         k in lower for k in ("comment", "depends", "import")
     ):
         try:
@@ -367,6 +369,7 @@ async def writeback_plc_job(
             execute_openness_import=body.execute_openness_import,
             archive_zap=body.archive_zap,
             xml_paths=body.xml_paths,
+            block_name=body.block_name,
         )
     except FileNotFoundError as exc:
         raise HTTPException(
