@@ -351,6 +351,7 @@ def create_job_record(
         "graph_publish": None,
         "blocks": [],
         "chat": [],
+        "engineer_understanding": None,
         "export_dir": None,
         "export_ready": False,
         "project_path": None,
@@ -652,6 +653,12 @@ def run_ingest_job(
         logic_ms = int((time.monotonic() - t_logic) * 1000)
         pipeline_timings["logic_graph_ms"] = logic_ms
         _annotate_block_nest_depth(job)
+        try:
+            from agents.plc.tia.understanding import ensure_understanding
+
+            ensure_understanding(job)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("engineer understanding seed skipped: %s", exc)
         _finish_progress(
             job,
             detail=(
@@ -1719,6 +1726,25 @@ def _wants_optimize_hints(message: str) -> bool:
     )
 
 
+def _wants_project_interview(message: str) -> bool:
+    """Whole-project 'understand architecture' asks — interview, don't dump as truth."""
+    msg = message or ""
+    if any(k in msg for k in ("水平", "垂直", "向上", "向下")):
+        return False
+    return any(
+        k in msg
+        for k in (
+            "整体结构",
+            "深入理解整个项目",
+            "整个项目",
+            "工程架构",
+            "本工程整体",
+            "主扫描调用",
+            "根据图谱深入",
+        )
+    )
+
+
 def _wants_signal_trace(message: str) -> bool:
     msg = message or ""
     return any(
@@ -1860,6 +1886,11 @@ def _describe_block_function(
     elif instance_of:
         lines.append(f"实例类型：`{instance_of}`")
 
+    assoc = _block_assoc_lines(job, block_name)
+    for line in assoc:
+        if line.startswith("使用") or line.startswith("被使用"):
+            lines.append(line)
+
     nest_line = _format_nested_fb_line(job, block_name)
     if nest_line:
         lines.append(nest_line)
@@ -1912,11 +1943,33 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
     """Understand the user question, retrieve from KG, then answer (LLM if configured)."""
     import re
 
+    from agents.plc.tia.understanding import (
+        format_confirmation_ack,
+        format_interview_block,
+        format_optimize_advice,
+        ingest_engineer_reply,
+        looks_like_confirmation_reply,
+        maybe_append_interview,
+    )
+
     blocks = {b["name"]: b for b in job.get("blocks") or [] if isinstance(b, dict) and b.get("name")}
     focus = _resolve_block_focus(job, message, block_name)
     msg = message or ""
     hint = (block_name or "").strip() or _strip_at_hint(msg)
     at = re.search(r"@(.+)", msg)
+
+    stored = ingest_engineer_reply(job, msg, block_name=focus or block_name)
+    if (
+        stored
+        and not _wants_optimize_hints(msg)
+        and not _wants_full_scl(msg)
+        and not _wants_signal_trace(msg)
+        and (
+            looks_like_confirmation_reply(msg)
+            or any(str(item.get("kind") or "") == "process_narrative" for item in stored)
+        )
+    ):
+        return format_confirmation_ack(job, stored)
 
     # Explicit canvas/@ name that is NOT an IR block → multi-instance / external KG entity
     for candidate in (block_name, hint):
@@ -1951,6 +2004,11 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         lines.append("也可点击知识图谱节点；多实例成员会按图谱边（USES / INSTANCE_OF / 接口变量）作答。")
         return "\n".join(lines)
 
+    # Project-level interview: do not dump architecture as if already understood
+    if _wants_project_interview(msg) and not _wants_optimize_hints(msg) and not _wants_full_scl(msg):
+        interview = format_interview_block(job, focus_block=focus or None, limit=3)
+        return interview or format_optimize_advice(job, focus)
+
     # Single-block card for explicit @/canvas focus (not multi-topic questions)
     explicit_one = bool(block_name) or bool(at)
     multi_topic = any(
@@ -1962,7 +2020,7 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         if _wants_signal_trace(msg) and not include_scl:
             return "\n".join(_format_signal_trace(job, focus))
         if _wants_optimize_hints(msg) and not include_scl:
-            return "\n".join(_format_optimize_hints(job, focus))
+            return format_optimize_advice(job, focus)
         meta = " · ".join(
             p
             for p in [
@@ -1978,11 +2036,14 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
             _describe_block_function(job, focus, b, include_full_scl=include_scl)
         )
         # Concise by default: no LLM essay + evidence appendix on canvas click
-        return "\n".join(fact_lines)
+        card = "\n".join(fact_lines)
+        if include_scl:
+            return card
+        return maybe_append_interview(job, card, focus_block=focus)
 
     # Project-level optimize without @block
     if _wants_optimize_hints(msg) and not at:
-        return "\n".join(_format_optimize_hints(job, None))
+        return format_optimize_advice(job, None)
 
     from agents.plc.tia.chat_retrieve import answer_query_pack
 
@@ -2000,7 +2061,10 @@ def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None)
         chat_history=history,
     )
     job["_last_citations"] = list(pack.get("citations") or [])
-    return pack["content"]
+    content = pack["content"]
+    if focus:
+        return maybe_append_interview(job, content, focus_block=focus)
+    return content
 
 
 def analyze_job(job: dict[str, Any], *, block_name: str | None = None) -> dict[str, Any]:

@@ -677,7 +677,12 @@ def _ordered_callees(job: dict[str, Any], block_name: str) -> list[str]:
 
 
 def describe_project_architecture(job: dict[str, Any]) -> str:
-    """Whole-project understanding from KG CALLS + network titles (no LLM)."""
+    """KG/CALLS hypotheses for a project (no LLM).
+
+    Do **not** paste this into chat as if the plant is already understood.
+    The ingest welcome and 「优化建议」 path interview the engineer via
+    ``agents.plc.tia.understanding``; this text is a source of questions.
+    """
     blocks = _block_metadata(job)
     summary = job.get("summary") or {}
     project = job.get("project_name") or "工程"

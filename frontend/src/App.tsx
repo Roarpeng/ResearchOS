@@ -48,7 +48,11 @@ type ChatScope = {
   label: string;
   kind: string;
   looksLikeOutput?: boolean;
+  nestDepth?: number;
 };
+
+const ROLE_CHIPS = ["工艺主控", "设备驱动", "厂商库", "可拆辅助", "不要动"] as const;
+const NESTED_CHIPS = ["必须的多实例", "意外耦合"] as const;
 
 type ChatMsg = {
   id: string;
@@ -241,6 +245,7 @@ function chatScopeFromNode(node: KnowledgeNode): ChatScope {
     label: String(node.label || blockName || node.id),
     kind: String(node.kind || ""),
     looksLikeOutput: looksLikeOutputCoil(node),
+    nestDepth: Number(node.source?.nest_depth || 0) || 0,
   };
 }
 
@@ -682,7 +687,7 @@ export default function App() {
     const tag = scope.kind === "plc_tag";
     const prompts = tag
       ? ["这个信号干什么", "谁读写它", "谁读写这些信号"]
-      : ["这个块干什么", "谁调用它 / 它调用谁", "谁读写这些信号"];
+      : ["这个块干什么", "谁调用它 / 它调用谁", "谁读写这些信号", "优化建议"];
     if (scope.looksLikeOutput) prompts.push("有没有互锁");
     return prompts;
   }
@@ -1672,6 +1677,42 @@ export default function App() {
                   {prompt}
                 </button>
               ))}
+              {chatScope.kind !== "plc_tag" ? (
+                <>
+                  {ROLE_CHIPS.map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      className="ghost compact role-chip"
+                      disabled={busy}
+                      title={`确认 ${chatScope.label} 的角色`}
+                      onClick={() => {
+                        const node = scopedNode();
+                        if (node) void onDeepDive(node, chip);
+                      }}
+                    >
+                      {chip}
+                    </button>
+                  ))}
+                  {(chatScope.nestDepth || 0) >= 1
+                    ? NESTED_CHIPS.map((chip) => (
+                        <button
+                          key={chip}
+                          type="button"
+                          className="ghost compact role-chip"
+                          disabled={busy}
+                          title={`确认 ${chatScope.label} 的嵌套 FB 意图`}
+                          onClick={() => {
+                            const node = scopedNode();
+                            if (node) void onDeepDive(node, chip);
+                          }}
+                        >
+                          {chip}
+                        </button>
+                      ))
+                    : null}
+                </>
+              ) : null}
             </div>
           ) : null}
 
