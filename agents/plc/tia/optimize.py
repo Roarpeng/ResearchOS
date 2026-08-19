@@ -52,6 +52,14 @@ def propose_optimization_changeset(
     from agents.plc.tia.decouple import nested_fb_coupling_notes, propose_decouple
     from agents.plc.tia.scl_rewrite import rewrite_job_to_importable_scl
     from agents.plc.tia.typed_as import format_chain
+    from agents.plc.tia.understanding import (
+        filter_optimize_ops,
+        format_facts_for_llm,
+        may_extract_block,
+        must_keep_nested,
+        must_not_touch,
+        skip_write_reason,
+    )
     from agents.plc.tia.xml_patch import match_xml_for_block
 
     blocks = _block_map(job)
@@ -76,11 +84,21 @@ def propose_optimization_changeset(
         "",
     ]
 
+    engineer_facts = format_facts_for_llm(job)
+    if engineer_facts:
+        plan_lines.append("## 工程师已确认（约束，优先于图谱假设）")
+        plan_lines.append(engineer_facts)
+        plan_lines.append("")
+
     project = analyze_project(job)
     dead = list(project.get("dead_blocks") or [])[:max_dead]
     if dead:
         plan_lines.append("## 未从 OB 入口到达的块")
         for name in dead:
+            if must_not_touch(job, name):
+                plan_lines.append(f"- `{name}`：工程师确认不要动，跳过死块标注/写回")
+                notes.append(f"optimize:skip_do_not_touch:{name}")
+                continue
             b = blocks.get(name)
             btype = (b or {}).get("type") or "?"
             reason = refuse_body_write_reason(b)
@@ -198,10 +216,19 @@ def propose_optimization_changeset(
                     f"  - 嵌套 `{sk.get('block')}`：{_skip_label(str(sk.get('reason')))}，"
                     "不写其程序体；仅报告耦合"
                 )
-            if note.get("writable_parent") and depth >= 2:
+            if must_keep_nested(job, name) and not may_extract_block(job, name):
+                plan_lines.append(
+                    "  - 工程师确认这是必须的西门子多实例：**不拍平、不提取、不发明 I/O**"
+                )
+            elif may_extract_block(job, name):
+                plan_lines.append(
+                    "  - 工程师确认这是意外耦合：仅在 folded 网络已有 I/O 时可提取 helper，仍禁止发明 I/O"
+                )
+            elif note.get("writable_parent") and depth >= 2:
                 plan_lines.append(
                     "  - 父块可写：若 folded 网络有既有 I/O，可提取 helper；"
                     "禁止发明 I/O 或 CALLS，禁止为改数字而扁平化多实例"
+                    "（嵌套意图尚未由工程师确认）"
                 )
             else:
                 plan_lines.append("  - 本链无安全 XML/SCL 落地操作；本提案仅记录耦合与跳过原因")
@@ -218,6 +245,16 @@ def propose_optimization_changeset(
         plan_lines.append("")
 
     extracts = propose_decouple(job)
+    extracts = [
+        ex
+        for ex in extracts
+        if not skip_write_reason(job, ex.caller, kind="decouple")
+        and not must_not_touch(job, ex.caller)
+        and (
+            may_extract_block(job, ex.caller)
+            or not must_keep_nested(job, ex.caller)
+        )
+    ]
     extra_files: dict[str, str] = {}
     extra_evidence: dict[str, list[dict[str, Any]]] = {}
     if extracts:
@@ -302,6 +339,10 @@ def propose_optimization_changeset(
             continue
         if name not in extra_files and not _is_writable_body(blocks.get(name)):
             continue
+        skip_reason = skip_write_reason(job, name, kind="rewrite_scl")
+        if skip_reason:
+            notes.append(f"optimize:skip_engineer:{name}")
+            continue
         kind = "stage_scl_source" if diff.new_block else "rewrite_scl"
         ops.append(
             PlcChangeOp(
@@ -360,6 +401,13 @@ def propose_optimization_changeset(
             plan_lines.append(f"- `{name}`：{_skip_label(refuse_body_write_reason(blocks.get(name)))}")
         plan_lines.append("")
         notes.append(f"optimize:interface_only_count:{len(iface_only)}")
+
+    ops, skipped_engineer = filter_optimize_ops(job, ops)
+    if skipped_engineer:
+        plan_lines.append("## 按工程师确认跳过")
+        plan_lines.extend(skipped_engineer)
+        plan_lines.append("")
+        notes.append(f"optimize:engineer_skip_count:{len(skipped_engineer)}")
 
     if not ops:
         notes.append("optimize:no_ops")

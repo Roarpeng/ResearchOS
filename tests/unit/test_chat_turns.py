@@ -201,7 +201,10 @@ def test_chat_plc_upload_returns_before_ingest(monkeypatch: pytest.MonkeyPatch, 
     assert refreshed["blocks"]
     assistant_turns = [c for c in (refreshed.get("chat") or []) if c.get("role") == "assistant"]
     assert assistant_turns
-    assert "画布已更新" in assistant_turns[0]["content"] or "程序块" in assistant_turns[0]["content"]
+    welcome = assistant_turns[0]["content"]
+    assert "画布已更新" in welcome or "程序块" in welcome
+    assert "我还没懂" in welcome
+    assert "需要你确认" in welcome
 
     mem.store.tasks.clear()
     mem.store.plc_jobs.clear()

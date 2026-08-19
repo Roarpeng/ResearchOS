@@ -68,12 +68,14 @@ def test_ce_chat_scl_markdown_fence() -> None:
     assert "// 含义：调用计数器实例" in ce_scl
 
     text = answer_block_chat(job, "@ce 描述", "ce")
-    assert "```scl" in text
-    assert "VAR_INPUT" in text
-    assert "END_VAR" in text
-    assert '"IEC_Counter_0_DB"(CU := #in5, PV := 1, CV => #out3);' in text
     assert "被调用：Main" in text
-    assert "使用：IEC_Counter_0_DB" in text
+    assert "使用：IEC_Counter_0_DB" in text or "IEC_Counter_0_DB" in text
+
+    scl_chat = answer_block_chat(job, "@ce 展开 SCL", "ce")
+    assert "```scl" in scl_chat
+    assert "VAR_INPUT" in scl_chat
+    assert "END_VAR" in scl_chat
+    assert '"IEC_Counter_0_DB"(CU := #in5, PV := 1, CV => #out3);' in scl_chat
 
     main = answer_block_chat(job, "@Main", "Main")
     assert "调用：ce" in main

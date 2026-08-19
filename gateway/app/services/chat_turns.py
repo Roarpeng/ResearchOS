@@ -62,22 +62,22 @@ def _assistant_from_plc(job: dict[str, Any]) -> str:
         return _pending_ingest_message(job)
 
     name = job.get("project_name") or job.get("id")
-    blocks = job.get("blocks") or []
-    summary = job.get("summary") or {}
     kind, source_label = _plc_source_kind(job)
-    head = (
-        f"已检测为{kind}：{source_label or name}\n"
-        f"工程「{name}」· 程序块 {len(blocks)} 个"
-        + (f"（{_summary_brief(summary)}）" if summary else "")
-        + "\n画布已更新。可直接提问（将按问题检索知识图谱作答），或 `@块名` 深入单块。"
-    )
+    kind_line = f"已检测为{kind}：{source_label or name}"
     try:
-        from agents.plc.tia.chat_retrieve import answer_query_with_kg
+        from agents.plc.tia.understanding import format_welcome_interview
 
-        brief = answer_query_with_kg(job, "本工程整体结构与主扫描调用关系是什么？")
-        return f"{head}\n\n{brief}"
+        return f"{kind_line}\n{format_welcome_interview(job)}"
     except Exception:  # noqa: BLE001
-        return head
+        blocks = job.get("blocks") or []
+        summary = job.get("summary") or {}
+        return (
+            f"{kind_line}\n"
+            f"工程「{name}」· 程序块 {len(blocks)} 个"
+            + (f"（{_summary_brief(summary)}）" if summary else "")
+            + "\n画布已更新。我还没懂这条线，需要你确认几件事。"
+            + "可点画布块，用「工艺主控 / 设备驱动 / 厂商库 / 可拆辅助 / 不要动」作答。"
+        )
 
 
 def _pending_ingest_message(job: dict[str, Any]) -> str:

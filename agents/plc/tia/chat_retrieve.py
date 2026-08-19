@@ -393,13 +393,23 @@ def _try_llm_answer(retrieval: dict[str, Any], query: str, history: list[dict[st
         return None
 
     evidence = _format_evidence_pack(retrieval)
+    try:
+        from agents.plc.tia.understanding import format_facts_for_llm
+
+        facts = format_facts_for_llm(retrieval.get("_job") or {})
+        if facts:
+            evidence = facts + "\n\n" + evidence
+    except Exception:  # noqa: BLE001
+        pass
     messages: list[dict[str, str]] = [
         {
             "role": "system",
             "content": (
-                "你是 ResearchOS PLC 助手。只能依据提供的「知识图谱检索证据」回答用户问题。"
+                "你是 ResearchOS PLC 助手。只能依据提供的「知识图谱检索证据」和「工程师已确认」回答。"
+                "工程师是权威：已确认的角色/不要动/必须保留嵌套不得推翻。"
+                "未确认的图谱线索只能写成待确认问题，不要说「程序就是 X」或「我已经理解了」。"
                 "不要编造未出现的 CALLS/网络。用中文、针对问题作答，不要套固定工程概览模板。"
-                "若证据不足，明确说不足并指出还应检索哪些块。"
+                "若证据不足，明确说不足并指出还应向工程师确认哪些块。"
             ),
         }
     ]
@@ -471,6 +481,7 @@ def answer_query_pack(
     retrieval_query = " ".join(hist_bits + [query or ""]).strip() or (query or "")
 
     retrieval = retrieve_kg_for_query(job, retrieval_query, focus_block=focus_block)
+    retrieval["_job"] = job
     citations = list(retrieval.get("citations") or [])
     llm_ans = _try_llm_answer(retrieval, query or retrieval_query, chat_history)
     if llm_ans:

@@ -1090,6 +1090,11 @@ button.evidence-chip:hover {
   font-size: 0.75rem;
 }
 
+.chat-scope-prompts button.role-chip {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong));
+  color: var(--accent-hover);
+}
+
 .bubble-scope {
   display: inline-block;
   margin-right: 0.35rem;
