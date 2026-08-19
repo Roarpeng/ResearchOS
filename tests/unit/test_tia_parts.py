@@ -78,6 +78,22 @@ def test_graph_steps_and_transitions():
     assert net.graph_transitions
     assert net.graph_steps[0].name == "Init"
     assert "GRAPH" in (net.source_text or "")
+    assert net.folded is not None
+    assert net.folded.evidence == "graph_sequence"
+
+
+def test_graph_sequence_interlock_is_ir_evidence():
+    block = parse_block_xml(PARTS / "FB_Graph_Sequence.xml")
+    assert block is not None
+    net = block.networks[0]
+    assert [s.name for s in net.graph_steps] == ["Idle", "Move"]
+    assert net.graph_steps[0].interlock == "#Permissive"
+    assert net.graph_steps[0].supervision == "#Watchdog"
+    assert net.graph_steps[0].evidence == "graph_xml"
+    assert net.graph_transitions[0].condition == "#Start"
+    assert net.folded is not None
+    assert net.folded.evidence == "graph_sequence"
+    assert "not executable" in (net.source_text or "")
 
 
 def test_stl_rlo_fold():

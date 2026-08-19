@@ -153,7 +153,87 @@ class MCPClient:
                 )
             return openness_cli(*cli_args, timeout_s=int(args.get("timeout_s") or 600))
 
-        # Stateful tools: open_project / list_blocks / export_block need a live MCP session.
+        if name == "tia.import_xml":
+            project = str(args.get("project_path") or args.get("project") or "")
+            xml = str(args.get("xml_path") or args.get("xml") or "")
+            if not project or not xml:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "invalid_argument",
+                        "message": "project_path and xml_path are required",
+                    },
+                }
+            cli_args = ["import-xml", "--project", project, "--xml", xml]
+            if args.get("kind"):
+                cli_args.extend(["--kind", str(args["kind"])])
+            if args.get("plc_name"):
+                cli_args.extend(["--plc", str(args["plc_name"])])
+            if args.get("overwrite") is False:
+                cli_args.append("--no-overwrite")
+            return openness_cli(*cli_args, timeout_s=int(args.get("timeout_s") or 600))
+
+        if name == "tia.generate_source_from_block":
+            project = str(args.get("project_path") or args.get("project") or "")
+            block = str(args.get("block_name") or args.get("block") or "")
+            if not project or not block:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "invalid_argument",
+                        "message": "project_path and block_name are required",
+                    },
+                }
+            cli_args = [
+                "generate-source-from-block",
+                "--project",
+                project,
+                "--block",
+                block,
+            ]
+            if args.get("source_path") or args.get("out"):
+                cli_args.extend(["--out", str(args.get("source_path") or args.get("out"))])
+            if args.get("plc_name"):
+                cli_args.extend(["--plc", str(args["plc_name"])])
+            return openness_cli(*cli_args, timeout_s=int(args.get("timeout_s") or 600))
+
+        if name == "tia.retrieve_project":
+            archive = str(args.get("archive_path") or args.get("archive") or "")
+            out_dir = str(args.get("out_dir") or args.get("outDir") or "")
+            if not archive or not out_dir:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "invalid_argument",
+                        "message": "archive_path and out_dir are required",
+                    },
+                }
+            cli_args = ["retrieve", "--archive", archive, "--out-dir", out_dir]
+            if args.get("plc_name"):
+                cli_args.extend(["--plc", str(args["plc_name"])])
+            return openness_cli(*cli_args, timeout_s=int(args.get("timeout_s") or 600))
+
+        if name == "tia.create_project":
+            directory = str(args.get("target_directory") or args.get("dir") or "")
+            pname = str(args.get("project_name") or args.get("name") or "")
+            if not directory or not pname:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "invalid_argument",
+                        "message": "target_directory and project_name are required",
+                    },
+                }
+            return openness_cli(
+                "create-project",
+                "--dir",
+                directory,
+                "--name",
+                pname,
+                timeout_s=int(args.get("timeout_s") or 600),
+            )
+
+        # Stateful tools: open_project / list_blocks / export_block / close_project need a live MCP session.
         mode = (self.settings.mcp_tia_mode or "cli").lower()
         if mode == "stdio":
             return self._call_tia_stdio(name, args)

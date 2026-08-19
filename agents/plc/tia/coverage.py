@@ -17,6 +17,7 @@ _SKIP_REASONS = (
     "inconsistent",
     "no_license",
     "no_export",
+    "no_import",
     "password_protected",
     "safety_login",
     "openness_error",
@@ -86,6 +87,28 @@ def build_category_coverage(project: PlcProject) -> dict[str, Any]:
             )
             if not counts:
                 cats[key]["skipped"] = len(cats[key]["skipped_reasons"])
+
+    for name, row in cats.items():
+        if row["exported"] == 0 and row["parsed"] == 0 and not row["skipped_reasons"]:
+            row["skipped"] = max(int(row["skipped"] or 0), 1)
+            row["skipped_reasons"].append(
+                {
+                    "name": name,
+                    "reason": "no_export",
+                    "detail": (
+                        "no objects exported or parsed for this category "
+                        "(composition empty, API absent, or not in this export)"
+                    ),
+                }
+            )
+        elif int(row["exported"] or 0) > 0 and int(row["parsed"] or 0) == 0 and not row["skipped_reasons"]:
+            row["skipped_reasons"].append(
+                {
+                    "name": name,
+                    "reason": "openness_error",
+                    "detail": "exported XML present but parser produced no IR",
+                }
+            )
     return cats
 
 

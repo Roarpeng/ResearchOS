@@ -86,6 +86,189 @@ public sealed class ProjectService
         }
     }
 
+    /// <summary>Official <c>Projects.Retrieve(FileInfo, DirectoryInfo)</c> for <c>.zap*</c>.</summary>
+    public RetrieveProjectResult RetrieveProject(string archivePath, string targetDirectory, string? plcName = null)
+    {
+        if (string.IsNullOrWhiteSpace(archivePath))
+        {
+            return FailRetrieve("invalid_argument", "archive_path is required.");
+        }
+
+        var full = Path.GetFullPath(archivePath);
+        if (!File.Exists(full))
+        {
+            return FailRetrieve("not_found", $"Archive not found: {full}");
+        }
+
+        var ext = Path.GetExtension(full);
+        if (ext.IndexOf("zap", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return FailRetrieve("invalid_argument", $"Expected a Siemens .zap* archive, got: {ext}");
+        }
+
+        try
+        {
+            if (!TiaConnection.IsOpennessGroupInCurrentToken())
+            {
+                return FailRetrieve(
+                    "openness_group_token_missing",
+                    "Current logon token lacks 'Siemens TIA Openness'. Sign out/in after joining the group, then retry.");
+            }
+
+            var dest = Path.GetFullPath(string.IsNullOrWhiteSpace(targetDirectory)
+                ? Path.Combine(Path.GetTempPath(), "researchos-tia-retrieve")
+                : targetDirectory);
+            Directory.CreateDirectory(dest);
+
+            _connection.Connect(preferAttach: false, withoutUi: true);
+            var projects = GetProjectsComposition();
+            if (projects is null)
+            {
+                return FailRetrieve("dependency_unavailable", "TiaPortal.Projects not found.");
+            }
+
+            var retrieved = OpennessMutate.TryRetrieve(projects, full, dest);
+            if (retrieved.SkipReason is not null)
+            {
+                return new RetrieveProjectResult
+                {
+                    Ok = false,
+                    ArchivePath = full,
+                    TargetDirectory = dest,
+                    Api = retrieved.Api,
+                    Error = new ToolError
+                    {
+                        Code = retrieved.SkipReason == "no_import" ? "dependency_unavailable" : "openness_error",
+                        Message = retrieved.SkipReason == "no_import"
+                            ? retrieved.Api
+                            : retrieved.SkipReason + ": " + retrieved.Api,
+                    },
+                };
+            }
+
+            AdoptProject(retrieved.Project, dest);
+            TryResolvePlc(plcName);
+
+            return new RetrieveProjectResult
+            {
+                Ok = _project is not null,
+                ArchivePath = full,
+                TargetDirectory = dest,
+                ProjectPath = _projectPath,
+                ProjectName = _projectName,
+                PlcName = _plcName,
+                Api = retrieved.Api,
+                Message = _project is not null
+                    ? $"Retrieved via {retrieved.Api} → {_projectPath}"
+                    : "Retrieve returned no project object.",
+                Error = _project is null
+                    ? new ToolError { Code = "openness_error", Message = "Projects.Retrieve returned null." }
+                    : null,
+            };
+        }
+        catch (Exception ex)
+        {
+            return FailRetrieve("openness_error", OpennessMutate.Unwrap(ex).Message);
+        }
+    }
+
+    /// <summary>Official <c>Projects.Create(DirectoryInfo, string)</c> when present.</summary>
+    public CreateProjectResult CreateProject(string targetDirectory, string projectName)
+    {
+        if (string.IsNullOrWhiteSpace(targetDirectory) || string.IsNullOrWhiteSpace(projectName))
+        {
+            return FailCreate("invalid_argument", "target_directory and project_name are required.");
+        }
+
+        try
+        {
+            if (!TiaConnection.IsOpennessGroupInCurrentToken())
+            {
+                return FailCreate(
+                    "openness_group_token_missing",
+                    "Current logon token lacks 'Siemens TIA Openness'. Sign out/in after joining the group, then retry.");
+            }
+
+            var dest = Path.GetFullPath(targetDirectory);
+            Directory.CreateDirectory(dest);
+            _connection.Connect(preferAttach: false, withoutUi: true);
+            var projects = GetProjectsComposition();
+            if (projects is null)
+            {
+                return FailCreate("dependency_unavailable", "TiaPortal.Projects not found.");
+            }
+
+            var created = OpennessMutate.TryCreate(projects, dest, projectName.Trim());
+            if (created.SkipReason is not null)
+            {
+                return new CreateProjectResult
+                {
+                    Ok = false,
+                    Api = created.Api,
+                    Error = new ToolError
+                    {
+                        Code = "dependency_unavailable",
+                        Message = created.Api,
+                    },
+                };
+            }
+
+            AdoptProject(created.Project, dest);
+            return new CreateProjectResult
+            {
+                Ok = _project is not null,
+                ProjectPath = _projectPath,
+                ProjectName = _projectName,
+                Api = created.Api,
+                Message = _project is not null
+                    ? $"Created via {created.Api}"
+                    : "Projects.Create returned null.",
+                Error = _project is null
+                    ? new ToolError { Code = "openness_error", Message = "Projects.Create returned null." }
+                    : null,
+            };
+        }
+        catch (Exception ex)
+        {
+            return FailCreate("openness_error", OpennessMutate.Unwrap(ex).Message);
+        }
+    }
+
+    /// <summary>Official <c>Project.Close()</c> when present.</summary>
+    public CloseProjectResult CloseProject()
+    {
+        if (_project is null)
+        {
+            return FailClose("invalid_argument", "No project open. Call tia.open_project first.");
+        }
+
+        try
+        {
+            var closed = OpennessMutate.TryClose(_project);
+            if (closed.SkipReason is not null)
+            {
+                return new CloseProjectResult
+                {
+                    Ok = false,
+                    Api = closed.Api,
+                    Error = new ToolError { Code = "dependency_unavailable", Message = closed.Api },
+                };
+            }
+
+            ClearProject();
+            return new CloseProjectResult
+            {
+                Ok = true,
+                Api = closed.Api,
+                Message = "Project closed.",
+            };
+        }
+        catch (Exception ex)
+        {
+            return FailClose("openness_error", OpennessMutate.Unwrap(ex).Message);
+        }
+    }
+
     public OpenProjectResult OpenProject(string projectPath, string? plcName = null, bool withoutUi = true)
     {
         if (string.IsNullOrWhiteSpace(projectPath))
@@ -459,6 +642,86 @@ public sealed class ProjectService
         Ok = false,
         Error = new ToolError { Code = code, Message = message, Retryable = retryable },
     };
+
+    private static RetrieveProjectResult FailRetrieve(string code, string message) => new()
+    {
+        Ok = false,
+        Api = OpennessMutate.ApiRetrieve,
+        Error = new ToolError { Code = code, Message = message },
+    };
+
+    private static CreateProjectResult FailCreate(string code, string message) => new()
+    {
+        Ok = false,
+        Api = OpennessMutate.ApiCreate,
+        Error = new ToolError { Code = code, Message = message },
+    };
+
+    private static CloseProjectResult FailClose(string code, string message) => new()
+    {
+        Ok = false,
+        Api = OpennessMutate.ApiClose,
+        Error = new ToolError { Code = code, Message = message },
+    };
+
+    private object? GetProjectsComposition()
+    {
+        var portal = _connection.Portal;
+        if (portal is null) return null;
+        return portal.GetType().GetProperty("Projects")?.GetValue(portal);
+    }
+
+    private void AdoptProject(object? project, string fallbackDir)
+    {
+        _project = project;
+        _projectName = GetPropString(project, "Name");
+        _projectPath = GetPropString(project, "Path")
+                       ?? GetPropString(project, "FilePath")
+                       ?? FindApxxUnder(fallbackDir);
+        if (string.IsNullOrWhiteSpace(_projectName) && !string.IsNullOrWhiteSpace(_projectPath))
+        {
+            _projectName = Path.GetFileNameWithoutExtension(_projectPath);
+        }
+    }
+
+    private void TryResolvePlc(string? plcName)
+    {
+        _plcSoftware = null;
+        _deviceName = null;
+        _plcName = null;
+        if (_project is null) return;
+        TryResolvePlcSoftware(_project, plcName?.Trim() ?? "", out _plcSoftware, out _deviceName, out _plcName);
+    }
+
+    private void ClearProject()
+    {
+        _project = null;
+        _plcSoftware = null;
+        _projectPath = null;
+        _projectName = null;
+        _plcName = null;
+        _deviceName = null;
+    }
+
+    private static string? FindApxxUnder(string dir)
+    {
+        if (!Directory.Exists(dir)) return null;
+        try
+        {
+            return Directory.EnumerateFiles(dir, "*.ap*", SearchOption.AllDirectories)
+                .Where(p =>
+                {
+                    var ext = Path.GetExtension(p);
+                    return ext.StartsWith(".ap", StringComparison.OrdinalIgnoreCase) && ext.Length > 3;
+                })
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .FirstOrDefault();
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     private static object? GetProp(object? obj, string name) =>
         obj?.GetType().GetProperty(name)?.GetValue(obj);

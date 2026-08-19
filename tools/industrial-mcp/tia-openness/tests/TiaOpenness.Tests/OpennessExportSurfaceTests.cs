@@ -41,6 +41,7 @@ public class OpennessExportSurfaceTests
     [InlineData("KnowHowProtected block cannot export body", "know_how")]
     [InlineData("Chart is password protected", "password_protected")]
     [InlineData("Safety login required", "safety_login")]
+    [InlineData("Import method not found", "no_import")]
     [InlineData("Export method not found", "no_export")]
     [InlineData("unexpected Siemens error", "openness_error")]
     public void ClassifySkipReason_Maps_Official_Vocabulary(string message, string expected)

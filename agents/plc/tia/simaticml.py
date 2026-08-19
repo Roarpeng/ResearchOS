@@ -23,6 +23,7 @@ from agents.plc.tia.ir import (
     Block,
     BlockType,
     CfcChart,
+    FoldedNetwork,
     GraphStep,
     GraphTransition,
     HardwareDevice,
@@ -801,10 +802,22 @@ def parse_network(compile_unit: ET.Element) -> Network:
 
 
 def _ingest_graph(network: Network, compile_unit: ET.Element) -> None:
-    """Parse S7-GRAPH steps/transitions into IR (SCL is a commented sequence)."""
+    """Parse S7-GRAPH steps/transitions into IR (SCL is a commented sequence).
+
+    Official SimaticML may nest ``Sequence/Steps/Transitions`` with Interlock,
+    Supervision, and TransitionCondition. Steps/transitions become IR evidence;
+    generated SCL stays advisory and is never treated as executable GRAPH.
+    """
     steps: list[GraphStep] = []
     transitions: list[GraphTransition] = []
+    sequence = None
     for node in compile_unit.iter():
+        if _strip_ns(node.tag) == "Sequence":
+            sequence = node
+            break
+    root = sequence if sequence is not None else compile_unit
+
+    for node in root.iter():
         tag = _strip_ns(node.tag)
         if tag != "Step":
             continue
@@ -815,22 +828,31 @@ def _ingest_graph(network: Network, compile_unit: ET.Element) -> None:
         except ValueError:
             number = 0
         actions: list[str] = []
+        interlock = ""
+        supervision = ""
         for act in node.iter():
             at = _strip_ns(act.tag)
             if at in {"Action", "Instruction", "Token"}:
                 txt = _attr(act, "Text") or (act.text or "").strip()
                 if txt:
                     actions.append(txt)
+            elif at == "Interlock" and not interlock:
+                interlock = (act.text or "").strip() or _attr(act, "Text") or _child_text_local(act, "Text", "Condition")
+            elif at == "Supervision" and not supervision:
+                supervision = (act.text or "").strip() or _attr(act, "Text") or _child_text_local(act, "Text", "Condition")
         steps.append(
             GraphStep(
                 name=name,
                 number=number,
-                uuid=_attr(node, "UId"),
+                uuid=_attr(node, "UId") or _attr(node, "ID"),
                 actions=actions,
                 comment=_ml_text(node),
+                interlock=interlock,
+                supervision=supervision,
+                evidence="graph_xml",
             )
         )
-    for node in compile_unit.iter():
+    for node in root.iter():
         if _strip_ns(node.tag) != "Transition":
             continue
         name = _attr(node, "Name") or _child_text_local(node, "Name") or f"T{len(transitions) + 1}"
@@ -838,16 +860,24 @@ def _ingest_graph(network: Network, compile_unit: ET.Element) -> None:
             _attr(node, "Condition")
             or _child_text_local(node, "Condition")
             or _child_text_local(node, "Event")
+            or _child_text_local(node, "TransitionCondition")
         )
+        if not cond:
+            for child in node.iter():
+                if _strip_ns(child.tag) in {"TransitionCondition", "Condition", "Event"}:
+                    cond = (child.text or "").strip() or _attr(child, "Text")
+                    if cond:
+                        break
         transitions.append(
             GraphTransition(
                 name=name,
                 number=len(transitions) + 1,
-                uuid=_attr(node, "UId"),
-                source_step=_attr(node, "From") or _child_text_local(node, "From"),
-                target_step=_attr(node, "To") or _child_text_local(node, "To"),
+                uuid=_attr(node, "UId") or _attr(node, "ID"),
+                source_step=_attr(node, "From") or _child_text_local(node, "From") or _child_text_local(node, "Source"),
+                target_step=_attr(node, "To") or _child_text_local(node, "To") or _child_text_local(node, "Target"),
                 condition=cond,
                 comment=_ml_text(node),
+                evidence="graph_xml",
             )
         )
     if not steps and not transitions:
@@ -856,13 +886,22 @@ def _ingest_graph(network: Network, compile_unit: ET.Element) -> None:
     network.graph_transitions = transitions
     if not network.programming_language:
         network.programming_language = "GRAPH"
+    network.folded = FoldedNetwork(
+        network_id=network.id,
+        title=network.title,
+        evidence="graph_sequence",
+        unresolved_parts=[],
+        statements=[],
+    )
     if network.source_text:
         return
     lines = ["(* GRAPH sequence — advisory, not executable S7-GRAPH *)"]
     for step in steps:
         act = "; ".join(step.actions) if step.actions else ""
         extra = f" // {act}" if act else ""
-        lines.append(f"(* Step {step.number or ''} {step.name}{extra} *)")
+        lock = f" interlock={step.interlock}" if step.interlock else ""
+        superv = f" supervision={step.supervision}" if step.supervision else ""
+        lines.append(f"(* Step {step.number or ''} {step.name}{extra}{lock}{superv} *)")
     for tr in transitions:
         lines.append(
             f"(* Transition {tr.name}: {tr.source_step} -[{tr.condition or '?'}]-> {tr.target_step} *)"
@@ -1160,6 +1199,7 @@ def _merge_hmi(project: PlcProject, device: HmiDevice) -> None:
     existing.text_lists.extend(device.text_lists)
     existing.graphic_lists.extend(device.graphic_lists)
     existing.connections.extend(device.connections)
+    existing.cycles.extend(getattr(device, "cycles", None) or [])
     existing.screens.extend(device.screens)
 
 

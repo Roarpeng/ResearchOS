@@ -62,7 +62,12 @@ public static class Program
             Console.Error.WriteLine(
                 "Usage: --cli status | export-project --project <ap19> --export-dir <dir> [--plc name] [--version V19] [--skip-compile] [--full|--blocks-only] | " +
                 "import-block --project <ap19> --xml <file> [--plc name] [--no-overwrite] [--version V19] | " +
+                "import-xml --project <ap19> --xml <file> [--kind auto|block|type|tag|watch|force|hmi|hardware|cfc|to] [--plc name] [--no-overwrite] | " +
                 "generate-from-source --project <ap19> --scl <file.scl> [--plc name] [--no-overwrite] [--version V19] | " +
+                "generate-source-from-block --project <ap19> --block <name> [--out file.scl] [--plc name] [--version V19] | " +
+                "retrieve --archive <file.zap*> --out-dir <dir> [--plc name] [--version V19] | " +
+                "create-project --dir <dir> --name <projectName> [--version V19] | " +
+                "close-project --project <ap19> [--version V19] | " +
                 "compile-plc --project <ap19> [--plc name] [--version V19] | " +
                 "archive-project --project <ap19> --out-dir <dir> [--name file.zap19] [--version V19]");
             return 2;
@@ -287,6 +292,180 @@ public static class Program
                 return archived.Ok ? 0 : 4;
             }
 
+            if (command == "import-xml")
+            {
+                if (!opts.TryGetValue("project", out var project) || string.IsNullOrWhiteSpace(project))
+                {
+                    Console.Error.WriteLine("Missing --project");
+                    return 2;
+                }
+                if (!opts.TryGetValue("xml", out var xml) || string.IsNullOrWhiteSpace(xml))
+                {
+                    Console.Error.WriteLine("Missing --xml");
+                    return 2;
+                }
+
+                opts.TryGetValue("plc", out var plc);
+                opts.TryGetValue("kind", out var kind);
+                var overwrite = !opts.ContainsKey("no-overwrite");
+
+                var opened = projects.OpenProject(project, plc, withoutUi: true);
+                if (!opened.Ok)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(opened, JsonDefaults.Options));
+                    return 3;
+                }
+
+                var imported = blocks.ImportXml(xml, overwrite, kind);
+                if (!imported.Ok)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(new { ok = false, project = opened, import = imported }, JsonDefaults.Options));
+                    return 4;
+                }
+
+                var saved = projects.SaveProject();
+                Console.WriteLine(JsonSerializer.Serialize(new { ok = saved.Ok, project = opened, import = imported, save = saved }, JsonDefaults.Options));
+                return saved.Ok ? 0 : 5;
+            }
+
+            if (command == "generate-source-from-block")
+            {
+                if (!opts.TryGetValue("project", out var project) || string.IsNullOrWhiteSpace(project))
+                {
+                    Console.Error.WriteLine("Missing --project");
+                    return 2;
+                }
+                if (!opts.TryGetValue("block", out var blockName) || string.IsNullOrWhiteSpace(blockName))
+                {
+                    Console.Error.WriteLine("Missing --block");
+                    return 2;
+                }
+
+                opts.TryGetValue("plc", out var plc);
+                opts.TryGetValue("out", out var sourceOut);
+                opts.TryGetValue("type", out var typeHint);
+
+                var opened = projects.OpenProject(project, plc, withoutUi: true);
+                if (!opened.Ok)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(opened, JsonDefaults.Options));
+                    return 3;
+                }
+
+                var generated = blocks.GenerateSourceFromBlock(blockName, sourceOut, typeHint);
+                Console.WriteLine(JsonSerializer.Serialize(new { ok = generated.Ok, project = opened, generate = generated }, JsonDefaults.Options));
+                return generated.Ok ? 0 : 4;
+            }
+
+            if (command == "retrieve")
+            {
+                if (!opts.TryGetValue("archive", out var archive) || string.IsNullOrWhiteSpace(archive))
+                {
+                    Console.Error.WriteLine("Missing --archive");
+                    return 2;
+                }
+                if (!opts.TryGetValue("out-dir", out var outDir) || string.IsNullOrWhiteSpace(outDir))
+                {
+                    Console.Error.WriteLine("Missing --out-dir");
+                    return 2;
+                }
+
+                opts.TryGetValue("plc", out var plc);
+                var retrieved = projects.RetrieveProject(archive, outDir, plc);
+                Console.WriteLine(JsonSerializer.Serialize(new { ok = retrieved.Ok, retrieve = retrieved }, JsonDefaults.Options));
+                return retrieved.Ok ? 0 : 4;
+            }
+
+            if (command == "create-project")
+            {
+                if (!opts.TryGetValue("dir", out var dir) || string.IsNullOrWhiteSpace(dir))
+                {
+                    Console.Error.WriteLine("Missing --dir");
+                    return 2;
+                }
+                if (!opts.TryGetValue("name", out var name) || string.IsNullOrWhiteSpace(name))
+                {
+                    Console.Error.WriteLine("Missing --name");
+                    return 2;
+                }
+
+                var created = projects.CreateProject(dir, name);
+                Console.WriteLine(JsonSerializer.Serialize(new { ok = created.Ok, create = created }, JsonDefaults.Options));
+                return created.Ok ? 0 : 4;
+            }
+
+            if (command == "close-project")
+            {
+                if (!opts.TryGetValue("project", out var project) || string.IsNullOrWhiteSpace(project))
+                {
+                    Console.Error.WriteLine("Missing --project");
+                    return 2;
+                }
+
+                opts.TryGetValue("plc", out var plc);
+                var opened = projects.OpenProject(project, plc, withoutUi: true);
+                if (!opened.Ok)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(opened, JsonDefaults.Options));
+                    return 3;
+                }
+
+                var closed = projects.CloseProject();
+                Console.WriteLine(JsonSerializer.Serialize(new { ok = closed.Ok, project = opened, close = closed }, JsonDefaults.Options));
+                return closed.Ok ? 0 : 4;
+            }
+
+            if (command == "create-to")
+            {
+                if (!opts.TryGetValue("project", out var project) || string.IsNullOrWhiteSpace(project))
+                {
+                    Console.Error.WriteLine("Missing --project");
+                    return 2;
+                }
+                if (!opts.TryGetValue("name", out var toName) || string.IsNullOrWhiteSpace(toName))
+                {
+                    Console.Error.WriteLine("Missing --name");
+                    return 2;
+                }
+                opts.TryGetValue("plc", out var plc);
+                opts.TryGetValue("type-id", out var typeId);
+                var opened = projects.OpenProject(project, plc, withoutUi: true);
+                if (!opened.Ok)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(opened, JsonDefaults.Options));
+                    return 3;
+                }
+                var created = blocks.CreateTechnologicalObject(toName, typeId);
+                var saved = created.Ok ? projects.SaveProject() : null;
+                Console.WriteLine(JsonSerializer.Serialize(new { ok = created.Ok && (saved is null || saved.Ok), project = opened, create = created, save = saved }, JsonDefaults.Options));
+                return created.Ok ? 0 : 4;
+            }
+
+            if (command == "delete-to")
+            {
+                if (!opts.TryGetValue("project", out var project) || string.IsNullOrWhiteSpace(project))
+                {
+                    Console.Error.WriteLine("Missing --project");
+                    return 2;
+                }
+                if (!opts.TryGetValue("name", out var toName) || string.IsNullOrWhiteSpace(toName))
+                {
+                    Console.Error.WriteLine("Missing --name");
+                    return 2;
+                }
+                opts.TryGetValue("plc", out var plc);
+                var opened = projects.OpenProject(project, plc, withoutUi: true);
+                if (!opened.Ok)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(opened, JsonDefaults.Options));
+                    return 3;
+                }
+                var deleted = blocks.DeleteTechnologicalObject(toName);
+                var saved = deleted.Ok ? projects.SaveProject() : null;
+                Console.WriteLine(JsonSerializer.Serialize(new { ok = deleted.Ok && (saved is null || saved.Ok), project = opened, delete = deleted, save = saved }, JsonDefaults.Options));
+                return deleted.Ok ? 0 : 4;
+            }
+
             Console.Error.WriteLine("Unknown CLI command: " + command);
             return 2;
         }
@@ -470,6 +649,63 @@ public sealed class TiaOpennessTools
         [Description("Archive file name, e.g. Line.zap19. Empty = derive from .apxx stem/version.")] string? name = null)
     {
         var result = _projects.ArchiveProject(out_dir, name);
+        return JsonSerializer.Serialize(result, Json);
+    }
+
+    [McpServerTool(Name = "tia.import_xml"), Description(
+        "Import SimaticML / AML / HMI XML into the matching Openness composition when Import exists " +
+        "(types, tag tables, watch/force, HMI, CAx AML, CFC, TO). Missing Import fails closed with no_import. " +
+        "Refuses Safety/F-block XML. Does not persist — call tia.save_project afterwards.")]
+    public string ImportXml(
+        [Description("Absolute path to SimaticML / AML / HMI XML.")] string xml_path,
+        [Description("auto | block | type | tag | watch | force | hmi | hardware | cfc | to")] string? kind = "auto",
+        [Description("When true, use ImportOptions.Override; when false, ImportOptions.None.")] bool overwrite = true)
+    {
+        var result = _blocks.ImportXml(xml_path, overwrite, kind);
+        return JsonSerializer.Serialize(result, Json);
+    }
+
+    [McpServerTool(Name = "tia.generate_source_from_block"), Description(
+        "Generate an SCL external source FROM a writable non-safety PLC block via " +
+        "PlcBlock.GenerateSourceFromBlocks(FileInfo) (Openness 5.11.3.18). Refuses F-blocks. " +
+        "Fails closed if the method is absent on this Openness build.")]
+    public string GenerateSourceFromBlock(
+        [Description("Block name, e.g. FB_Motor.")] string block_name,
+        [Description("Output .scl path. Default: %TEMP%/researchos-tia-source/<block>.scl")] string? source_path = null,
+        [Description("Optional type hint OB|FB|FC|DB when names collide.")] string? type = null)
+    {
+        var result = _blocks.GenerateSourceFromBlock(block_name, source_path, type);
+        return JsonSerializer.Serialize(result, Json);
+    }
+
+    [McpServerTool(Name = "tia.retrieve_project"), Description(
+        "Retrieve a Siemens .zap* archive via official Openness Projects.Retrieve(FileInfo, DirectoryInfo). " +
+        "Writes an on-disk .apxx under out_dir. Windows HostGateway only.")]
+    public string RetrieveProject(
+        [Description("Absolute path to a .zap / .zap19 archive.")] string archive_path,
+        [Description("Directory that will receive the retrieved .apxx project.")] string out_dir,
+        [Description("Optional PLC device or software name.")] string? plc_name = null)
+    {
+        var result = _projects.RetrieveProject(archive_path, out_dir, plc_name);
+        return JsonSerializer.Serialize(result, Json);
+    }
+
+    [McpServerTool(Name = "tia.create_project"), Description(
+        "Create an empty TIA project via Projects.Create(DirectoryInfo, string) when that member exists. " +
+        "Fails closed if the API is absent.")]
+    public string CreateProject(
+        [Description("Target directory for the new project.")] string target_directory,
+        [Description("Project name.")] string project_name)
+    {
+        var result = _projects.CreateProject(target_directory, project_name);
+        return JsonSerializer.Serialize(result, Json);
+    }
+
+    [McpServerTool(Name = "tia.close_project"), Description(
+        "Close the currently open TIA project via Project.Close() when that member exists.")]
+    public string CloseProject()
+    {
+        var result = _projects.CloseProject();
         return JsonSerializer.Serialize(result, Json);
     }
 }

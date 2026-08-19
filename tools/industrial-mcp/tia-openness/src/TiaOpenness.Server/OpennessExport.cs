@@ -190,6 +190,9 @@ public static class OpennessExport
             return "safety_login";
         if (item is not null && !HasExport(item))
             return "no_export";
+        if (t.IndexOf("Import", StringComparison.OrdinalIgnoreCase) >= 0
+            && t.IndexOf("not found", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "no_import";
         if (t.IndexOf("Export", StringComparison.OrdinalIgnoreCase) >= 0
             && t.IndexOf("not found", StringComparison.OrdinalIgnoreCase) >= 0)
             return "no_export";

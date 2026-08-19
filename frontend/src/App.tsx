@@ -144,6 +144,20 @@ function PlcCoverageStrip({ detail }: { detail: PlcJobDetail | null }) {
   const todos = topTodoParts(cov);
   const tree = obCallTree(detail);
   const rate = Number(cov.todo_rate || 0);
+  const skipChips: string[] = [];
+  const seenSkip = new Set<string>();
+  for (const [cat, row] of Object.entries(cov.categories || {})) {
+    for (const skip of row.skipped_reasons || []) {
+      const reason = String(skip.reason || "").trim();
+      if (!reason) continue;
+      const key = `${cat}:${reason}`;
+      if (seenSkip.has(key)) continue;
+      seenSkip.add(key);
+      skipChips.push(`${cat}/${reason}`);
+      if (skipChips.length >= 8) break;
+    }
+    if (skipChips.length >= 8) break;
+  }
   return (
     <div className="plc-coverage" aria-label="转换覆盖率">
       <svg className="plc-coverage-ring" viewBox="0 0 40 40" width="40" height="40" aria-hidden="true">
@@ -181,6 +195,16 @@ function PlcCoverageStrip({ detail }: { detail: PlcJobDetail | null }) {
           <div className="muted">无未译 Part</div>
         )}
         {tree.length ? <div className="plc-coverage-tree">OB 调用：{tree.join("；")}</div> : null}
+        {skipChips.length ? (
+          <div className="plc-coverage-todos">
+            Openness 跳过：
+            {skipChips.map((s) => (
+              <span key={s} className="plc-chip">
+                {s}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
     </div>
   );

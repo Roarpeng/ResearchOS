@@ -1,7 +1,18 @@
 # Industrial extension guide (Phase 5)
 
-This package provides **read-only** Engineering Copilot connectors, a TIA Openness
-export adapter, and Decision Memo templates. Real device write paths are intentionally absent.
+This package provides Engineering Copilot **connectors** (read-only catalogs), a TIA
+Openness **export adapter**, and Decision Memo templates.
+
+**TIA write-back is not in this folder.** Official Openness mutate APIs
+(`Blocks.Import`, `GenerateBlocksFromSource`, `GenerateSourceFromBlocks`,
+`Projects.Retrieve`, `ICompilable.Compile`, `Project.Archive`) live in the
+Windows HostGateway C# host:
+
+- CLI / MCP: `tools/industrial-mcp/tia-openness/` (`TiaOpenness.Server`)
+- Python wrappers: `agents/plc/tia/openness_cli.py`, `agents/plc/tia/writeback.py`
+
+Linux Docker **stages** XML/SCL only; compile-gated `.zap` archive requires that
+Windows host. Device download (`plc.program.download`) stays not-implemented.
 
 ## Layout
 

@@ -41,10 +41,16 @@ public sealed class BlockService
         {
             var filter = NormalizeTypeFilter(typeFilter);
             var blocks = new List<BlockInfo>();
-            var blockGroup = GetProp(_projects.PlcSoftware, "BlockGroup")
-                ?? throw new InvalidOperationException("PlcSoftware.BlockGroup is null.");
-
-            CollectBlocks(blockGroup, relative: "", blocks);
+            var anyRoot = false;
+            foreach (var (group, prefix) in EnumerateBlockRoots())
+            {
+                anyRoot = true;
+                CollectBlocks(group, relative: prefix, blocks);
+            }
+            if (!anyRoot)
+            {
+                throw new InvalidOperationException("PlcSoftware.BlockGroup is null.");
+            }
 
             if (filter is not null)
             {
@@ -91,10 +97,7 @@ public sealed class BlockService
 
         try
         {
-            var blockGroup = GetProp(_projects.PlcSoftware, "BlockGroup")
-                ?? throw new InvalidOperationException("PlcSoftware.BlockGroup is null.");
-
-            var match = FindBlock(blockGroup, blockName.Trim(), typeHint, relative: "");
+            var match = FindBlockAnywhere(blockName.Trim(), typeHint);
             if (match.Block is null)
             {
                 return FailExport("not_found", $"Block '{blockName}' not found.");
@@ -253,7 +256,9 @@ public sealed class BlockService
                 Ok = true,
                 XmlPath = full,
                 Overwrite = overwrite,
+                Kind = "block",
                 ImportedNames = names,
+                Api = $"BlockGroup.Blocks.Import(FileInfo, ImportOptions.{optionName})",
                 Message = names.Count == 0
                     ? $"Imported from {Path.GetFileName(full)} (ImportOptions.{optionName})."
                     : $"Imported {names.Count} item(s): {string.Join(", ", names)}.",
@@ -263,6 +268,329 @@ public sealed class BlockService
         {
             return FailImport("openness_error", Unwrap(ex).Message);
         }
+    }
+
+    /// <summary>
+    /// Import SimaticML / AML / HMI XML into the matching Openness composition
+    /// when that composition actually exposes <c>Import</c>. Missing members
+    /// fail closed with <c>no_import</c> — never invent an API.
+    /// </summary>
+    public ImportBlockResult ImportXml(string xmlPath, bool overwrite = true, string? kindHint = null)
+    {
+        if (string.IsNullOrWhiteSpace(xmlPath))
+        {
+            return FailImport("invalid_argument", "xml_path is required.");
+        }
+
+        var full = Path.GetFullPath(xmlPath);
+        if (!File.Exists(full))
+        {
+            return FailImport("not_found", $"XML file not found: {full}");
+        }
+
+        string head;
+        try
+        {
+            head = File.ReadAllText(full);
+        }
+        catch (Exception ex)
+        {
+            return FailImport("openness_error", Unwrap(ex).Message);
+        }
+
+        var kind = string.IsNullOrWhiteSpace(kindHint) || kindHint == "auto"
+            ? OpennessMutate.ClassifyXmlKind(head, Path.GetFileName(full))
+            : kindHint!.Trim().ToLowerInvariant();
+
+        if (kind is "block" or "type" or "cfc" or "to")
+        {
+            if (XmlLooksLikeSafety(full))
+            {
+                return FailImport(
+                    "safety_block",
+                    "Refusing Import for Safety/F-block XML. Never write F-block bodies.");
+            }
+        }
+
+        if (_projects.PlcSoftware is null && kind is not "hmi" and not "hardware")
+        {
+            return FailImport("invalid_argument", "No project open. Call tia.open_project first.");
+        }
+
+        if (kind == "block")
+        {
+            return ImportBlock(full, overwrite);
+        }
+
+        try
+        {
+            var resolved = ResolveImportComposition(kind, head);
+            if (resolved.SkipReason is not null)
+            {
+                return new ImportBlockResult
+                {
+                    Ok = false,
+                    XmlPath = full,
+                    Overwrite = overwrite,
+                    Kind = kind,
+                    SkipReason = resolved.SkipReason,
+                    Api = resolved.Api,
+                    Error = new ToolError
+                    {
+                        Code = resolved.SkipReason == "no_import" ? "dependency_unavailable" : "openness_error",
+                        Message = resolved.Detail ?? resolved.Api ?? "Import composition not found.",
+                    },
+                };
+            }
+
+            var imported = OpennessMutate.TryImport(resolved.Composition!, full, overwrite);
+            if (imported.SkipReason is not null)
+            {
+                return new ImportBlockResult
+                {
+                    Ok = false,
+                    XmlPath = full,
+                    Overwrite = overwrite,
+                    Kind = kind,
+                    SkipReason = imported.SkipReason,
+                    Api = imported.Api,
+                    Error = new ToolError
+                    {
+                        Code = imported.SkipReason == "no_import" ? "dependency_unavailable" : "openness_error",
+                        Message = imported.Api + " — " + imported.SkipReason,
+                    },
+                };
+            }
+
+            var names = OpennessMutate.ExtractNames(imported.Imported);
+            if (names.Any(LooksLikeSafetyName))
+            {
+                return FailImport(
+                    "safety_block",
+                    "Refusing Import: imported name looks like a Safety/F-block. Never write F-block bodies.");
+            }
+
+            return new ImportBlockResult
+            {
+                Ok = true,
+                XmlPath = full,
+                Overwrite = overwrite,
+                Kind = kind,
+                ImportedNames = names,
+                Api = imported.Api,
+                Message = names.Count == 0
+                    ? $"Imported {kind} from {Path.GetFileName(full)} via {imported.Api}."
+                    : $"Imported {names.Count} {kind} item(s): {string.Join(", ", names)}.",
+            };
+        }
+        catch (Exception ex)
+        {
+            return FailImport("openness_error", Unwrap(ex).Message);
+        }
+    }
+
+    /// <summary>
+    /// Official reverse of GenerateBlocksFromSource (Openness 5.11.3.18):
+    /// <c>PlcBlock.GenerateSourceFromBlocks(FileInfo)</c> for writable non-safety blocks.
+    /// </summary>
+    public GenerateSourceFromBlockResult GenerateSourceFromBlock(
+        string blockName,
+        string? sourcePath = null,
+        string? typeHint = null)
+    {
+        if (string.IsNullOrWhiteSpace(blockName))
+        {
+            return FailGenerateSource("invalid_argument", "block_name is required.");
+        }
+
+        if (LooksLikeSafetyName(blockName) || LooksLikeSafetyLanguage(typeHint))
+        {
+            return FailGenerateSource(
+                "safety_block",
+                "Refusing GenerateSourceFromBlocks for Safety/F-block. Never write F-block bodies.");
+        }
+
+        if (_projects.PlcSoftware is null)
+        {
+            return FailGenerateSource("invalid_argument", "No project open. Call tia.open_project first.");
+        }
+
+        try
+        {
+            var match = FindBlockAnywhere(blockName.Trim(), typeHint);
+            if (match.Block is null)
+            {
+                return FailGenerateSource("not_found", $"Block '{blockName}' not found.");
+            }
+
+            if (LooksLikeSafetyLanguage(match.Info?.ProgrammingLanguage) || LooksLikeSafetyName(match.Info?.Name))
+            {
+                return FailGenerateSource(
+                    "safety_block",
+                    "Refusing GenerateSourceFromBlocks for Safety/F-block. Never write F-block bodies.");
+            }
+
+            var outPath = string.IsNullOrWhiteSpace(sourcePath)
+                ? Path.Combine(Path.GetTempPath(), "researchos-tia-source", Sanitize(blockName) + ".scl")
+                : Path.GetFullPath(sourcePath);
+
+            var generated = OpennessMutate.TryGenerateSourceFromBlocks(match.Block, outPath);
+            if (generated.SkipReason is not null)
+            {
+                return new GenerateSourceFromBlockResult
+                {
+                    Ok = false,
+                    BlockName = match.Info?.Name ?? blockName,
+                    SourcePath = outPath,
+                    Api = generated.Api,
+                    Error = new ToolError
+                    {
+                        Code = generated.SkipReason is "no_export" or "no_import"
+                            ? "dependency_unavailable"
+                            : generated.SkipReason == "know_how"
+                                ? "know_how"
+                                : "openness_error",
+                        Message = generated.Api + " — " + generated.SkipReason,
+                    },
+                };
+            }
+
+            return new GenerateSourceFromBlockResult
+            {
+                Ok = true,
+                BlockName = match.Info?.Name ?? blockName,
+                SourcePath = outPath,
+                Api = generated.Api,
+                Message = $"Generated source from {match.Info?.Name ?? blockName} via {generated.Api}.",
+            };
+        }
+        catch (Exception ex)
+        {
+            return FailGenerateSource("openness_error", Unwrap(ex).Message);
+        }
+    }
+
+    /// <summary>
+    /// Create a technology object only when <c>TechnologicalObjectGroup.Create</c> exists.
+    /// </summary>
+    public ImportBlockResult CreateTechnologicalObject(string name, string? typeIdentifier)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return FailImport("invalid_argument", "name is required.");
+        }
+        if (_projects.PlcSoftware is null)
+        {
+            return FailImport("invalid_argument", "No project open. Call tia.open_project first.");
+        }
+
+        var group = OpennessExport.GetFirstProp(
+            _projects.PlcSoftware, "TechnologicalObjectGroup", "TechnologyObjectGroup", "TechnologicalObjects");
+        if (group is null)
+        {
+            return new ImportBlockResult
+            {
+                Ok = false,
+                Kind = "to",
+                SkipReason = "no_import",
+                Api = "TechnologicalObjectGroup.Create",
+                Error = new ToolError
+                {
+                    Code = "dependency_unavailable",
+                    Message = "TechnologicalObjectGroup not present on this Openness build.",
+                },
+            };
+        }
+
+        var created = OpennessMutate.TryCreateOn(group, name.Trim(), typeIdentifier);
+        if (created.SkipReason is not null)
+        {
+            return new ImportBlockResult
+            {
+                Ok = false,
+                Kind = "to",
+                SkipReason = created.SkipReason,
+                Api = created.Api,
+                Error = new ToolError { Code = "dependency_unavailable", Message = created.Api },
+            };
+        }
+
+        var createdName = OpennessExport.GetPropString(created.Created, "Name") ?? name;
+        return new ImportBlockResult
+        {
+            Ok = true,
+            Kind = "to",
+            Api = created.Api,
+            ImportedNames = new List<string> { createdName },
+            Message = $"Created technology object {createdName} via {created.Api}.",
+        };
+    }
+
+    /// <summary>Delete a technology object only when <c>Delete()</c> exists on the instance.</summary>
+    public ImportBlockResult DeleteTechnologicalObject(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return FailImport("invalid_argument", "name is required.");
+        }
+        if (_projects.PlcSoftware is null)
+        {
+            return FailImport("invalid_argument", "No project open. Call tia.open_project first.");
+        }
+
+        var group = OpennessExport.GetFirstProp(
+            _projects.PlcSoftware, "TechnologicalObjectGroup", "TechnologyObjectGroup", "TechnologicalObjects");
+        if (group is null)
+        {
+            return new ImportBlockResult
+            {
+                Ok = false,
+                Kind = "to",
+                SkipReason = "no_import",
+                Api = "TechnologicalObject.Delete",
+                Error = new ToolError
+                {
+                    Code = "dependency_unavailable",
+                    Message = "TechnologicalObjectGroup not present on this Openness build.",
+                },
+            };
+        }
+
+        object? match = null;
+        foreach (var item in OpennessExport.WalkGroups(group, new[] { "TechnologicalObjects", "TechnologyObjects", "Objects" }))
+        {
+            if (string.Equals(OpennessExport.GetPropString(item.Item, "Name"), name.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                match = item.Item;
+                break;
+            }
+        }
+        if (match is null)
+        {
+            return FailImport("not_found", $"Technology object '{name}' not found.");
+        }
+
+        var deleted = OpennessMutate.TryDelete(match);
+        if (deleted.SkipReason is not null)
+        {
+            return new ImportBlockResult
+            {
+                Ok = false,
+                Kind = "to",
+                SkipReason = deleted.SkipReason,
+                Api = deleted.Api,
+                Error = new ToolError { Code = "dependency_unavailable", Message = deleted.Api },
+            };
+        }
+
+        return new ImportBlockResult
+        {
+            Ok = true,
+            Kind = "to",
+            Api = deleted.Api,
+            ImportedNames = new List<string> { name.Trim() },
+            Message = $"Deleted technology object {name} via {deleted.Api}.",
+        };
     }
 
     /// <summary>
@@ -668,6 +996,187 @@ public sealed class BlockService
             inconsistent);
     }
 
+    private IEnumerable<(object Group, string Prefix)> EnumerateBlockRoots()
+    {
+        var plc = _projects.PlcSoftware;
+        if (plc is null) yield break;
+
+        var user = GetProp(plc, "BlockGroup");
+        if (user is not null) yield return (user, "");
+
+        var system = OpennessExport.GetFirstProp(plc, "SystemBlockGroup");
+        if (system is not null) yield return (system, "System");
+
+        var units = OpennessExport.GetFirstProp(plc, "SoftwareUnitGroup", "SoftwareUnits", "UnitGroup");
+        foreach (var unit in OpennessExport.Enumerate(units, "SoftwareUnits", "Units", "Items"))
+        {
+            var bg = OpennessExport.GetFirstProp(unit, "BlockGroup");
+            if (bg is null) continue;
+            var uname = OpennessExport.GetPropString(unit, "Name") ?? "Unit";
+            yield return (bg, "Units/" + uname);
+        }
+    }
+
+    private (object? Block, BlockInfo? Info) FindBlockAnywhere(string name, string? typeHint)
+    {
+        foreach (var (group, prefix) in EnumerateBlockRoots())
+        {
+            var found = FindBlock(group, name, typeHint, prefix);
+            if (found.Block is not null) return found;
+        }
+        return (null, null);
+    }
+
+    private readonly record struct ImportTarget(object? Composition, string? SkipReason, string? Api, string? Detail);
+
+    private ImportTarget ResolveImportComposition(string kind, string head)
+    {
+        var plc = _projects.PlcSoftware;
+        switch (kind)
+        {
+            case "type":
+            case "types":
+            case "udt":
+                return CompositionImport(
+                    OpennessExport.GetFirstProp(plc, "TypeGroup"),
+                    "TypeGroup.Types",
+                    "Types", "PlcTypes", "DataTypes");
+            case "tag":
+            case "tags":
+                return CompositionImport(
+                    OpennessExport.GetFirstProp(plc, "TagTableGroup"),
+                    "TagTableGroup.TagTables",
+                    "TagTables", "ConstantTables");
+            case "watch":
+                return CompositionImport(
+                    OpennessExport.GetFirstProp(plc, "WatchAndForceTableGroup", "WatchAndForceTableSystemGroup", "PlcWatchAndForceTableGroup"),
+                    "WatchAndForceTableGroup.WatchTables",
+                    "WatchTables", "PlcWatchTables");
+            case "force":
+                return CompositionImport(
+                    OpennessExport.GetFirstProp(plc, "WatchAndForceTableGroup", "WatchAndForceTableSystemGroup", "PlcWatchAndForceTableGroup"),
+                    "WatchAndForceTableGroup.ForceTables",
+                    "ForceTables", "PlcForceTables");
+            case "cfc":
+                return CompositionImport(
+                    OpennessExport.GetFirstProp(plc, "ChartFolder", "CfcChartFolder", "Charts"),
+                    "ChartFolder.Charts",
+                    "Charts", "Blocks");
+            case "to":
+                return CompositionImport(
+                    OpennessExport.GetFirstProp(plc, "TechnologicalObjectGroup", "TechnologyObjectGroup", "TechnologicalObjects"),
+                    "TechnologicalObjectGroup",
+                    "TechnologicalObjects", "TechnologyObjects", "Objects");
+            case "hmi":
+                return ResolveHmiImport(head);
+            case "hardware":
+            case "aml":
+                return ResolveCaxImport();
+            default:
+                return new ImportTarget(null, "no_import", OpennessMutate.ApiImport, $"Unknown import kind '{kind}'.");
+        }
+    }
+
+    private ImportTarget CompositionImport(object? group, string api, params string[] itemProps)
+    {
+        if (group is null)
+        {
+            return new ImportTarget(null, "no_import", api, api + " not present on this Openness build.");
+        }
+
+        foreach (var prop in itemProps)
+        {
+            var composition = OpennessExport.GetProp(group, prop);
+            if (composition is null) continue;
+            if (OpennessMutate.HasImport(composition))
+            {
+                return new ImportTarget(composition, null, $"{api}.{prop}.Import", null);
+            }
+        }
+
+        if (OpennessMutate.HasImport(group))
+        {
+            return new ImportTarget(group, null, api + ".Import", null);
+        }
+
+        return new ImportTarget(
+            null,
+            "no_import",
+            api,
+            api + " exists but Import(FileInfo, ImportOptions) is not on this type.");
+    }
+
+    private ImportTarget ResolveHmiImport(string head)
+    {
+        foreach (var (kind, _, _, software, _) in _projects.EnumerateSoftware())
+        {
+            if (kind is not "hmi" and not "hmi_unified") continue;
+            string[] folders;
+            if (ContainsIgnoreCase(head, "Tag"))
+                folders = new[] { "TagFolder", "TagTableFolder" };
+            else if (ContainsIgnoreCase(head, "Script") || ContainsIgnoreCase(head, "VBScript"))
+                folders = new[] { "VBScriptFolder", "ScriptFolder" };
+            else if (ContainsIgnoreCase(head, "TextList"))
+                folders = new[] { "TextListFolder" };
+            else if (ContainsIgnoreCase(head, "GraphicList"))
+                folders = new[] { "GraphicListFolder" };
+            else if (ContainsIgnoreCase(head, "Connection"))
+                folders = new[] { "ConnectionsFolder", "Connections" };
+            else if (ContainsIgnoreCase(head, "Cycle"))
+                folders = new[] { "CycleFolder", "CyclesFolder" };
+            else
+                folders = new[] { "ScreenFolder", "TemplateFolder", "PopupScreenFolder" };
+
+            foreach (var folderName in folders)
+            {
+                var folder = OpennessExport.GetProp(software, folderName);
+                if (folder is null) continue;
+                var target = CompositionImport(folder, "Hmi." + folderName, "Screens", "Templates", "TagTables", "Tags", "VBScripts", "Scripts", "TextLists", "GraphicLists", "Connections", "Cycles", "Items");
+                if (target.SkipReason is null) return target;
+                if (OpennessMutate.HasImport(folder))
+                    return new ImportTarget(folder, null, "Hmi." + folderName + ".Import", null);
+            }
+        }
+
+        return new ImportTarget(
+            null,
+            "no_import",
+            "Hmi.*.Import",
+            "HMI Import is not present on this Openness build (HmiTarget folders lack Import).");
+    }
+
+    private ImportTarget ResolveCaxImport()
+    {
+        var project = _projects.Project;
+        if (project is null)
+        {
+            return new ImportTarget(null, "no_import", OpennessMutate.ApiCaxImport, "No project open.");
+        }
+
+        object? cax = null;
+        try
+        {
+            cax = _projects.Connection.GetService(project, "Siemens.Engineering.CAx.CAxProvider")
+                  ?? OpennessExport.GetProp(project, "CAx");
+        }
+        catch
+        {
+            cax = null;
+        }
+
+        if (cax is null)
+        {
+            return new ImportTarget(null, "no_import", OpennessMutate.ApiCaxImport, "CAxProvider not present on this Openness build.");
+        }
+
+        if (!OpennessMutate.HasImport(cax) && OpennessMutate.FindMethod(cax, "Import") is null)
+        {
+            return new ImportTarget(null, "no_import", OpennessMutate.ApiCaxImport, "CAxProvider.Import not found.");
+        }
+
+        return new ImportTarget(cax, null, OpennessMutate.ApiCaxImport, null);
+    }
+
     private void CollectBlocks(object group, string relative, List<BlockInfo> sink)
     {
         if (GetProp(group, "Blocks") is IEnumerable blocks)
@@ -868,6 +1377,13 @@ public sealed class BlockService
         Ok = false,
         Error = new ToolError { Code = code, Message = message },
         Api = "ExternalSourceGroup.ExternalSources.CreateFromFile + GenerateBlocksFromSource",
+    };
+
+    private static GenerateSourceFromBlockResult FailGenerateSource(string code, string message) => new()
+    {
+        Ok = false,
+        Api = OpennessMutate.ApiGenerateSource,
+        Error = new ToolError { Code = code, Message = message },
     };
 
     /// <summary>F-OB / F-FB / F-FC / F-DB name heuristic (never write these bodies).</summary>

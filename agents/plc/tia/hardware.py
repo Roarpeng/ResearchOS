@@ -192,6 +192,7 @@ def _device_from_tree(el: ET.Element, path: Path) -> HardwareDevice:
     dtype = _attr(el, "TypeIdentifier") or _attr(el, "Type") or "Device"
     modules: list[str] = []
     subnets: list[str] = []
+    nics: list[str] = []
     rack = ""
     for child in el:
         tag = _strip_ns(child.tag)
@@ -202,10 +203,19 @@ def _device_from_tree(el: ET.Element, path: Path) -> HardwareDevice:
             if not rack:
                 rack = _attr(child, "Slot") or _child_text(child, "Slot")
             for nested in child:
-                if _strip_ns(nested.tag) == "Subnet" and _attr(nested, "Name"):
+                ntag = _strip_ns(nested.tag)
+                if ntag == "Subnet" and _attr(nested, "Name"):
                     subnets.append(_attr(nested, "Name"))
+                elif ntag == "NetworkInterface":
+                    nname = _attr(nested, "Name") or _attr(nested, "Address")
+                    if nname:
+                        nics.append(nname)
         elif tag == "Subnet" and _attr(child, "Name"):
             subnets.append(_attr(child, "Name"))
+        elif tag == "NetworkInterface":
+            nname = _attr(child, "Name") or _attr(child, "Address")
+            if nname:
+                nics.append(nname)
     return HardwareDevice(
         name=name,
         device_type=dtype,
@@ -217,6 +227,7 @@ def _device_from_tree(el: ET.Element, path: Path) -> HardwareDevice:
         rack=rack,
         modules=modules,
         subnets=subnets,
+        network_interfaces=nics,
     )
 
 

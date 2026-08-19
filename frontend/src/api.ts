@@ -345,6 +345,15 @@ export type PlcCoverage = {
   todo_histogram?: Record<string, number>;
   top_untranslated_parts?: Array<{ name?: string; count?: number }>;
   safety_blocks?: string[];
+  categories?: Record<
+    string,
+    {
+      exported?: number;
+      parsed?: number;
+      skipped?: number;
+      skipped_reasons?: Array<{ name?: string; reason?: string; detail?: string }>;
+    }
+  >;
 };
 
 export type PlcJobSummary = {

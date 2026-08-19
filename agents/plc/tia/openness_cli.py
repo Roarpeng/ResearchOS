@@ -61,7 +61,7 @@ def _payload_text(payload: Any) -> str:
             parts.append(str(err["message"]))
         elif err:
             parts.append(str(err))
-        for key in ("message", "export", "import", "archive", "project", "generate", "compile"):
+        for key in ("message", "export", "import", "archive", "project", "generate", "compile", "retrieve", "create", "close"):
             val = payload.get(key)
             if isinstance(val, dict):
                 nested = _payload_text(val)
@@ -129,8 +129,12 @@ def format_openness_failure(
         "export": "导出 SimaticML XML",
         "import": "写回（Import）",
         "generate_from_source": "SCL External Source → GenerateBlocksFromSource",
+        "generate_source_from_block": "块 → GenerateSourceFromBlocks SCL",
+        "retrieve": "Projects.Retrieve 打开 .zap",
         "compile": "编译 PLC 软件（ICompilable.Compile）",
         "archive": "归档为 .zap",
+        "create": "Projects.Create",
+        "close": "Project.Close",
     }.get(action, action)
     return (
         f"TIA Openness {action_cn}失败。\n"
@@ -639,3 +643,134 @@ def archive_project_via_openness_cli(
             )
         archived = zaps[0]
     return archived
+
+
+def import_xml_via_openness_cli(
+    project_path: str | Path,
+    xml_path: str | Path,
+    *,
+    kind: str = "auto",
+    plc_name: str = "",
+    overwrite: bool = True,
+    timeout_s: int = 600,
+) -> dict[str, Any]:
+    """Import SimaticML / AML / HMI XML via ``--cli import-xml``.
+
+    ``kind`` is auto|block|type|tag|watch|force|hmi|hardware|cfc|to.
+    Missing official Import fails closed (``no_import``).
+    """
+    project = Path(project_path).expanduser().resolve()
+    xml = Path(xml_path).expanduser().resolve()
+    if not xml.is_file():
+        raise FileNotFoundError(f"XML file not found: {xml}")
+
+    args = [
+        "import-xml",
+        "--project",
+        str(project),
+        "--xml",
+        str(xml),
+        "--kind",
+        kind or "auto",
+    ]
+    if plc_name:
+        args.extend(["--plc", plc_name])
+    if not overwrite:
+        args.append("--no-overwrite")
+
+    result = openness_cli(*args, timeout_s=timeout_s)
+    if not result.get("ok"):
+        raise RuntimeError(
+            format_openness_failure(result, project_path=project, action="import")
+        )
+    return result
+
+
+def generate_source_from_block_via_openness_cli(
+    project_path: str | Path,
+    block_name: str,
+    *,
+    out: str | Path | None = None,
+    plc_name: str = "",
+    timeout_s: int = 600,
+) -> dict[str, Any]:
+    """Generate SCL from a writable non-safety block via GenerateSourceFromBlocks."""
+    project = Path(project_path).expanduser().resolve()
+    args = [
+        "generate-source-from-block",
+        "--project",
+        str(project),
+        "--block",
+        block_name,
+    ]
+    if out:
+        args.extend(["--out", str(Path(out).expanduser().resolve())])
+    if plc_name:
+        args.extend(["--plc", plc_name])
+    result = openness_cli(*args, timeout_s=timeout_s)
+    if not result.get("ok"):
+        raise RuntimeError(
+            format_openness_failure(
+                result, project_path=project, action="generate_source_from_block"
+            )
+        )
+    return result
+
+
+def retrieve_archive_via_openness_cli(
+    archive_path: str | Path,
+    *,
+    out: str | Path,
+    plc_name: str = "",
+    timeout_s: int = 600,
+) -> Path:
+    """Retrieve ``.zap*`` via official Openness ``Projects.Retrieve``."""
+    archive = Path(archive_path).expanduser().resolve()
+    out_dir = Path(out).expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    args = [
+        "retrieve",
+        "--archive",
+        str(archive),
+        "--out-dir",
+        str(out_dir),
+    ]
+    if plc_name:
+        args.extend(["--plc", plc_name])
+    result = openness_cli(*args, timeout_s=timeout_s)
+    if not result.get("ok"):
+        raise RuntimeError(
+            format_openness_failure(result, project_path=archive, action="retrieve")
+        )
+    retrieve = result.get("retrieve") if isinstance(result.get("retrieve"), dict) else result
+    project_path = Path(str((retrieve or {}).get("projectPath") or ""))
+    if not project_path.is_file():
+        from agents.plc.tia.importer import find_apxx_files
+
+        found = find_apxx_files(out_dir)
+        if found:
+            return found[0]
+        raise RuntimeError(
+            format_openness_failure(
+                {"message": f"Retrieve reported ok but no .apxx under {out_dir}"},
+                project_path=archive,
+                action="retrieve",
+            )
+        )
+    return project_path
+
+
+def try_retrieve_archive_via_openness_cli(
+    archive_path: str | Path,
+    *,
+    out: str | Path,
+    plc_name: str = "",
+    timeout_s: int = 600,
+) -> Path | None:
+    """Best-effort Retrieve; None when Openness/Portal/API is unavailable (Linux unzip fallback)."""
+    try:
+        return retrieve_archive_via_openness_cli(
+            archive_path, out=out, plc_name=plc_name, timeout_s=timeout_s
+        )
+    except Exception:  # noqa: BLE001 — caller falls back to ZIP extract
+        return None

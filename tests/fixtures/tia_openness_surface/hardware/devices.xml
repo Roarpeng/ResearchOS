@@ -3,6 +3,7 @@
   <Device Name="PLC_1" TypeIdentifier="OrderNumber:6ES7 515-2AM02-0AB0/V2.9" Failsafe="true" Address="192.168.0.1">
     <DeviceItem Name="CPU_1515F" TypeIdentifier="OrderNumber:6ES7 515-2AM02-0AB0" Slot="0" Failsafe="true">
       <Subnet Name="PN/IE_1" Kind="Subnet" />
+      <NetworkInterface Name="X1" Kind="ProfinetInterface" Address="192.168.0.1" InterfaceType="PN" />
     </DeviceItem>
     <Subnet Name="PN/IE_1" Kind="Subnet" />
   </Device>
