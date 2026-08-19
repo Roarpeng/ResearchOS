@@ -93,6 +93,30 @@ def is_inconsistent_export_error(text: str) -> bool:
     )
 
 
+def _looks_like_missing_powershell(text: str) -> bool:
+    """Linux Docker Gateway used to spawn ``powershell`` and raise Errno 2."""
+    t = (text or "").lower()
+    if "powershell" not in t:
+        return False
+    return (
+        "no such file" in t
+        or "errno 2" in t
+        or "winerror 2" in t
+        or "the system cannot find" in t
+        or "not found" in t
+    )
+
+
+def _looks_like_missing_windows_openness_host(text: str) -> bool:
+    """C# CLI / net481 exe is absent or not executable on this host."""
+    t = (text or "").lower()
+    return (
+        "tiaopenness.server" in t
+        or ("dotnet" in t and ("no such file" in t or "errno 2" in t))
+        or "exec format error" in t
+    )
+
+
 def format_openness_failure(
     payload_or_exc: Any,
     *,
@@ -112,6 +136,12 @@ def format_openness_failure(
             + (f"工程: {proj}\n" if proj else "")
             + f"详情: {text}"
         )
+    if _looks_like_missing_powershell(text) or (
+        os.name != "nt" and _looks_like_missing_windows_openness_host(text)
+    ):
+        from agents.plc.tia.importer import openness_linux_unsupported_guidance
+
+        return openness_linux_unsupported_guidance(project_path)
     if action == "export" and is_inconsistent_export_error(text):
         return (
             "TIA Openness 已打开工程，但程序块/UDT 处于**不一致（Inconsistent）**状态，"

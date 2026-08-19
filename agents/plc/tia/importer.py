@@ -158,6 +158,11 @@ def _adapter_script() -> Path:
     return root / "industrial" / "tia_adapter" / "ExportProject.ps1"
 
 
+def _is_windows() -> bool:
+    """TIA Openness C# CLI and PowerShell adapter require a Windows host."""
+    return os.name == "nt"
+
+
 def _infer_tia_version(project_path: Path, explicit: str = "") -> str:
     if explicit:
         return explicit
@@ -317,8 +322,11 @@ def export_apxx_via_openness(
     Preference order:
     1. Export cache hit (same apxx fingerprint) — skip Openness
     2. C# TiaOpenness.Server CLI (`RESEARCHOS_TIA_OPENNESS=cli|auto`, default auto)
-    3. PowerShell industrial/tia_adapter/ExportProject.ps1
+    3. PowerShell industrial/tia_adapter/ExportProject.ps1 — **Windows only**
 
+    Linux / Docker Gateway never spawns ``powershell``: Openness CLI is a
+    Windows ``net481`` exe. On cache miss, raise
+    ``openness_linux_unsupported_guidance`` (HostGateway or SimaticML XML).
     Requires TIA Portal + Openness on this machine (cache miss).
     Returns (export_dir, notes, timings_ms).
     """
@@ -404,12 +412,18 @@ def export_apxx_via_openness(
                 extractor=extractor,
             )
             return path, notes, timings
-        except Exception:
+        except Exception as exc:
             if extractor is not None:
                 extractor.close()
+            if not _is_windows():
+                # C# CLI (TiaOpenness.Server.exe) cannot run in Linux.
+                raise RuntimeError(openness_linux_unsupported_guidance(original)) from exc
             if mode != "auto":
                 raise
-            # fall through to PowerShell
+            # fall through to PowerShell (Windows only)
+
+    if not _is_windows():
+        raise RuntimeError(openness_linux_unsupported_guidance(original))
 
     script = _adapter_script()
     if not script.is_file():
@@ -560,6 +574,9 @@ def diagnose_extracted_tree(root: Path) -> dict[str, object]:
     }
 
 
+HOST_GATEWAY_HINT = "Start-ResearchOS.cmd HostGateway"
+
+
 def openness_unavailable_guidance(apxx: Path | None = None) -> str:
     name = apxx.name if apxx else ".apxx"
     return (
@@ -573,6 +590,39 @@ def openness_unavailable_guidance(apxx: Path | None = None) -> str:
         "3) 【仅交换工程】请同事直接提供 Openness 导出目录或 SimaticML XML，而不是只给 .zap。\n"
         "说明：工程包内的 ConversionLog / GSDML 等 XML 不是程序逻辑；"
         "把 .zap 改名为 .zip 只能解压出 .apxx，仍然不能离线读逻辑。"
+    )
+
+
+def openness_linux_unsupported_guidance(apxx: Path | str | None = None) -> str:
+    """Bilingual guidance when Openness cannot run on Linux / non-Windows.
+
+    .zap → .ap19 unzip is expected; TiaOpenness.Server.exe and the PowerShell
+    adapter are Windows-only. Supported path is HostGateway on the TIA host.
+    """
+    if isinstance(apxx, (str, Path)) and str(apxx).strip():
+        name = Path(apxx).name
+    else:
+        name = ".ap19/.apxx"
+    return (
+        "Linux 无法运行 TIA Openness（Windows-only）。\n"
+        f".zap 解压为 {name} 是预期行为；ResearchOS 不能在 Linux 上读取 .apxx 二进制工程，"
+        "也不能启动 `TiaOpenness.Server.exe` 或 PowerShell 适配器。\n\n"
+        "请改用下列方式之一：\n"
+        f"1) 【本机已安装 TIA Portal】在 Windows 运行 `{HOST_GATEWAY_HINT}`"
+        "（宿主 Python Gateway + Docker nginx），由本机 Openness 解析 .zap/.ap19。\n"
+        "2) 【无 Openness / 仅 Linux Docker】上传 SimaticML XML，或含 `Blocks/*.xml` 的 ZIP"
+        "（无需 Openness）。\n\n"
+        "Linux cannot run TIA Openness. Unzipping .zap to .ap19 is expected.\n"
+        "Windows Openness CLI (TiaOpenness.Server.exe) cannot run in Linux.\n"
+        f"Use `{HOST_GATEWAY_HINT}` when TIA Portal is on this Windows machine "
+        "(host Python Gateway + Docker nginx), or upload SimaticML XML / a Blocks ZIP."
+    )
+
+
+def is_linux_openness_unsupported_error(text: str) -> bool:
+    t = text or ""
+    return HOST_GATEWAY_HINT in t and (
+        "Linux cannot run TIA Openness" in t or "Linux 无法运行 TIA Openness" in t
     )
 
 
@@ -695,6 +745,8 @@ def resolve_project_input(
             # Bare / incomplete .apxx tree — surface packaging guidance first.
             if "孤立的 TIA 工程" in msg:
                 raise
+            if is_linux_openness_unsupported_error(msg):
+                raise
             # Openness already ran (license / export failure): surface that, don't wrap as "no XML".
             if is_license_error(msg) or "TIA Openness" in msg or "Openness" in msg:
                 ap = extracted if extracted.is_file() else None
@@ -767,6 +819,8 @@ def resolve_project_input(
 
             msg = str(exc)
             if "孤立的 TIA 工程" in msg or "incomplete" in msg.lower():
+                raise
+            if is_linux_openness_unsupported_error(msg):
                 raise
             if is_license_error(msg) or "TIA Openness" in msg or "Openness" in msg:
                 wrapped = format_openness_failure(exc, project_path=p, action="export")
