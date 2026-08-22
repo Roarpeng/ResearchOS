@@ -1,0 +1,12 @@
+# Offline refresh from an existing researchos-gateway image when registry DNS is unavailable.
+FROM researchos-gateway:latest
+
+WORKDIR /app
+
+COPY pyproject.toml README.md researchos_shared.py ./
+COPY gateway ./gateway
+COPY agents ./agents
+COPY industrial ./industrial
+COPY tools ./tools
+COPY knowledge ./knowledge
+COPY runtime ./runtime
