@@ -6,12 +6,13 @@ from agents.planner import build_rule_based_plan, plan_from_goal, planner_node
 from runtime.researchos_runtime.state import initial_state
 
 
-def test_rule_based_plan_has_six_steps():
+def test_rule_based_plan_has_seven_steps():
     plan = build_rule_based_plan("对比海康与大华")
     assert plan["approved"] is False
     agents = [s["agent"] for s in plan["steps"]]
     assert agents == [
         "research",
+        "etl",
         "analysis",
         "citation",
         "reviewer",

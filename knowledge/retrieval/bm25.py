@@ -8,6 +8,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from knowledge.retrieval.filters import payload_matches_filters
+
 
 _TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 
@@ -97,7 +99,12 @@ class BM25Index:
         df = self._df.get(term, 0)
         return math.log(1.0 + (n - df + 0.5) / (df + 0.5))
 
-    def search(self, query: str, top_k: int = 10) -> list[BM25Hit]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        filters: dict[str, Any] | None = None,
+    ) -> list[BM25Hit]:
         q_terms = tokenize(query)
         if not q_terms or not self._docs:
             return []
@@ -112,16 +119,21 @@ class BM25Index:
                 dl = self._doc_len.get(chunk_id, 0)
                 denom = f + self.k1 * (1 - self.b + self.b * dl / avgdl)
                 scores[chunk_id] += idf * (f * (self.k1 + 1)) / denom
-        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         hits: list[BM25Hit] = []
         for chunk_id, score in ranked:
             doc = self._docs[chunk_id]
+            payload = doc["payload"]
+            if filters and not payload_matches_filters(payload, filters):
+                continue
             hits.append(
                 BM25Hit(
                     chunk_id=chunk_id,
                     score=float(score),
                     text=doc["text"],
-                    payload=doc["payload"],
+                    payload=payload,
                 )
             )
+            if len(hits) >= top_k:
+                break
         return hits

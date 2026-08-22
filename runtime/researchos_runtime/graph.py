@@ -25,6 +25,7 @@ logger = logging.getLogger("researchos.runtime.graph")
 
 WORKER_AGENTS = (
     "research",
+    "etl",
     "analysis",
     "citation",
     "reviewer",
@@ -37,6 +38,7 @@ RouteName = Literal[
     "supervisor",
     "planner",
     "research",
+    "etl",
     "analysis",
     "citation",
     "reviewer",
@@ -104,7 +106,7 @@ def _wrap_agent(agent_name: str):
                 meta["writer_draft_mode"] = True
             else:
                 # Reset research chain for one more pass
-                reset_agents = {"research", "analysis", "citation", "reviewer", "plc"}
+                reset_agents = {"research", "etl", "analysis", "citation", "reviewer", "plc"}
                 plan = {
                     **plan,
                     "steps": [

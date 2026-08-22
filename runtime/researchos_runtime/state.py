@@ -78,6 +78,9 @@ class Citation(TypedDict, total=False):
     quote: str
     url: str
     title: str
+    trust_level: str
+    publisher: str
+    accessed_at: str
 
 
 class AnalysisBlock(TypedDict, total=False):

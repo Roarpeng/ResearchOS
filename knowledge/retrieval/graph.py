@@ -10,11 +10,65 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from knowledge.models import Entity, Relation
+from knowledge.retrieval.filters import payload_matches_filters
 from knowledge.settings import KnowledgeSettings, get_settings
 
 logger = logging.getLogger("researchos.knowledge.graph")
 
 _NEO4J_PRIMITIVES = (str, int, float, bool)
+
+# Typed node labels / relationship types (docs/knowledge/04-entity-and-schema.md).
+_ENTITY_TYPES = {
+    "Product",
+    "Feature",
+    "Specification",
+    "PainPoint",
+    "Review",
+    "News",
+    "Company",
+    "Patent",
+    "Document",
+    "Chunk",
+    "Standard",
+    "Version",
+}
+
+_RELATION_TYPES = {
+    "HAS_FEATURE",
+    "COMPARES",
+    "REFERENCES",
+    "UPDATED_BY",
+    "PRODUCED_BY",
+}
+
+
+def _safe_label(entity_type: str | None, key: str = "") -> str:
+    """Resolve a typed node label from an entity type or canonical_key prefix.
+
+    Falls back to the generic ``Entity`` label when the type is unknown, so
+    non-whitelisted callers keep working (back-compat).
+    """
+    if entity_type and entity_type in _ENTITY_TYPES:
+        return entity_type
+    prefix = key.split(":", 1)[0] if ":" in key else ""
+    for known in _ENTITY_TYPES:
+        if known.lower() == prefix.lower():
+            return known
+    return "Entity"
+
+
+def _safe_rel_type(rel_type: str | None) -> str:
+    if rel_type and rel_type in _RELATION_TYPES:
+        return rel_type
+    return "RELATED"
+
+
+def _node_merge_clause(var: str, key: str, entity_type: str | None) -> str:
+    """Build a MERGE clause for a node (typed label, chunk-aware key)."""
+    label = _safe_label(entity_type, key)
+    if label == "Chunk":
+        return f"MERGE ({var}:Chunk {{chunk_id: $p_{var}}})"
+    return f"MERGE ({var}:{label} {{canonical_key: $p_{var}}})"
 
 
 def neo4j_safe_properties(props: dict[str, Any] | None) -> dict[str, Any]:
@@ -81,19 +135,47 @@ class InMemoryKnowledgeGraph:
     def __init__(self) -> None:
         self.entities: dict[str, Entity] = {}
         self.relations: list[Relation] = []
+        self.chunks: dict[str, dict[str, Any]] = {}
+        self.payloads: dict[str, dict[str, Any]] = {}
         self._chunk_links: dict[str, set[str]] = {}
 
     def clear(self) -> None:
         self.entities.clear()
         self.relations.clear()
+        self.chunks.clear()
+        self.payloads.clear()
         self._chunk_links.clear()
+
+    def register_payloads(self, payloads: dict[str, dict[str, Any]]) -> None:
+        for cid, p in payloads.items():
+            self.payloads[str(cid)] = p
+
+    def _materialize_node(self, key: str, node_type: str | None) -> None:
+        """Ensure a referenced non-Chunk node exists (Neo4j MERGE parity)."""
+        if node_type == "Chunk":
+            self.chunks.setdefault(str(key), {"chunk_id": str(key), "type": "Chunk"})
+            return
+        if str(key) in self.entities:
+            return
+        label = _safe_label(node_type, str(key))
+        if label == "Entity":
+            return
+        self.entities[str(key)] = Entity(
+            type=label,
+            canonical_key=str(key),
+            name=str(key),
+            properties={},
+        )
 
     def upsert_entities(self, entities: list[Entity]) -> int:
         for e in entities:
             existing = self.entities.get(e.canonical_key)
             if existing:
+                # Merge on (type, name) — canonical_key already encodes both.
                 existing.properties.update(e.properties)
                 existing.name = e.name or existing.name
+                if e.type:
+                    existing.type = e.type
             else:
                 self.entities[e.canonical_key] = e
         return len(entities)
@@ -102,6 +184,8 @@ class InMemoryKnowledgeGraph:
         n = 0
         for r in relations:
             self.relations.append(r)
+            self._materialize_node(r.from_key, r.from_type)
+            self._materialize_node(r.to_key, r.to_type)
             chunk_id = (r.properties or {}).get("chunk_id")
             if chunk_id:
                 self._chunk_links.setdefault(str(chunk_id), set()).add(r.from_key)
@@ -159,9 +243,19 @@ class InMemoryKnowledgeGraph:
             "nodes": [e.model_dump() for e in nodes[:top_k]],
             "edges": [r.model_dump() for r in edges[: top_k * 2]],
             "evidence_chunk_ids": evidence[:top_k],
+            "chunks": [dict(c) for c in list(self.chunks.values())[:top_k]],
         }
 
-    def search_chunks(self, query: str, top_k: int = 10) -> list[GraphHit]:
+    def search_chunks(
+        self,
+        query: str,
+        top_k: int = 10,
+        filters: dict[str, Any] | None = None,
+        payloads: dict[str, dict[str, Any]] | None = None,
+    ) -> list[GraphHit]:
+        pld = dict(self.payloads)
+        if payloads:
+            pld.update(payloads)
         q = query.lower()
         tokens = set(re.findall(r"[\w\u4e00-\u9fff]+", q))
         scored: dict[str, float] = {}
@@ -190,11 +284,23 @@ class InMemoryKnowledgeGraph:
                 paths.setdefault(str(chunk_id), []).append(
                     {"relation": rel.type, "from": rel.from_key, "to": rel.to_key}
                 )
-        ranked = sorted(scored.items(), key=lambda x: x[1], reverse=True)[:top_k]
-        return [
-            GraphHit(chunk_id=cid, score=score, paths=paths.get(cid, []))
-            for cid, score in ranked
-        ]
+        ranked = sorted(scored.items(), key=lambda x: x[1], reverse=True)
+        hits: list[GraphHit] = []
+        for cid, score in ranked:
+            payload = pld.get(cid, {})
+            if filters and not payload_matches_filters(payload, filters):
+                continue
+            hits.append(
+                GraphHit(
+                    chunk_id=cid,
+                    score=score,
+                    paths=paths.get(cid, []),
+                    payload=payload,
+                )
+            )
+            if len(hits) >= top_k:
+                break
+        return hits
 
 
 class Neo4jKnowledgeGraph:
@@ -210,9 +316,23 @@ class Neo4jKnowledgeGraph:
     def upsert_entities(self, entities: list[Entity]) -> int:
         with self._driver.session() as session:
             for e in entities:
+                label = _safe_label(e.type, e.canonical_key)
+                if label == "Chunk":
+                    # Materialize a Chunk node by chunk_id instead of canonical_key.
+                    session.run(
+                        """
+                        MERGE (n:Chunk {chunk_id: $key})
+                        SET n.type = $type, n.name = $name, n += $props
+                        """,
+                        key=e.canonical_key,
+                        type="Chunk",
+                        name=e.name,
+                        props=neo4j_safe_properties(e.properties),
+                    )
+                    continue
                 session.run(
-                    """
-                    MERGE (n:Entity {canonical_key: $key})
+                    f"""
+                    MERGE (n:{label} {{canonical_key: $key}})
                     SET n.type = $type, n.name = $name, n += $props
                     """,
                     key=e.canonical_key,
@@ -225,16 +345,18 @@ class Neo4jKnowledgeGraph:
     def upsert_relations(self, relations: list[Relation]) -> int:
         with self._driver.session() as session:
             for r in relations:
+                rtype = _safe_rel_type(r.type)
+                merge_a = _node_merge_clause("a", r.from_key, r.from_type)
+                merge_b = _node_merge_clause("b", r.to_key, r.to_type)
                 session.run(
-                    """
-                    MERGE (a:Entity {canonical_key: $from_key})
-                    MERGE (b:Entity {canonical_key: $to_key})
-                    MERGE (a)-[rel:RELATED {type: $rtype}]->(b)
+                    f"""
+                    {merge_a}
+                    {merge_b}
+                    MERGE (a)-[rel:{rtype}]->(b)
                     SET rel += $props
                     """,
-                    from_key=r.from_key,
-                    to_key=r.to_key,
-                    rtype=r.type,
+                    p_a=r.from_key,
+                    p_b=r.to_key,
                     props=neo4j_safe_properties(r.properties),
                 )
         return len(relations)
@@ -249,10 +371,14 @@ class Neo4jKnowledgeGraph:
     ) -> dict[str, Any]:
         params = params or {}
         cypher = """
-        MATCH (n:Entity)
-        WHERE toLower(n.name) CONTAINS toLower($q)
-           OR toLower(n.canonical_key) CONTAINS toLower($q)
-        OPTIONAL MATCH (n)-[r:RELATED]->(m)
+        MATCH (n)
+        WHERE (exists(n.type) OR exists(n.chunk_id))
+          AND (
+            toLower(coalesce(n.name, '')) CONTAINS toLower($q)
+            OR toLower(coalesce(n.canonical_key, '')) CONTAINS toLower($q)
+            OR toLower(coalesce(n.chunk_id, '')) CONTAINS toLower($q)
+          )
+        OPTIONAL MATCH (n)-[r]->(m)
         RETURN n, collect(r) as rels, collect(m) as ms
         LIMIT $limit
         """
@@ -263,22 +389,27 @@ class Neo4jKnowledgeGraph:
             evidence: list[str] = []
             for record in result:
                 n = record["n"]
+                n_type = n.get("type") or (list(n.labels)[0] if n.labels else None)
+                n_key = n.get("canonical_key") or n.get("chunk_id")
                 nodes.append(
                     {
-                        "type": n.get("type"),
-                        "canonical_key": n.get("canonical_key"),
-                        "name": n.get("name"),
+                        "type": n_type,
+                        "canonical_key": n_key,
+                        "name": n.get("name") or n_key,
                         "properties": dict(n),
                     }
                 )
                 for r, m in zip(record["rels"], record["ms"]):
                     if r is None or m is None:
                         continue
+                    m_type = m.get("type") or (list(m.labels)[0] if m.labels else None)
                     edges.append(
                         {
-                            "type": r.get("type"),
-                            "from_key": n.get("canonical_key"),
-                            "to_key": m.get("canonical_key"),
+                            "type": r.type if hasattr(r, "type") else r.get("type"),
+                            "from_key": n.get("canonical_key") or n.get("chunk_id"),
+                            "to_key": m.get("canonical_key") or m.get("chunk_id"),
+                            "from_type": n_type,
+                            "to_type": m_type,
                             "properties": dict(r),
                         }
                     )
@@ -288,13 +419,28 @@ class Neo4jKnowledgeGraph:
             "nodes": nodes,
             "edges": edges,
             "evidence_chunk_ids": sorted(set(evidence))[:top_k],
+            "chunks": [],
         }
 
-    def search_chunks(self, query: str, top_k: int = 10) -> list[GraphHit]:
+    def search_chunks(
+        self,
+        query: str,
+        top_k: int = 10,
+        filters: dict[str, Any] | None = None,
+        payloads: dict[str, dict[str, Any]] | None = None,
+    ) -> list[GraphHit]:
         data = self.query(query, top_k=top_k)
+        pld = payloads or {}
         hits = []
         for i, cid in enumerate(data.get("evidence_chunk_ids") or []):
-            hits.append(GraphHit(chunk_id=cid, score=1.0 / (i + 1), paths=[]))
+            payload = pld.get(cid, {})
+            if filters and not payload_matches_filters(payload, filters):
+                continue
+            hits.append(
+                GraphHit(chunk_id=cid, score=1.0 / (i + 1), paths=[], payload=payload)
+            )
+            if len(hits) >= top_k:
+                break
         return hits
 
 

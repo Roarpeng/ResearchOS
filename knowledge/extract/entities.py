@@ -31,6 +31,10 @@ _ENTITY_TYPES = {
     "News",
     "Company",
     "Patent",
+    "Document",
+    "Chunk",
+    "Standard",
+    "Version",
 }
 
 _RELATION_TYPES = {
@@ -52,6 +56,7 @@ def extract_from_text(
     *,
     chunk_id: str | None = None,
     section_type: str | None = None,
+    doc_id: str | None = None,
 ) -> tuple[list[Entity], list[Relation]]:
     entities: dict[str, Entity] = {}
     relations: list[Relation] = []
@@ -175,6 +180,27 @@ def extract_from_text(
             )
             break
 
+    # UPDATED_BY: research artifact (Product) -> source Document, when doc scope known.
+    if products and doc_id:
+        doc_key = f"document:{doc_id}"
+        entities[doc_key] = Entity(
+            type="Document",
+            canonical_key=doc_key,
+            name=doc_id,
+            properties={},
+        )
+        for product in products:
+            relations.append(
+                Relation(
+                    type="UPDATED_BY",
+                    from_key=product.canonical_key,
+                    to_key=doc_key,
+                    from_type="Product",
+                    to_type="Document",
+                    properties={"chunk_id": chunk_id, "doc_id": doc_id},
+                )
+            )
+
     return list(entities.values()), relations
 
 
@@ -186,6 +212,7 @@ def extract_from_chunks(chunks: Iterable[Chunk]) -> tuple[list[Entity], list[Rel
             chunk.text,
             chunk_id=chunk.chunk_id,
             section_type=chunk.section_type,
+            doc_id=chunk.doc_id,
         )
         for e in ents:
             entities[e.canonical_key] = e

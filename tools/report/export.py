@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -195,3 +196,88 @@ def export_report(
     result = markdown_to_pdf(markdown, output_dir=base, title=title, basename=basename)
     result["artifact_id"] = f"art_{basename}"
     return result
+
+
+_MARKER_RE = re.compile(r"\[\^(?P<id>[A-Za-z0-9_.:-]+)\]|\[citation:(?P<bid>[A-Za-z0-9_.:-]+)\]")
+_FOOTNOTE_DEF_RE = re.compile(r"^\[\^[A-Za-z0-9_.:-]+\]:", re.MULTILINE)
+_REQUIRED_PROVENANCE = ("url", "source_id", "source", "locator")
+
+
+def validate_citations(
+    markdown: str,
+    citations: list[dict[str, Any]] | None = None,
+    *,
+    on_policy: Literal["strict", "warn"] = "strict",
+) -> dict[str, Any]:
+    """Pre-export citation completeness check (docs/mcp/06-report-export-tools.md).
+
+    Every in-text marker must resolve to a citation entry; every citation must
+    carry minimal provenance (url / source_id / source / locator).
+    """
+    citations = citations or []
+    by_id: dict[str, dict[str, Any]] = {
+        str(c.get("id")): c for c in citations if c.get("id")
+    }
+    body = _FOOTNOTE_DEF_RE.sub("", markdown or "")
+    markers: list[str] = []
+    for match in _MARKER_RE.finditer(body):
+        cid = match.group("id") or match.group("bid") or ""
+        if cid:
+            markers.append(cid)
+
+    unresolved = sorted({m for m in markers if m not in by_id})
+    invalid: list[dict[str, Any]] = []
+    referenced: set[str] = set()
+    for cid in markers:
+        cit = by_id.get(cid)
+        if cit is None:
+            continue
+        referenced.add(cid)
+        if not any(str(cit.get(k) or "").strip() for k in _REQUIRED_PROVENANCE):
+            invalid.append({"id": cid, "reason": "missing_provenance"})
+
+    unreferenced = sorted(set(by_id) - referenced)
+    ok = not unresolved and not invalid
+    result: dict[str, Any] = {
+        "ok": ok,
+        "on_policy": on_policy,
+        "citation_stats": {
+            "total": len(citations),
+            "markers": len(markers),
+            "unresolved_markers": len(unresolved),
+            "invalid_provenance": len(invalid),
+            "unreferenced_citations": len(unreferenced),
+        },
+    }
+    if unresolved:
+        result["unresolved"] = unresolved[:64]
+    if invalid:
+        result["invalid"] = invalid[:64]
+    if unreferenced:
+        result["unreferenced"] = unreferenced[:64]
+    if not ok and on_policy == "strict":
+        result["error"] = "citation_incomplete"
+    return result
+
+
+def report_preview(
+    markdown: str,
+    *,
+    title: str = "ResearchOS Report",
+    citations: list[dict[str, Any]] | None = None,
+    head_chars: int = 1200,
+) -> dict[str, Any]:
+    """Side-effect-free short preview (docs/mcp/06: 可无 PDF)."""
+    text = markdown or ""
+    sections = [ln for ln in text.splitlines() if ln.startswith("## ")]
+    validation = validate_citations(text, citations)
+    return {
+        "ok": True,
+        "title": title,
+        "chars": len(text),
+        "head": text[: max(0, int(head_chars))],
+        "sections": len(sections),
+        "section_titles": sections[:24],
+        "citation_stats": validation["citation_stats"],
+        "citation_check_ok": validation["ok"],
+    }

@@ -6,7 +6,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from tools.report.export import export_report
+from tools.report.export import export_report, report_preview, validate_citations
 
 mcp = FastMCP("report")
 
@@ -28,6 +28,29 @@ def report_export(
         title=title,
         task_id=task_id,
         output_dir=output_dir,
+    )
+
+
+@mcp.tool(name="report.preview")
+def report_preview_tool(
+    markdown: str,
+    title: str = "ResearchOS Report",
+) -> dict[str, Any]:
+    """Side-effect-free short preview with citation stats."""
+    return report_preview(markdown, title=title)
+
+
+@mcp.tool(name="report.validate_citations")
+def report_validate_citations(
+    markdown: str,
+    citations: list[dict[str, Any]] | None = None,
+    on_policy: str = "strict",
+) -> dict[str, Any]:
+    """Pre-export completeness check for in-text citation markers."""
+    return validate_citations(
+        markdown,
+        citations or [],
+        on_policy=on_policy,  # type: ignore[arg-type]
     )
 
 

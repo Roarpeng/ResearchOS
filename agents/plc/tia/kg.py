@@ -1,6 +1,7 @@
 """Knowledge Graph builder — PLC-IR -> typed graph for agent queries.
 
-Node types: Project, Block, Variable, Network, TagTable, Tag
+Node types: Project, Block, Variable, Network, TagTable, Tag,
+            Device, TechnologyObject, Alarm
 Edge types:
   CONTAINS, HAS_INTERFACE,
   CALLS       — OB/FC/FB calls another block (CallInfo)
@@ -10,6 +11,9 @@ Edge types:
                 (Siemens multi-instance nesting; not CALLS, not instance-DB INSTANCE_OF)
   READS / WRITES — signal-level access
   NEXT        — successive callees in one caller
+  HAS_DEVICE  — Project owns a hardware Device (HardwareDevice)
+  RUNS_TO     — Device runs a TechnologyObject (axis/cam/...; best-effort path ownership)
+  HAS_ALARM   — Device owns an Alarm (text list / ProDiag)
 
 Association model (engineer view):
   Main --CALLS--> ce (FC)
@@ -27,6 +31,7 @@ from agents.plc.tia.ir import (
     AccessScope,
     Block,
     BlockType,
+    HardwareDevice,
     InterfaceSection,
     Network,
     PlcProject,
@@ -617,6 +622,47 @@ def _classify_part_io(
             )
 
 
+def _to_kind(to_type: str) -> str:
+    """Coarse TechnologyObject kind from its Openness type (axis / cam / pid / ...)."""
+    t = (to_type or "").lower().strip()
+    for marker in ("axis", "cam", "pid", "servo", "kinematic"):
+        if marker in t:
+            return marker
+    t = t.removeprefix("to_")
+    return t or "to"
+
+
+def _path_components(source_file: str) -> set[str]:
+    """Lowercased path components of a source file (folder-ownership evidence)."""
+    out: set[str] = set()
+    for part in (source_file or "").replace("\\", "/").split("/"):
+        part = part.strip()
+        if part:
+            out.add(part.lower())
+    return out
+
+
+def _owner_device(devices: list[HardwareDevice], source_file: str) -> HardwareDevice | None:
+    """Best-effort owning device: the most specific device name in the file path.
+
+    TechnologyObjects and alarms carry no explicit device reference in PLC-IR,
+    but their exports live under ``plc/<device>/to|alarms``. Matching the longest
+    device name against path components is real ownership evidence — when nothing
+    matches we return None and no edge is created (never invented).
+    """
+    comps = _path_components(source_file)
+    if not comps:
+        return None
+    best: HardwareDevice | None = None
+    best_len = 0
+    for device in devices:
+        name = (device.name or "").strip().lower()
+        if name and name in comps and len(name) > best_len:
+            best = device
+            best_len = len(name)
+    return best
+
+
 def build_knowledge_graph(project: PlcProject) -> PlcKnowledgeGraph:
     kg = PlcKnowledgeGraph()
     project_id = f"Project::{project.name}"
@@ -771,5 +817,70 @@ def build_knowledge_graph(project: PlcProject) -> PlcKnowledgeGraph:
     # CALLS enrichment so inferred interface pins are included. Never invent types.
     _emit_typed_as_edges(kg, project)
     _annotate_nest_depth(kg)
+
+    # -- Device layer -------------------------------------------------------
+    # HardwareDevice → Device nodes owned by the Project (HAS_DEVICE).
+    device_by_name: dict[str, str] = {}
+    for hw in project.hardware:
+        name = (hw.name or "").strip()
+        if not name:
+            continue
+        device_id = f"Device::{name}"
+        kg.add_node(
+            device_id,
+            "Device",
+            name=name,
+            type=hw.device_type,
+            address=hw.address,
+            failsafe=hw.failsafe,
+            rack=hw.rack,
+        )
+        kg.add_edge(project_id, device_id, "HAS_DEVICE")
+        device_by_name.setdefault(name.lower(), device_id)
+
+    # Axis / Servo / cam … → TechnologyObject nodes (kind distinguishes them).
+    for to in project.technology_objects:
+        name = (to.name or "").strip()
+        if not name:
+            continue
+        to_id = f"TechnologyObject::{name}"
+        kg.add_node(
+            to_id,
+            "TechnologyObject",
+            name=name,
+            kind=_to_kind(to.to_type),
+            to_type=to.to_type,
+            version=to.version,
+        )
+        owner = _owner_device(list(project.hardware), to.source_file)
+        if owner is not None and owner.name.lower() in device_by_name:
+            kg.add_edge(
+                device_by_name[owner.name.lower()],
+                to_id,
+                "RUNS_TO",
+                evidence="path_ownership",
+            )
+
+    # Text lists + ProDiag supervisions → Alarm nodes owned by a device.
+    for alarm in [*project.alarms, *project.prodiag]:
+        name = (alarm.name or "").strip()
+        if not name:
+            continue
+        alarm_id = f"Alarm::{name}"
+        kg.add_node(
+            alarm_id,
+            "Alarm",
+            name=name,
+            kind=alarm.kind,
+            texts="; ".join(alarm.texts),
+        )
+        owner = _owner_device(list(project.hardware), alarm.source_file)
+        if owner is not None and owner.name.lower() in device_by_name:
+            kg.add_edge(
+                device_by_name[owner.name.lower()],
+                alarm_id,
+                "HAS_ALARM",
+                evidence="path_ownership",
+            )
 
     return kg

@@ -17,23 +17,25 @@ logger = logging.getLogger("researchos.agents.planner")
 
 DEFAULT_STEPS: list[tuple[str, str, str]] = [
     ("S1", "Gather evidence", "research"),
-    ("S2", "Domain analysis", "analysis"),
-    ("S3", "Normalize citations", "citation"),
-    ("S4", "Quality review", "reviewer"),
-    ("S5", "Write report", "writer"),
-    ("S6", "Persist memory", "memory"),
-]
-
-# Industrial mode (Phase 5): insert the read-only PLC agent after evidence
-# gathering so manual cross-reference precedes analysis.
-INDUSTRIAL_STEPS: list[tuple[str, str, str]] = [
-    ("S1", "Gather evidence", "research"),
-    ("S2", "PLC manual cross-reference", "plc"),
+    ("S2", "ETL ingest knowledge", "etl"),
     ("S3", "Domain analysis", "analysis"),
     ("S4", "Normalize citations", "citation"),
     ("S5", "Quality review", "reviewer"),
     ("S6", "Write report", "writer"),
     ("S7", "Persist memory", "memory"),
+]
+
+# Industrial mode (Phase 5): ETL right after research, then read-only PLC
+# manual cross-reference so knowledge + manuals both precede analysis.
+INDUSTRIAL_STEPS: list[tuple[str, str, str]] = [
+    ("S1", "Gather evidence", "research"),
+    ("S2", "ETL ingest knowledge", "etl"),
+    ("S3", "PLC manual cross-reference", "plc"),
+    ("S4", "Domain analysis", "analysis"),
+    ("S5", "Normalize citations", "citation"),
+    ("S6", "Quality review", "reviewer"),
+    ("S7", "Write report", "writer"),
+    ("S8", "Persist memory", "memory"),
 ]
 
 
@@ -83,7 +85,7 @@ def _try_llm_plan(raw_query: str, *, version: int) -> Plan | None:
     prompt = (
         "Return ONLY JSON with keys summary (str) and steps "
         "(list of {id,title,agent,depends_on}). "
-        "Agents must be among: research, analysis, citation, reviewer, writer, memory, plc. "
+        "Agents must be among: research, etl, analysis, citation, reviewer, writer, memory, plc. "
         f"Goal: {raw_query}"
     )
     try:

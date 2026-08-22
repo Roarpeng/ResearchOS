@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, Sequence
 
 from knowledge.embeddings import cosine, embed_query, embed_texts
+from knowledge.retrieval.filters import payload_matches_filters
 from knowledge.settings import KnowledgeSettings, get_settings
 
 logger = logging.getLogger("researchos.knowledge.vector")
@@ -100,7 +101,7 @@ class InMemoryVectorStore:
         hits: list[VectorHit] = []
         for chunk_id, point in self._points.items():
             payload = point["payload"]
-            if filters and not _payload_matches(payload, filters):
+            if filters and not payload_matches_filters(payload, filters):
                 continue
             score = cosine(query_vector, point["vector"])
             hits.append(
@@ -117,35 +118,8 @@ class InMemoryVectorStore:
 
 
 def _payload_matches(payload: dict[str, Any], filters: dict[str, Any]) -> bool:
-    models = filters.get("models")
-    if models:
-        payload_models = payload.get("model") or []
-        if not any(m in payload_models for m in models):
-            # also allow substring match in text/source
-            blob = " ".join(
-                [
-                    str(payload.get("text") or ""),
-                    str(payload.get("source_file") or ""),
-                    " ".join(payload_models),
-                ]
-            )
-            if not any(m in blob for m in models):
-                return False
-    workspace_id = filters.get("workspace_id")
-    if workspace_id is not None and str(payload.get("workspace_id") or "") != str(workspace_id):
-        return False
-    knowledge_space_ids = filters.get("knowledge_space_ids")
-    if knowledge_space_ids:
-        ws = str(payload.get("workspace_id") or "")
-        if ws not in {str(x) for x in knowledge_space_ids}:
-            return False
-    source_files = filters.get("source_files")
-    if source_files and payload.get("source_file") not in source_files:
-        return False
-    section_types = filters.get("section_types")
-    if section_types and payload.get("section_type") not in section_types:
-        return False
-    return True
+    """Back-compat alias for the shared unified metadata-filter matcher."""
+    return payload_matches_filters(payload, filters)
 
 
 class QdrantVectorStore:

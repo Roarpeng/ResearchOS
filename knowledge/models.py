@@ -133,6 +133,7 @@ class Chunk(BaseModel):
     parent_section_id: str | None = None
     content_hash: str | None = None
     model: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def to_payload(self) -> dict[str, Any]:
@@ -155,6 +156,7 @@ class Chunk(BaseModel):
             "parent_section_id": self.parent_section_id,
             "content_hash": self.content_hash,
             "model": self.model,
+            "tags": self.tags,
             "metadata": self.metadata,
         }
 
