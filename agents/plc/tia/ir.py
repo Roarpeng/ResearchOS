@@ -112,6 +112,29 @@ class Compare(Expr):
 
 
 @dataclass(frozen=True)
+class Arith(Expr):
+    """Arithmetic / word-logic chain: ``a + b * c`` (op applied left-fold)."""
+
+    op: str  # + - * / MOD AND OR XOR MIN MAX ** …
+    operands: tuple[Expr, ...]
+
+
+@dataclass(frozen=True)
+class Func(Expr):
+    """Function-style value: ``SIN(x)``, ``SWAP(w)``."""
+
+    name: str
+    args: tuple[Expr, ...]
+
+
+@dataclass(frozen=True)
+class Raw(Expr):
+    """Verbatim SCL text captured from source (e.g. CALCULATE equation)."""
+
+    text: str
+
+
+@dataclass(frozen=True)
 class AssignStmt:
     target: Access | None
     value: Expr

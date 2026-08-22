@@ -290,6 +290,9 @@ def _parse_part(part_el: ET.Element) -> Part:
         tag = _strip_ns(node.tag)
         if tag == "TemplateValue":
             part.template_values[_attr(node, "Name")] = (node.text or "").strip()
+        elif tag == "Equation":
+            # CALCULATE box: <Equation>IN1 + IN2 * IN3</Equation>
+            part.template_values["Equation"] = (node.text or "").strip()
         elif tag == "Attribute" and _attr(node, "Name") == "Negated":
             part.negated = (node.text or "").strip().lower() == "true"
         elif tag == "Access":

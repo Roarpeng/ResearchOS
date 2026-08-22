@@ -21,12 +21,15 @@ deploy/env/.env
 .researchos/
 .graphflow-cache/
 graphflow-out/
+.agents/
+.codex/
 Cursor/
 data/
 *.log
 PLC_Openness_data/
 TIAPortalOpenness*.pdf
 **/*Openness*.pdf
+frontend/tsconfig.tsbuildinfo
 
 
 # IDE / OS

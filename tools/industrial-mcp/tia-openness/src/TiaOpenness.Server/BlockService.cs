@@ -1576,7 +1576,7 @@ public sealed class BlockService
         var names = new List<string>();
         if (compileResult is null) return names;
         var messages = GetProp(compileResult, "Messages") ?? GetProp(compileResult, "CompilerMessages");
-        if (messages is not IEnumerable enumerable or string) return names;
+        if (messages is not IEnumerable enumerable || enumerable is string) return names;
         foreach (var item in enumerable)
         {
             if (item is null) continue;
