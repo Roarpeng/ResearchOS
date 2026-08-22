@@ -91,17 +91,19 @@
 
 ---
 
-## Phase 5 — Engineering Copilot / Industrial（Stub Done）
+## Phase 5 — Engineering Copilot / Industrial（MVP）
 
 **目标：** 工程决策与工业域扩展。
 
-- [x] ROS2 / PLC / CAD 只读连接器 stub
+- [x] ROS2 / PLC / CAD 只读连接器（PLC 全链路、ROS2 工作区扫描；CAD 仍 stub）
 - [x] Decision Memo 模板
 - [x] 扩展指南（`industrial/README.md`）
-- [ ] 垂直场景完整 E2E 演示（后续）
+- [x] TIA 垂直场景端到端（导出→理解→分析→HITL 写回→归档）
+- [x] 设备层知识图谱 + Motion/Failure 只读 Agent
+- [x] mcp-plc 只读分析工具 + 手册知识化检索
 - [ ] 多项目知识隔离与评测仪表盘（后续）
 
-**退出标准：** 连接器扩展指南可用；完整垂直 E2E 待后续迭代。  
+**退出标准：** 连接器扩展指南可用；PLC 垂直 E2E 已打通；数字孪生（Isaac Sim）待后续迭代。  
 **对齐：** `docs/industrial/`、[愿景](./00-Vision.md)
 
 ---

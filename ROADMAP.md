@@ -155,24 +155,27 @@ Planner → Research → ETL → Knowledge Graph + Vector → Analysis Agents �
 
 ---
 
-## Phase 5 — Engineering / Industrial Intelligence（Stub Done）
+## Phase 5 — Engineering / Industrial Intelligence（MVP）
 
 **目标：** 工程副驾驶与工业知识域扩展。
 
-| 方向 | 示例 |
+| 方向 | 状态 |
 |------|------|
-| 工业技术调研模板 | 机器人、视觉、运动控制选型报告 |
-| 领域连接器 | ROS2、PLC 文档源、CAD/BOM 元数据（只读优先） |
-| 仿真/实验知识 | Isaac Sim 等资料入库与对比 |
-| 决策备忘录 | Decision Memo 模板与评审清单 |
-| 权限与多项目空间 | 团队知识隔离 |
+| 工业技术调研模板 | Done（Decision Memo 模板 + industrial_research_v1 报告模板） |
+| 领域连接器 | **PLC：TIA Openness 全链路（导出/IR/KG/SCL/写回/编译门禁）+ 设备层 KG；ROS2 只读工作区扫描连接器 + `mcp-ros2`；CAD/Isaac 仍为 stub** |
+| 仿真/实验知识 | Stub（Isaac Sim 待接入） |
+| 决策备忘录 | Done（模板 + 评审清单 + Motion/Failure 只读 Agent） |
+| 权限与多项目空间 | 基座 Done（workspace_id 贯穿 + scope 角色画像，跨租户管理面待建） |
 
-**退出标准：**
+**新增能力：** `plc.st.parse` / `plc.ld.summarize` / `plc.diff.routines` / 手册知识化检索（`KnowledgeBackedPlcDocsConnector`）/ KG 死块与依赖推导 / HITL 写回闭环。
 
-- 至少一个工业垂直场景的端到端演示
-- 领域 MCP Server 扩展指南稳定
+**退出标准进展：**
 
-**对齐文档：** `docs/industrial/`（待充实）、[愿景](./docs/00-Vision.md)
+- [x] 至少一个工业垂直场景的端到端演示（TIA PLC：导出→理解→分析→HITL 写回→归档）
+- [x] 领域 MCP Server 扩展指南稳定（`mcp-plc`、`mcp-ros2` 已落地）
+- [ ] 多项目知识隔离仪表盘（后续）
+
+**对齐文档：** `docs/industrial/`、[愿景](./docs/00-Vision.md)
 
 ---
 

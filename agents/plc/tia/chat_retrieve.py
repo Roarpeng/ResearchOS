@@ -372,6 +372,10 @@ def _deterministic_answer(retrieval: dict[str, Any], query: str) -> str:
 
 def _try_llm_answer(retrieval: dict[str, Any], query: str, history: list[dict[str, str]] | None) -> str | None:
     """Use PLC-bound chat slot when configured; evidence-gated prompt."""
+    import os
+
+    if os.getenv("RESEARCHOS_DISABLE_LLM", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return None
     try:
         from gateway.app.services import llm_settings as llm
     except Exception as exc:  # noqa: BLE001
