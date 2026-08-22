@@ -4,7 +4,6 @@ import {
   useRef,
   useState,
   type FormEvent,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   cancelTask,
@@ -22,26 +21,52 @@ import {
   unwrapTask,
   waitForPlcJob,
   type PlcCitation,
-  type PlcCoverage,
   type PlcJobDetail,
 } from "./api";
+import { PlcCoverageStrip } from "./plc/CoverageStrip";
+import {
+  canvasGalaxyScore,
+  emptyCanvas,
+  normalizeCanvas,
+  plcCanvasFromJob,
+} from "./plc/canvasModel";
+import {
+  formatPlcProgress,
+  formatWritebackRecap,
+  sclDiffsForFocus,
+  writebackHintForBlock,
+} from "./plc/detail";
 import KnowledgeCanvas, {
   autoLayoutKnowledge,
   type CanvasFocusRequest,
   type KnowledgeCanvasData,
   type KnowledgeNode,
 } from "./KnowledgeCanvas";
-import MarkdownBody from "./MarkdownBody";
 import SettingsPanel from "./SettingsPanel";
-import SclDiffPreview, {
-  looksLikeSclPreviewMessage,
-  previewFocusFromMessage,
-  stripSclPreviewFences,
-  type SclDiffItem,
-} from "./SclDiffPreview";
 import CitationRail from "./CitationRail";
 import InterruptBar from "./InterruptBar";
 import Timeline from "./Timeline";
+import { ChatMessages } from "./workbench/ChatMessages";
+import {
+  attachCitationNodes,
+  chatScopeFromNode,
+  isPlcScopeNode,
+  mentionFromText,
+  pretty,
+  NESTED_CHIPS,
+  ROLE_CHIPS,
+  titleFromQuery,
+  type ChatMsg,
+  type ChatScope,
+  type Topic,
+} from "./workbench/model";
+import { statusTone } from "./workbench/layout";
+import { useTriSplit } from "./workbench/useTriSplit";
+import {
+  mergeCitations,
+  mergeEvents,
+  mergeInterrupts,
+} from "./workbench/collections";
 import {
   collectCitations,
   collectEvents,
@@ -53,599 +78,6 @@ import {
   type InterruptItem,
   type ResearchEvent,
 } from "./researchModel";
-
-type Topic = {
-  id: string;
-  title: string;
-  status: string;
-  route?: string;
-  plcJobId?: string | null;
-};
-
-type ChatScope = {
-  nodeId: string;
-  blockName: string;
-  label: string;
-  kind: string;
-  looksLikeOutput?: boolean;
-  nestDepth?: number;
-};
-
-const ROLE_CHIPS = ["工艺主控", "设备驱动", "厂商库", "可拆辅助", "不要动"] as const;
-const NESTED_CHIPS = ["必须的多实例", "意外耦合"] as const;
-
-type ChatMsg = {
-  id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  at: number;
-  citations?: PlcCitation[];
-  /** Node-scoped user turns render a small `@FB_Motor` prefix. */
-  scopeLabel?: string;
-};
-
-const PLC_SCOPE_KINDS = new Set([
-  "plc_block",
-  "plc_ob",
-  "plc_db",
-  "plc_udt",
-  "plc_instance",
-  "plc_tag",
-]);
-
-const TRI_SIZES_KEY = "researchos.tri.sizes";
-const TRI_DEFAULT = { history: 220, chat: 400 };
-const HISTORY_MIN = 160;
-const HISTORY_MAX = 400;
-const HISTORY_COLLAPSED_W = 48;
-const CHAT_MIN = 280;
-const CHAT_MAX = 720;
-const CANVAS_MIN = 260;
-const PANE_STEP = 24;
-
-function clamp(n: number, lo: number, hi: number) {
-  return Math.min(hi, Math.max(lo, n));
-}
-
-function coverageConvertedPct(cov: PlcCoverage | null | undefined): number {
-  const total = Number(cov?.total_blocks || 0);
-  const converted = Number(cov?.converted || 0);
-  if (!total) return 0;
-  return Math.max(0, Math.min(100, Math.round((converted / total) * 100)));
-}
-
-function topTodoParts(cov: PlcCoverage | null | undefined, limit = 4): Array<{ name: string; count: number }> {
-  const top = cov?.top_untranslated_parts || [];
-  if (top.length) {
-    return top
-      .map((r) => ({ name: String(r.name || ""), count: Number(r.count || 0) }))
-      .filter((r) => r.name)
-      .slice(0, limit);
-  }
-  return Object.entries(cov?.todo_histogram || {})
-    .map(([name, count]) => ({ name, count: Number(count) }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, limit);
-}
-
-function obCallTree(detail: PlcJobDetail | null): string[] {
-  const nodes = detail?.logic_graph?.nodes || [];
-  const edges = (detail?.logic_graph?.edges || []).filter((e) => String(e.type || "") === "CALLS");
-  if (!edges.length) return [];
-  const labelOf = (id: string) => {
-    const n = nodes.find((x) => String(x.id || "") === id);
-    const props = (n?.props || {}) as Record<string, unknown>;
-    const raw = String(n?.label || props.name || id);
-    return raw.includes("::") ? raw.split("::").pop() || raw : raw;
-  };
-  const obs = nodes.filter((n) => {
-    const props = (n.props || {}) as Record<string, unknown>;
-    const t = String(n.type || props.block_type || "").toUpperCase();
-    const name = String(props.name || n.label || "");
-    return t === "OB" || /^ob\d+/i.test(name) || name === "Main";
-  });
-  const roots = obs.length ? obs : nodes.slice(0, 1);
-  const lines: string[] = [];
-  for (const ob of roots.slice(0, 2)) {
-    const oid = String(ob.id || "");
-    const kids = edges
-      .filter((e) => String(e.source || "") === oid)
-      .map((e) => labelOf(String(e.target || "")))
-      .filter(Boolean);
-    if (!kids.length) continue;
-    lines.push(`${labelOf(oid)} → ${kids.slice(0, 8).join(" → ")}`);
-  }
-  return lines.slice(0, 3);
-}
-
-function PlcCoverageStrip({ detail }: { detail: PlcJobDetail | null }) {
-  const cov = detail?.coverage;
-  if (!cov || !Number(cov.total_blocks || 0)) return null;
-  const pct = coverageConvertedPct(cov);
-  const r = 16;
-  const c = 2 * Math.PI * r;
-  const dash = (pct / 100) * c;
-  const todos = topTodoParts(cov);
-  const tree = obCallTree(detail);
-  const rate = Number(cov.todo_rate || 0);
-  const skipChips: string[] = [];
-  const seenSkip = new Set<string>();
-  for (const [cat, row] of Object.entries(cov.categories || {})) {
-    for (const skip of row.skipped_reasons || []) {
-      const reason = String(skip.reason || "").trim();
-      if (!reason) continue;
-      const key = `${cat}:${reason}`;
-      if (seenSkip.has(key)) continue;
-      seenSkip.add(key);
-      skipChips.push(`${cat}/${reason}`);
-      if (skipChips.length >= 8) break;
-    }
-    if (skipChips.length >= 8) break;
-  }
-  return (
-    <div className="plc-coverage" aria-label="转换覆盖率">
-      <svg className="plc-coverage-ring" viewBox="0 0 40 40" width="40" height="40" aria-hidden="true">
-        <circle cx="20" cy="20" r={r} fill="none" stroke="var(--line)" strokeWidth="4" />
-        <circle
-          cx="20"
-          cy="20"
-          r={r}
-          fill="none"
-          stroke="var(--accent)"
-          strokeWidth="4"
-          strokeDasharray={`${dash} ${c - dash}`}
-          strokeLinecap="round"
-          transform="rotate(-90 20 20)"
-        />
-        <text x="20" y="22" textAnchor="middle" fontSize="9" fill="currentColor">
-          {pct}%
-        </text>
-      </svg>
-      <div className="plc-coverage-meta">
-        <div>
-          已转换 {cov.converted ?? 0}/{cov.total_blocks ?? 0} · TODO {rate.toLocaleString(undefined, { style: "percent", maximumFractionDigits: 1 })}
-          {cov.safety_block_count ? ` · F-block ${cov.safety_block_count}` : ""}
-        </div>
-        {todos.length ? (
-          <div className="plc-coverage-todos">
-            未译 Part：
-            {todos.map((t) => (
-              <span key={t.name} className="plc-chip">
-                {t.name} × {t.count}
-              </span>
-            ))}
-          </div>
-        ) : (
-          <div className="muted">无未译 Part</div>
-        )}
-        {tree.length ? <div className="plc-coverage-tree">OB 调用：{tree.join("；")}</div> : null}
-        {skipChips.length ? (
-          <div className="plc-coverage-todos">
-            Openness 跳过：
-            {skipChips.map((s) => (
-              <span key={s} className="plc-chip">
-                {s}
-              </span>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function looksLikeOutputCoil(node: KnowledgeNode): boolean {
-  const label = String(node.label || "");
-  const summary = String(node.summary || "");
-  const quote = String(node.source?.quote || "");
-  const blob = `${label} ${summary} ${quote}`;
-  if (/WRITE/i.test(summary)) return true;
-  if (/^(Q|%Q|Y)\b/i.test(label)) return true;
-  return /%Q|线圈|coil|output|输出/i.test(blob);
-}
-
-function isPlcScopeNode(node: KnowledgeNode | null | undefined): boolean {
-  if (!node) return false;
-  if (PLC_SCOPE_KINDS.has(String(node.kind || ""))) return true;
-  return Boolean(node.source?.type === "plc" && (node.source.block_name || node.source.quote));
-}
-
-function chatScopeFromNode(node: KnowledgeNode): ChatScope {
-  const blockName =
-    String(node.source?.block_name || "").trim() ||
-    (node.kind === "plc_tag" ? String(node.label || "").trim() : "") ||
-    String(node.label || "").trim();
-  return {
-    nodeId: node.id,
-    blockName,
-    label: String(node.label || blockName || node.id),
-    kind: String(node.kind || ""),
-    looksLikeOutput: looksLikeOutputCoil(node),
-    nestDepth: Number(node.source?.nest_depth || 0) || 0,
-  };
-}
-
-type CsOp = { kind?: string; payload?: Record<string, unknown> };
-
-function helperNamesFromChangeset(ops: CsOp[], notes: unknown[], focus: string): string[] {
-  const helpers = new Set<string>();
-  const prefix = `optimize:decouple:${focus}->`;
-  for (const n of notes) {
-    const s = String(n);
-    if (s.startsWith(prefix)) helpers.add(s.slice(prefix.length).split(":")[0].trim());
-  }
-  const newBlocks = new Set(
-    ops
-      .filter((o) => o.payload?.new_block && o.payload?.block_name)
-      .map((o) => String(o.payload?.block_name)),
-  );
-  for (const op of ops) {
-    if (op.kind !== "add_edge") continue;
-    const src = String(op.payload?.source || "");
-    const tgt = String(op.payload?.target || "");
-    const srcN = src.startsWith("Block::") ? src.slice("Block::".length) : src;
-    const tgtN = tgt.startsWith("Block::") ? tgt.slice("Block::".length) : tgt;
-    const props = (op.payload?.props || {}) as Record<string, unknown>;
-    const etype = String(op.payload?.type || "");
-    if (srcN !== focus || !tgtN) continue;
-    if (props.evidence === "decouple_extract" || (etype === "CALLS" && newBlocks.has(tgtN))) {
-      helpers.add(tgtN);
-    }
-  }
-  return [...helpers].filter((h) => h && h !== focus);
-}
-
-function writebackHintForBlock(
-  job: PlcJobDetail | null | undefined,
-  blockName: string,
-): { canWrite: boolean; reason: string } {
-  const name = String(blockName || "").trim();
-  if (!name) {
-    return { canWrite: false, reason: "未选中程序块" };
-  }
-  if (!job?.changeset) {
-    return { canWrite: false, reason: "请先点「优化SCL」生成 HITL 预览（不会自动反写）" };
-  }
-  const cs = job.changeset as { ops?: CsOp[]; notes?: unknown[] };
-  const ops = Array.isArray(cs.ops) ? cs.ops : [];
-  const allowed = new Set([name, ...helperNamesFromChangeset(ops, cs.notes || [], name)]);
-  const importable = ops.some((op) => {
-    const b = String(op.payload?.block_name || "");
-    if (!allowed.has(b)) return false;
-    if (op.kind === "rewrite_scl" || op.kind === "stage_scl_source") {
-      return Boolean(String(op.payload?.scl_text || op.payload?.scl || "").trim());
-    }
-    return op.kind === "stage_xml_import" && Boolean(op.payload?.xml_path);
-  });
-  if (importable) {
-    return {
-      canWrite: true,
-      reason: "确认该块 changeset 并 Openness 反写归档 .zap（不含工程级死块删除）",
-    };
-  }
-  const skipped = (job.scl_skipped || []).find((s) => s.block === name);
-  if (skipped) {
-    const bit = [skipped.reason, skipped.detail].filter(Boolean).join(" — ");
-    return { canWrite: false, reason: bit || "跳过写程序体" };
-  }
-  const block = (job.blocks || []).find((b) => b.name === name);
-  if (block?.is_safety) {
-    return { canWrite: false, reason: "Safety/F-block，拒绝写程序体" };
-  }
-  if (block?.protected) {
-    return { canWrite: false, reason: "Know-how / protected，拒绝写程序体" };
-  }
-  if (block?.interface_only || block?.body_available === false) {
-    return { canWrite: false, reason: "interface-only / 无程序体，无可写 SCL" };
-  }
-  return { canWrite: false, reason: "该块没有可落地的 XML/SCL 写回" };
-}
-
-function sclDiffsForFocus(job: PlcJobDetail | null | undefined, focus?: string | null): SclDiffItem[] {
-  const diffs = job?.scl_diffs || [];
-  const name = String(focus || "").trim();
-  if (!name) return diffs.slice(0, 8);
-  const cs = job?.changeset as { ops?: CsOp[]; notes?: unknown[] } | undefined;
-  const helpers = helperNamesFromChangeset(cs?.ops || [], cs?.notes || [], name);
-  const allowed = new Set([name, ...helpers]);
-  const kept = diffs.filter((d) => allowed.has(String(d.block || "")));
-  const fallback = diffs.filter((d) => String(d.block || "") === name);
-  return (kept.length ? kept : fallback).slice(0, 8);
-}
-
-function formatWritebackRecap(
-  data: Record<string, unknown>,
-  detail: PlcJobDetail | null,
-  scopedBlock?: string | null,
-): string {
-  const wb = (detail?.writeback || data) as Record<string, unknown>;
-  const scope = String(wb.scope || (scopedBlock ? `block:${scopedBlock}` : "project"));
-  const helpers = Array.isArray(wb.helper_blocks)
-    ? (wb.helper_blocks as unknown[]).map((h) => String(h)).filter(Boolean)
-    : [];
-  const lines = ["### 确认反写"];
-  if (scope.startsWith("block:")) {
-    const block = scope.slice("block:".length) || scopedBlock || "?";
-    const extra = helpers.length ? `（含 helper ${helpers.map((h) => `\`${h}\``).join("、")}）` : "";
-    lines.push(`范围：焦点块 \`${block}\`${extra}。未应用工程级死块删除/无关块写回。`);
-  } else {
-    lines.push("范围：**整工程变更集**（含死块标注等全部 ops）。");
-  }
-  const skip = String(wb.skip_reason || "").trim();
-  const openness = (wb.openness || data.openness) as Record<string, unknown> | undefined;
-  const zapArchive = (wb.zap_archive || data.zap_archive) as Record<string, unknown> | undefined;
-  const zap = String(
-    wb.zap_path || data.zap_path || zapArchive?.path || "",
-  ).trim();
-  if (wb.skipped) {
-    lines.push("");
-    lines.push(`**跳过 Openness**：${skip || String(openness?.reason || openness?.note || "无可写操作")}`);
-    lines.push("未导入、未编译、未归档 .zap。");
-    return lines.join("\n");
-  }
-  if (openness?.import_ok === true || (openness?.ok === true && !openness?.skipped)) {
-    lines.push("导入：**成功**");
-  } else if (openness?.skipped) {
-    lines.push(`导入：跳过（${String(openness.note || openness.reason || "未请求 Openness")}）`);
-  } else if (openness) {
-    const err = String(openness.error || openness.reason || "").trim();
-    lines.push("导入：**失败**" + (err ? `（${err}）` : ""));
-  } else {
-    lines.push("导入：未执行");
-  }
-  const compile = (data.compile || wb.compile || openness?.compile) as Record<string, unknown> | undefined;
-  const inner =
-    compile && typeof compile.compile === "object" && compile.compile
-      ? (compile.compile as Record<string, unknown>)
-      : compile;
-  const inconsistent = Array.isArray(inner?.inconsistentBlocks)
-    ? (inner?.inconsistentBlocks as unknown[]).map((x) => String(x))
-    : [];
-  if (inner?.skipped) {
-    lines.push(`编译门控：跳过（${String(inner.message || inner.reason || "")}）`);
-  } else if (inner) {
-    const compiledOk =
-      openness?.compiled_ok === true || (inner.ok === true && openness?.compiled_ok !== false);
-    if (compiledOk && openness?.ok !== false) {
-      lines.push("编译门控：**通过**");
-    } else {
-      const bits = inconsistent.slice(0, 8).map((b) => `\`${b}\``).join("、") || "见 compile 详情";
-      lines.push(`编译门控：**未通过**（不一致块：${bits}）`);
-      lines.push("编译失败时**不会**归档 .zap。");
-    }
-  }
-  if (zap) {
-    lines.push(`归档 .zap：\`${zap}\``);
-  } else if (zapArchive?.skipped) {
-    lines.push("归档 .zap：**跳过**" + (zapArchive.reason ? `（${String(zapArchive.reason)}）` : ""));
-  } else if (zapArchive && zapArchive.ok === false) {
-    lines.push("归档 .zap：**失败**" + (zapArchive.error ? `（${String(zapArchive.error)}）` : ""));
-  }
-  return lines.join("\n");
-}
-
-function mentionFromText(text: string): string | null {
-  const hit = text.match(/^@(\S+)/);
-  return hit?.[1] || null;
-}
-
-function userBubbleParts(m: ChatMsg): { prefix?: string; body: string } {
-  if (m.scopeLabel) {
-    const re = new RegExp(`^@${escapeRegExp(m.scopeLabel)}\\s*`);
-    return { prefix: m.scopeLabel, body: m.content.replace(re, "") || m.content };
-  }
-  const hit = m.content.match(/^@(\S+)\s+([\s\S]+)$/);
-  if (hit) return { prefix: hit[1], body: hit[2] };
-  return { body: m.content };
-}
-
-function attachCitationNodes(citations: PlcCitation[] | undefined, nodes: KnowledgeNode[]): PlcCitation[] {
-  if (!citations?.length) return [];
-  return citations.map((c) => {
-    if (c.nodeId) return c;
-    const block = String(c.block || "").trim();
-    const target = String(c.target || "").trim();
-    const hit =
-      nodes.find((n) => n.id === block || n.source?.block_name === block || n.label === block) ||
-      nodes.find((n) => n.id === target || n.source?.block_name === target || n.label === target);
-    return hit ? { ...c, nodeId: hit.id } : c;
-  });
-}
-
-function UserBubbleText({ message }: { message: ChatMsg }) {
-  const parts = userBubbleParts(message);
-  return (
-    <>
-      {parts.prefix ? <span className="bubble-scope">@{parts.prefix}</span> : null}
-      {parts.body}
-    </>
-  );
-}
-
-function EvidenceChips({
-  citations,
-  onFocusNode,
-}: {
-  citations?: PlcCitation[];
-  onFocusNode?: (ref: string) => void;
-}) {
-  if (!citations?.length) return null;
-  return (
-    <div className="evidence-chips" aria-label="图谱证据">
-      {citations.slice(0, 6).map((c, i) => {
-        const label = [c.block, c.edge_type, c.target ? `→ ${c.target}` : ""]
-          .filter(Boolean)
-          .join(" ");
-        const focusRef = c.nodeId || c.block || "";
-        const title = [c.network, c.snippet || c.evidence].filter(Boolean).join(" · ");
-        if (focusRef && onFocusNode) {
-          return (
-            <button
-              key={`${c.block}-${c.edge_type}-${c.target}-${i}`}
-              type="button"
-              className="plc-chip evidence-chip"
-              title={title || "定位到画布节点"}
-              onClick={() => onFocusNode(focusRef)}
-            >
-              {label || c.snippet || "证据"}
-            </button>
-          );
-        }
-        return (
-          <span
-            key={`${c.block}-${c.edge_type}-${c.target}-${i}`}
-            className="plc-chip"
-            title={title}
-          >
-            {label || c.snippet || "证据"}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-function loadTriSizes(): { history: number; chat: number; historyCollapsed: boolean } {
-  try {
-    const raw = localStorage.getItem(TRI_SIZES_KEY);
-    if (!raw) return { ...TRI_DEFAULT, historyCollapsed: false };
-    const p = JSON.parse(raw) as {
-      history?: unknown;
-      chat?: unknown;
-      historyCollapsed?: unknown;
-    };
-    return {
-      history: clamp(Number(p.history) || TRI_DEFAULT.history, HISTORY_MIN, HISTORY_MAX),
-      chat: clamp(Number(p.chat) || TRI_DEFAULT.chat, CHAT_MIN, CHAT_MAX),
-      historyCollapsed: Boolean(p.historyCollapsed),
-    };
-  } catch {
-    return { ...TRI_DEFAULT, historyCollapsed: false };
-  }
-}
-
-function statusTone(status: string): string {
-  const s = status.toLowerCase();
-  if (/(ready|done|completed|success)/.test(s)) return "ok";
-  if (/(error|fail|cancelled|canceled)/.test(s)) return "bad";
-  if (/(run|busy|pending|wait|progress|interrupt)/.test(s)) return "busy";
-  return "idle";
-}
-
-function formatMsgTime(at: number): string {
-  try {
-    return new Date(at).toLocaleTimeString("zh-CN", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return "";
-  }
-}
-
-function isTypingTarget(el: EventTarget | null): boolean {
-  if (!(el instanceof HTMLElement)) return false;
-  const tag = el.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
-  return el.isContentEditable;
-}
-
-const emptyCanvas = (): KnowledgeCanvasData => ({ nodes: [], edges: [] });
-
-function pretty(value: unknown): string {
-  if (value == null || value === "") return "";
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function titleFromQuery(q: string): string {
-  const t = q.trim().replace(/\s+/g, " ");
-  return t.length > 42 ? `${t.slice(0, 40)}…` : t || "未命名话题";
-}
-
-function formatPlcProgress(detail: PlcJobDetail): string {
-  const steps = detail.progress || [];
-  const running = [...steps].reverse().find((s) => s.status === "running");
-  const last = running || steps[steps.length - 1];
-  if (!last?.title) return `PLC ${detail.status || "…"}`;
-  const dur =
-    typeof last.duration_ms === "number" && last.status !== "running"
-      ? ` · ${last.duration_ms}ms`
-      : "";
-  return `${detail.status}: ${last.title}${dur}`;
-}
-
-function normalizeCanvas(raw: unknown): KnowledgeCanvasData {
-  const c = (raw || {}) as { nodes?: unknown[]; edges?: unknown[] };
-  const nodes = (c.nodes || []).map((n) => {
-    const row = n as Record<string, unknown>;
-    return {
-      id: String(row.id),
-      label: String(row.label || row.id),
-      summary: row.summary ? String(row.summary) : "",
-      kind: row.kind ? String(row.kind) : "insight",
-      x: Number(row.x ?? 80),
-      y: Number(row.y ?? 80),
-      source: (row.source || {}) as KnowledgeNode["source"],
-    };
-  });
-  const edges = (c.edges || []).map((e) => {
-    const row = e as Record<string, unknown>;
-    return {
-      id: String(row.id || `${row.source}-${row.target}`),
-      source: String(row.source),
-      target: String(row.target),
-      label: row.label ? String(row.label) : "",
-      user_created: Boolean(row.user_created),
-    };
-  });
-  return { nodes, edges };
-}
-
-function mergeEvents(prev: ResearchEvent[], next: ResearchEvent[]): ResearchEvent[] {
-  const seen = new Set(prev.map((e) => `${e.seq ?? "s"}|${e.type}|${e.ts}`));
-  const out = [...prev];
-  for (const e of next) {
-    const key = `${e.seq ?? "s"}|${e.type}|${e.ts}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(e);
-  }
-  return out;
-}
-
-function mergeInterrupts(prev: InterruptItem[], next: InterruptItem[]): InterruptItem[] {
-  const seen = new Set(prev.map((i) => i.id || `${i.prompt}|${i.options.join(",")}`));
-  const out = [...prev];
-  for (const it of next) {
-    const key = it.id || `${it.prompt}|${it.options.join(",")}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(it);
-  }
-  return out;
-}
-
-function mergeCitations(prev: CitationItem[], next: CitationItem[]): CitationItem[] {
-  const seen = new Set(prev.map((c) => c.id));
-  const out = [...prev];
-  for (const c of next) {
-    if (seen.has(c.id)) continue;
-    seen.add(c.id);
-    out.push(c);
-  }
-  return out;
-}
 
 export default function App() {
   const [topics, setTopics] = useState<Topic[]>([]);
@@ -660,10 +92,6 @@ export default function App() {
   const [plcJob, setPlcJob] = useState<PlcJobDetail | null>(null);
   const [canvas, setCanvas] = useState<KnowledgeCanvasData>(emptyCanvas);
   const [showSettings, setShowSettings] = useState(false);
-  const initialTri = loadTriSizes();
-  const [historyW, setHistoryW] = useState(initialTri.history);
-  const [chatW, setChatW] = useState(initialTri.chat);
-  const [historyCollapsed, setHistoryCollapsed] = useState(initialTri.historyCollapsed);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [chatScope, setChatScope] = useState<ChatScope | null>(null);
   const [canvasFocus, setCanvasFocus] = useState<CanvasFocusRequest | null>(null);
@@ -674,26 +102,17 @@ export default function App() {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const triRef = useRef<HTMLDivElement | null>(null);
-  const historyWRef = useRef(historyW);
-  const chatWRef = useRef(chatW);
+  const {
+    chatW,
+    historyCollapsed,
+    historyShownW,
+    onTriSplitPointerDown,
+    resetTriSplit,
+    toggleHistoryCollapsed,
+    triRef,
+  } = useTriSplit();
 
   const active = topics.find((t) => t.id === activeId) || null;
-  const historyShownW = historyCollapsed ? HISTORY_COLLAPSED_W : historyW;
-
-  useEffect(() => {
-    historyWRef.current = historyW;
-  }, [historyW]);
-  useEffect(() => {
-    chatWRef.current = chatW;
-  }, [chatW]);
-
-  useEffect(() => {
-    localStorage.setItem(
-      TRI_SIZES_KEY,
-      JSON.stringify({ history: historyW, chat: chatW, historyCollapsed }),
-    );
-  }, [historyW, chatW, historyCollapsed]);
 
   useEffect(() => {
     if (!showSettings) return;
@@ -703,85 +122,6 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [showSettings]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (isTypingTarget(e.target) || e.metaKey || e.ctrlKey) return;
-      if (e.key !== "[" && e.key !== "]") return;
-      e.preventDefault();
-      const grow = e.key === "]";
-      const delta = grow ? PANE_STEP : -PANE_STEP;
-      const hostW = triRef.current?.getBoundingClientRect().width ?? 1200;
-      if (e.altKey) {
-        if (historyCollapsed) {
-          if (grow) setHistoryCollapsed(false);
-          return;
-        }
-        setHistoryW((w) => {
-          const maxHistory = Math.max(
-            HISTORY_MIN,
-            hostW - chatWRef.current - CANVAS_MIN - 14,
-          );
-          return clamp(w + delta, HISTORY_MIN, Math.min(HISTORY_MAX, maxHistory));
-        });
-        return;
-      }
-      setChatW((w) => {
-        const hist = historyCollapsed ? HISTORY_COLLAPSED_W : historyWRef.current;
-        const maxChat = Math.max(CHAT_MIN, hostW - hist - CANVAS_MIN - 14);
-        return clamp(w + delta, CHAT_MIN, Math.min(CHAT_MAX, maxChat));
-      });
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [historyCollapsed]);
-
-  function onTriSplitPointerDown(which: "history" | "chat", e: ReactPointerEvent<HTMLDivElement>) {
-    if (which === "history" && historyCollapsed) return;
-    e.preventDefault();
-    const host = triRef.current;
-    if (!host) return;
-    const el = e.currentTarget;
-    el.setPointerCapture(e.pointerId);
-    document.body.classList.add("col-resizing");
-    const startX = e.clientX;
-    const startHistory = historyW;
-    const startChat = chatW;
-    const hostW = host.getBoundingClientRect().width;
-    const histNow = historyCollapsed ? HISTORY_COLLAPSED_W : startHistory;
-
-    const move = (ev: PointerEvent) => {
-      const dx = ev.clientX - startX;
-      if (which === "history") {
-        const next = clamp(startHistory + dx, HISTORY_MIN, HISTORY_MAX);
-        const maxHistory = Math.max(HISTORY_MIN, hostW - startChat - CANVAS_MIN - 14);
-        setHistoryW(Math.min(next, maxHistory));
-      } else {
-        const next = clamp(startChat + dx, CHAT_MIN, CHAT_MAX);
-        const maxChat = Math.max(CHAT_MIN, hostW - histNow - CANVAS_MIN - 14);
-        setChatW(Math.min(next, maxChat));
-      }
-    };
-    const up = (ev: PointerEvent) => {
-      el.releasePointerCapture(ev.pointerId);
-      document.body.classList.remove("col-resizing");
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  }
-
-  function resetTriSplit(which: "history" | "chat") {
-    if (which === "history") {
-      setHistoryCollapsed(false);
-      setHistoryW(TRI_DEFAULT.history);
-    } else setChatW(TRI_DEFAULT.chat);
-  }
-
-  function toggleHistoryCollapsed() {
-    setHistoryCollapsed((c) => !c);
-  }
 
   async function copyMessage(m: ChatMsg) {
     try {
@@ -950,12 +290,6 @@ export default function App() {
     startNew();
   }
 
-  function canvasGalaxyScore(c: KnowledgeCanvasData | null | undefined): number {
-    if (!c?.edges?.length) return 0;
-    const want = new Set(["CALLS", "USES", "INSTANCE_OF", "TYPED_AS", "DEPENDS_ON"]);
-    return c.edges.filter((e) => want.has(String(e.label || "")) || e.user_created).length;
-  }
-
   function applyCanvasFromTask(task: ReturnType<typeof unwrapTask>, fallback?: unknown) {
     const result = (task.result || {}) as Record<string, unknown>;
     const raw = result.knowledge_canvas ?? fallback;
@@ -984,209 +318,8 @@ export default function App() {
   }
 
   function applyCanvasFromPlcJob(detail: PlcJobDetail) {
-    const blocks = detail.blocks || [];
-    if (!blocks.length && !(detail.logic_graph?.nodes || []).length) return;
-    const projectId = `plc_proj_${detail.id}`;
-    const nodes: KnowledgeNode[] = [
-      {
-        id: projectId,
-        label: String(detail.project_name || detail.id).slice(0, 28),
-        summary: `PLC · ${blocks.length} blocks`,
-        kind: "plc_project",
-        x: 40,
-        y: 40,
-        source: { type: "plc", plc_job_id: detail.id, project: detail.project_name },
-      },
-    ];
-    blocks.slice(0, 120).forEach((b) => {
-      const btype = String(b.type || "Block").toUpperCase();
-      const inst = String(b.instance_of || "").trim();
-      const nestDepth = Number(b.nest_depth || 0);
-      const kind =
-        btype === "OB"
-          ? "plc_ob"
-          : btype === "UDT"
-            ? "plc_udt"
-            : btype === "DB" && inst
-              ? "plc_instance"
-              : btype === "DB"
-                ? "plc_db"
-                : "plc_block";
-      const bits = [btype];
-      if (b.language) bits.push(String(b.language));
-      if (b.networks != null) bits.push(`${b.networks} 网络`);
-      if (inst) bits.push(`实例←${inst}`);
-      if (nestDepth > 0) bits.push(`嵌套深度 ${nestDepth}`);
-      if (b.interface_only || (b.protected && !b.body_available)) {
-        bits.push("接口开放·程序体不可用");
-      } else if (b.protected) {
-        bits.push("Know-how 保护");
-      }
-      nodes.push({
-        id: `plc_b_${detail.id}_${b.name}`,
-        label: b.name,
-        summary: b.comment || bits.join(" · "),
-        kind,
-        x: 0,
-        y: 0,
-        source: {
-          type: "plc",
-          plc_job_id: detail.id,
-          block_name: b.name,
-          block_type: b.type,
-          instance_of: inst || undefined,
-          nest_depth: nestDepth > 0 ? nestDepth : undefined,
-          entity_kind: inst ? "instance" : "block",
-          project: detail.project_name,
-        },
-      });
-    });
-    const known = new Set(nodes.map((n) => n.label));
-    for (const n of detail.knowledge_graph?.nodes || []) {
-      if (String(n.type || "") !== "Block") continue;
-      const props = (n.props || {}) as Record<string, unknown>;
-      const name = String(props.name || String(n.id || "").split("::").pop() || "");
-      if (!name || known.has(name)) continue;
-      known.add(name);
-      const btype = String(props.block_type || "DB").toUpperCase();
-      const external = Boolean(props.external);
-      const nestDepth = Number(props.nest_depth || 0);
-      nodes.push({
-        id: `plc_b_${detail.id}_${name}`,
-        label: name,
-        summary: external
-          ? `${btype} · 多实例/外部引用（图谱）`
-          : Boolean(props.interface_only)
-            ? `${btype} · 接口开放·程序体不可用`
-            : `${btype} · 由依赖引用补全`,
-        kind: external
-          ? "plc_instance"
-          : btype === "OB"
-            ? "plc_ob"
-            : btype === "UDT"
-              ? "plc_udt"
-              : btype === "DB"
-                ? "plc_db"
-                : "plc_block",
-        x: 0,
-        y: 0,
-        source: {
-          type: "plc",
-          plc_job_id: detail.id,
-          block_name: name,
-          block_type: btype,
-          entity_kind: external ? "instance" : "block",
-          instance_of: external
-            ? String(props.instance_of || props.InstanceOfName || "").trim() || undefined
-            : undefined,
-          nest_depth: nestDepth > 0 ? nestDepth : undefined,
-          project: detail.project_name,
-        },
-      });
-    }
-    // Tag tables as entry points (individual tags appear when a block is selected)
-    const tagTables = (detail.knowledge_graph?.nodes || []).filter(
-      (n) => String(n.type || "") === "TagTable",
-    );
-    const tagCountByTable = new Map<string, number>();
-    for (const e of detail.knowledge_graph?.edges || []) {
-      if (String(e.type || "") !== "CONTAINS") continue;
-      const src = String(e.source || "");
-      const tgt = String(e.target || "");
-      if (!src.startsWith("TagTable::") || !tgt.startsWith("Tag::")) continue;
-      const tname = src.slice("TagTable::".length);
-      tagCountByTable.set(tname, (tagCountByTable.get(tname) || 0) + 1);
-    }
-    tagTables.slice(0, 16).forEach((n, i) => {
-      const props = (n.props || {}) as Record<string, unknown>;
-      const name = String(props.name || String(n.id || "").split("::").pop() || `Tags${i}`);
-      if (known.has(name)) return;
-      known.add(name);
-      const count = tagCountByTable.get(name) || 0;
-      nodes.push({
-        id: `plc_tt_${detail.id}_${name}`,
-        label: name,
-        summary: count ? `标签表 · ${count} 个 Tag（点程序块查看 IO 子图）` : "标签表",
-        kind: "plc_tag",
-        x: 0,
-        y: 0,
-        source: {
-          type: "plc",
-          quote: name,
-          plc_job_id: detail.id,
-          project: detail.project_name,
-        },
-      });
-    });
-    const byLabel = new Map<string, string>();
-    nodes.forEach((n) => {
-      byLabel.set(n.label, n.id);
-      byLabel.set(`Block::${n.label}`, n.id);
-      if (n.kind === "plc_tag") byLabel.set(`TagTable::${n.label}`, n.id);
-    });
-    // Knowledge galaxy: CALLS / USES / INSTANCE_OF / TYPED_AS / DEPENDS_ON (full KG)
-    const kgEdges = (detail.knowledge_graph?.edges || []) as Array<{
-      source?: string;
-      target?: string;
-      type?: string;
-      weight?: number;
-    }>;
-    const lgFallback = (detail.logic_graph?.edges || []) as Array<{
-      source?: string;
-      target?: string;
-      type?: string;
-      weight?: number;
-    }>;
-    const rawEdges = (kgEdges.length ? kgEdges : lgFallback)
-      .filter((e) => {
-        const t = String(e.type || "");
-        return (
-          t === "CALLS" ||
-          t === "USES" ||
-          t === "INSTANCE_OF" ||
-          t === "TYPED_AS" ||
-          t === "DEPENDS_ON"
-        );
-      })
-      .slice()
-      .sort((a, b) => {
-        const rank: Record<string, number> = {
-          CALLS: 0,
-          USES: 1,
-          INSTANCE_OF: 2,
-          TYPED_AS: 3,
-          DEPENDS_ON: 4,
-        };
-        return (
-          (rank[String(a.type)] ?? 9) - (rank[String(b.type)] ?? 9) ||
-          Number(b.weight || 1) - Number(a.weight || 1)
-        );
-      });
-    const edges: KnowledgeCanvasData["edges"] = [];
-    const seen = new Set<string>();
-    for (const e of rawEdges) {
-      if (edges.length >= 180) break;
-      const src = String(e.source || "");
-      const tgt = String(e.target || "");
-      const et = String(e.type || "DEPENDS_ON");
-      const sid =
-        byLabel.get(src) || byLabel.get(src.includes("::") ? src.split("::").pop() || "" : src);
-      const tid =
-        byLabel.get(tgt) || byLabel.get(tgt.includes("::") ? tgt.split("::").pop() || "" : tgt);
-      if (!sid || !tid || sid === tid || seen.has(`${sid}|${tid}|${et}`)) continue;
-      seen.add(`${sid}|${tid}|${et}`);
-      edges.push({
-        id: `dep_${edges.length}_${sid}`,
-        source: sid,
-        target: tid,
-        label: et,
-        user_created: false,
-      });
-    }
-    setCanvas({
-      nodes: autoLayoutKnowledge(nodes, edges),
-      edges,
-    });
+    const next = plcCanvasFromJob(detail);
+    if (next) setCanvas(next);
   }
 
   async function hydratePlc(jobId: string) {
@@ -1802,87 +935,16 @@ export default function App() {
                 <div className="welcome-meaning">Research Operating System</div>
               </div>
             ) : null}
-
-            {messages.map((m) => (
-              <div key={m.id} className={`bubble ${m.role}`}>
-                <div className="bubble-meta">
-                  <span className="bubble-time">{formatMsgTime(m.at)}</span>
-                  <button
-                    type="button"
-                    className="bubble-copy"
-                    onClick={() => void copyMessage(m)}
-                    title="复制内容"
-                  >
-                    {copiedId === m.id ? "已复制" : "复制"}
-                  </button>
-                </div>
-                <div className="bubble-body">
-                  {m.role === "assistant" ? (
-                    <>
-                      <MarkdownBody
-                        content={
-                          looksLikeSclPreviewMessage(m.content)
-                            ? stripSclPreviewFences(m.content)
-                            : m.content
-                        }
-                      />
-                      {looksLikeSclPreviewMessage(m.content) ? (
-                        <SclDiffPreview
-                          diffs={sclDiffsForFocus(
-                            plcJob,
-                            previewFocusFromMessage(m.content) ||
-                              (chatScope && chatScope.kind !== "plc_tag"
-                                ? chatScope.blockName
-                                : null),
-                          )}
-                        />
-                      ) : null}
-                      <EvidenceChips citations={m.citations} onFocusNode={onFocusNode} />
-                    </>
-                  ) : (
-                    <UserBubbleText message={m} />
-                  )}
-                  {m.role === "assistant" && /展开\s*SCL/.test(m.content) ? (
-                    <div className="chat-quick">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => {
-                          const hit = m.content.match(/\*\*`([^`]+)`\*\*/);
-                          const block = hit?.[1] || chatScope?.blockName || null;
-                          void sendTurn({
-                            message: block ? `@${block} 展开 SCL` : "展开 SCL",
-                            focusNodeId: chatScope?.nodeId,
-                            blockName: block,
-                            displayUser: "展开 SCL",
-                            scopeLabel: block || undefined,
-                          });
-                        }}
-                      >
-                        展开完整 SCL
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => {
-                          const hit = m.content.match(/\*\*`([^`]+)`\*\*/);
-                          const block = hit?.[1] || chatScope?.blockName || null;
-                          void sendTurn({
-                            message: block ? `@${block} 优化建议` : "优化建议",
-                            focusNodeId: chatScope?.nodeId,
-                            blockName: block,
-                            displayUser: "优化建议",
-                            scopeLabel: block || undefined,
-                          });
-                        }}
-                      >
-                        优化建议
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            ))}
+            <ChatMessages
+              messages={messages}
+              copiedId={copiedId}
+              busy={busy}
+              plcJob={plcJob}
+              chatScope={chatScope}
+              onCopyMessage={copyMessage}
+              onFocusNode={onFocusNode}
+              onSendTurn={sendTurn}
+            />
 
             {interrupts.length > 0 ? (
               <InterruptBar
