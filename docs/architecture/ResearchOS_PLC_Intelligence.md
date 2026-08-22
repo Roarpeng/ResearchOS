@@ -46,6 +46,59 @@ AI Reasoning Agent
 Code Generator
 ```
 
+### Implementation Boundaries
+
+The gateway service layer is separate from the PLC parsing and reasoning engine under `agents/plc/tia/`. The current application-service boundary is:
+
+```text
+Gateway routes
+     |
+gateway/app/services/plc_jobs.py   # compatibility facade and test seams
+     |
+gateway/app/services/plc/
+     |-- paths.py                  # upload allowlist, safe zip handling
+     |-- job_store.py              # jobs, progress, analysis, export, chat history
+     |-- ingest.py                 # TIA import orchestration and source collection
+     |-- logic_graph.py            # OB scan-order and logic-graph refresh
+     |-- changesets.py             # proposals, optimization, HITL write-back
+     |-- chat_intents.py           # intent and @mention parsing
+     |-- evidence/
+     |   |-- blocks.py             # block metadata, focus, IO, calls, titles
+     |   |-- cards.py              # understanding cards and function descriptions
+     |   |-- instances.py          # KG instance lookup and descriptions
+     |   |-- nested.py             # typed AS nesting evidence
+     |   |-- optimize.py           # optimization hints and risk notes
+     |   |-- scl.py                # folded/SCL extraction, resolution, rendering
+     |   |-- shared.py             # shared evidence helpers
+     |   `-- signal.py             # signal-trace rendering
+     |-- chat_evidence.py          # compatibility re-exports for evidence helpers
+     |-- writeback_views.py        # confirmation previews and execution recaps
+     `-- chat_router.py            # chat response orchestration
+```
+
+The frontend mirrors this separation at the application boundary:
+
+```text
+frontend/src/App.tsx               # application-level assembly
+     |-- frontend/src/plc/
+     |   |-- canvasModel.ts        # job-to-canvas normalization and derivations
+     |   |-- detail.ts             # progress, write-back hints, diffs
+     |   |-- CoverageStrip.tsx     # PLC coverage display
+     |   `-- usePlcWorkspace.ts    # PLC workspace state and orchestration
+     `-- frontend/src/workbench/
+         |-- useTriSplit.ts        # tri-pane sizing state
+         |-- layout.ts             # layout constraints and status formatting
+         |-- model.ts              # chat, scope, citation, and message models
+         |-- collections.ts        # events/interrupts/citations merge rules
+         |-- HistoryPane.tsx       # topic history composition
+         |-- ChatPane.tsx          # chat composer and conversation composition
+         |-- ChatMessages.tsx      # message-list rendering
+         |-- ResearchWorkspace.tsx # canvas/timeline/citations composition
+         `-- SettingsModal.tsx     # settings dialog container
+```
+
+New gateway-side logic belongs in the cohesive `plc/` module rather than growing the facade. Facade exports remain a compatibility surface for routers, chat services, and focused tests.
+
 ---
 
 ## 3. Core Modules

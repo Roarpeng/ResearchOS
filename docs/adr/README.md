@@ -31,6 +31,7 @@
 | 0005 | n8n 编排边界（非核心 Runtime） | Accepted | [0005-n8n-orchestration-boundary.md](./0005-n8n-orchestration-boundary.md) |
 | 0006 | 报告管线：Markdown → Typst/Pandoc | Accepted | [0006-report-pipeline-markdown-typst.md](./0006-report-pipeline-markdown-typst.md) |
 | 0007 | 搜索路由器：MCP Search Router | Accepted | [0007-search-router-mcp.md](./0007-search-router-mcp.md) |
+| 0008 | PLC Gateway 与 Workbench 模块边界 | Accepted | [0008-plc-gateway-workbench-module-boundaries.md](./0008-plc-gateway-workbench-module-boundaries.md) |
 
 ## 如何新增 ADR
 
