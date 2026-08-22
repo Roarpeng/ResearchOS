@@ -66,6 +66,9 @@ def test_real_fetch_rejects_oversize(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(crawl_mod.httpx, "Client", FakeClient)
     monkeypatch.setattr(
+        crawl_mod, "validate_url", lambda u, **k: ["93.184.216.34"]
+    )
+    monkeypatch.setattr(
         crawl_mod, "_MAX_BYTES_DEFAULT", 4096, raising=False
     )
     res = fetch("https://example.com/big")
