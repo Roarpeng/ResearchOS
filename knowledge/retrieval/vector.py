@@ -6,7 +6,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol, Sequence
 
-from knowledge.embeddings import cosine, embed_query, embed_texts
+from knowledge.embeddings import (
+    active_embed_model,
+    assert_model_compatible,
+    cosine,
+    embed_query,
+    embed_texts,
+)
 from knowledge.retrieval.filters import payload_matches_filters
 from knowledge.settings import KnowledgeSettings, get_settings
 
@@ -47,6 +53,15 @@ class VectorStore(Protocol):
 
     def delete(self, chunk_id: str) -> None: ...
 
+    def delete_by_doc(self, doc_id: str) -> int: ...
+
+
+def _stamp_model(payload: dict[str, Any]) -> dict[str, Any]:
+    """Stamp the active embedding model per docs/08 one-collection-one-model."""
+    if not payload.get("embed_model"):
+        return {**payload, "embed_model": active_embed_model()}
+    return payload
+
 
 class InMemoryVectorStore:
     def __init__(self) -> None:
@@ -66,7 +81,7 @@ class InMemoryVectorStore:
     ) -> None:
         self._points[chunk_id] = {
             "vector": list(vector),
-            "payload": dict(payload),
+            "payload": _stamp_model(dict(payload)),
             "text": payload.get("text", ""),
         }
 
@@ -86,6 +101,16 @@ class InMemoryVectorStore:
     def delete(self, chunk_id: str) -> None:
         self._points.pop(chunk_id, None)
 
+    def delete_by_doc(self, doc_id: str) -> int:
+        victims = [
+            cid
+            for cid, p in self._points.items()
+            if (p["payload"].get("doc_id") or p["payload"].get("source_id")) == doc_id
+        ]
+        for cid in victims:
+            self._points.pop(cid, None)
+        return len(victims)
+
     def search(
         self,
         query: str | None = None,
@@ -98,9 +123,12 @@ class InMemoryVectorStore:
             if not query:
                 return []
             query_vector = embed_query(query)
+        active = active_embed_model()
         hits: list[VectorHit] = []
         for chunk_id, point in self._points.items():
             payload = point["payload"]
+            if not assert_model_compatible(payload.get("embed_model"), active):
+                continue
             if filters and not payload_matches_filters(payload, filters):
                 continue
             score = cosine(query_vector, point["vector"])
@@ -165,7 +193,7 @@ class QdrantVectorStore:
                 qm.PointStruct(
                     id=abs(hash(chunk_id)) % (2**63 - 1),
                     vector=list(vector),
-                    payload={**payload, "chunk_id": chunk_id},
+                    payload=_stamp_model({**payload, "chunk_id": chunk_id}),
                 )
             ],
         )
@@ -198,6 +226,24 @@ class QdrantVectorStore:
             ),
         )
 
+    def delete_by_doc(self, doc_id: str) -> int:
+        from qdrant_client.http import models as qm
+
+        before = self._client.count(collection_name=self.collection, exact=True).count
+        self._client.delete(
+            collection_name=self.collection,
+            points_selector=qm.FilterSelector(
+                filter=qm.Filter(
+                    should=[
+                        qm.FieldCondition(key="doc_id", match=qm.MatchValue(value=doc_id)),
+                        qm.FieldCondition(key="source_id", match=qm.MatchValue(value=doc_id)),
+                    ]
+                )
+            ),
+        )
+        after = self._client.count(collection_name=self.collection, exact=True).count
+        return max(0, before - after)
+
     def search(
         self,
         query: str | None = None,
@@ -213,11 +259,14 @@ class QdrantVectorStore:
         results = self._client.search(
             collection_name=self.collection,
             query_vector=list(query_vector),
-            limit=top_k,
+            limit=top_k * 3,
         )
+        active = active_embed_model()
         hits: list[VectorHit] = []
         for r in results:
             payload = dict(r.payload or {})
+            if not assert_model_compatible(payload.get("embed_model"), active):
+                continue
             if filters and not _payload_matches(payload, filters):
                 continue
             hits.append(
@@ -228,6 +277,8 @@ class QdrantVectorStore:
                     payload=payload,
                 )
             )
+            if len(hits) >= top_k:
+                break
         return hits
 
 

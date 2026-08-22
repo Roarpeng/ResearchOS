@@ -71,6 +71,23 @@ def vector_embed(texts: list[str]) -> dict[str, Any]:
     return {"vectors": embed_texts(texts)}
 
 
+@mcp.tool(name="vector.delete")
+def vector_delete(chunk_id: str | None = None, doc_id: str | None = None) -> dict[str, Any]:
+    """Delete vectors by chunk_id or all chunks of a doc_id (docs/mcp/05)."""
+    if not chunk_id and not doc_id:
+        return {"ok": False, "error": "invalid_argument", "detail": "chunk_id or doc_id required"}
+    reg = get_registry()
+    deleted = 0
+    if chunk_id:
+        reg.vector.delete(chunk_id)
+        reg.bm25.delete(chunk_id) if hasattr(reg.bm25, "delete") else None
+        reg.chunk_payloads.pop(chunk_id, None)
+        deleted += 1
+    if doc_id:
+        deleted += reg.vector.delete_by_doc(doc_id)
+    return {"ok": True, "deleted": deleted}
+
+
 def main() -> None:
     mcp.run()
 

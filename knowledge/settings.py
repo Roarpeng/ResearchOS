@@ -14,6 +14,7 @@ class KnowledgeSettings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
@@ -22,6 +23,14 @@ class KnowledgeSettings(BaseSettings):
     litellm_master_key: str | None = Field(default=None, alias="LITELLM_MASTER_KEY")
     embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
     embedding_dim: int = Field(default=64, alias="EMBEDDING_DIM")
+    # docs/knowledge/08-embedding-strategy.md configuration model
+    embedding_policy: str = Field(
+        default="prefer_highest_available", alias="EMBEDDING_POLICY"
+    )  # prefer_highest_available | local_only
+    embedding_priority: str = Field(
+        default="voyage,openai,bge_m3,nomic,pseudo_v1", alias="EMBEDDING_PRIORITY"
+    )
+    embedding_require_local: bool = Field(default=False, alias="EMBEDDING_REQUIRE_LOCAL")
 
     qdrant_url: str | None = Field(default=None, alias="QDRANT_URL")
     qdrant_collection: str = Field(default="researchos_chunks", alias="QDRANT_COLLECTION")

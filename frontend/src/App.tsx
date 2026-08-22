@@ -39,6 +39,20 @@ import SclDiffPreview, {
   stripSclPreviewFences,
   type SclDiffItem,
 } from "./SclDiffPreview";
+import CitationRail from "./CitationRail";
+import InterruptBar from "./InterruptBar";
+import Timeline from "./Timeline";
+import {
+  collectCitations,
+  collectEvents,
+  collectInterrupts,
+  normalizeCitations,
+  normalizeEvent,
+  normalizeInterrupts,
+  type CitationItem,
+  type InterruptItem,
+  type ResearchEvent,
+} from "./researchModel";
 
 type Topic = {
   id: string;
@@ -598,6 +612,41 @@ function normalizeCanvas(raw: unknown): KnowledgeCanvasData {
   return { nodes, edges };
 }
 
+function mergeEvents(prev: ResearchEvent[], next: ResearchEvent[]): ResearchEvent[] {
+  const seen = new Set(prev.map((e) => `${e.seq ?? "s"}|${e.type}|${e.ts}`));
+  const out = [...prev];
+  for (const e of next) {
+    const key = `${e.seq ?? "s"}|${e.type}|${e.ts}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+  }
+  return out;
+}
+
+function mergeInterrupts(prev: InterruptItem[], next: InterruptItem[]): InterruptItem[] {
+  const seen = new Set(prev.map((i) => i.id || `${i.prompt}|${i.options.join(",")}`));
+  const out = [...prev];
+  for (const it of next) {
+    const key = it.id || `${it.prompt}|${it.options.join(",")}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(it);
+  }
+  return out;
+}
+
+function mergeCitations(prev: CitationItem[], next: CitationItem[]): CitationItem[] {
+  const seen = new Set(prev.map((c) => c.id));
+  const out = [...prev];
+  for (const c of next) {
+    if (seen.has(c.id)) continue;
+    seen.add(c.id);
+    out.push(c);
+  }
+  return out;
+}
+
 export default function App() {
   const [topics, setTopics] = useState<Topic[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -607,7 +656,7 @@ export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
-  const [interrupts, setInterrupts] = useState<Record<string, unknown>[]>([]);
+  const [interrupts, setInterrupts] = useState<InterruptItem[]>([]);
   const [plcJob, setPlcJob] = useState<PlcJobDetail | null>(null);
   const [canvas, setCanvas] = useState<KnowledgeCanvasData>(emptyCanvas);
   const [showSettings, setShowSettings] = useState(false);
@@ -618,6 +667,9 @@ export default function App() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [chatScope, setChatScope] = useState<ChatScope | null>(null);
   const [canvasFocus, setCanvasFocus] = useState<CanvasFocusRequest | null>(null);
+  const [events, setEvents] = useState<ResearchEvent[]>([]);
+  const [citations, setCitations] = useState<CitationItem[]>([]);
+  const [canvasTab, setCanvasTab] = useState<"canvas" | "timeline" | "citations">("canvas");
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -865,6 +917,9 @@ export default function App() {
     setFile(null);
     setStatus("");
     setInterrupts([]);
+    setEvents([]);
+    setCitations([]);
+    setCanvasTab("canvas");
     setPlcJob(null);
     setPlcJobId(null);
     setChatScope(null);
@@ -1151,6 +1206,9 @@ export default function App() {
     setPlcJobId(null);
     setChatScope(null);
     setCanvasFocus(null);
+    setEvents([]);
+    setCitations([]);
+    setCanvasTab("canvas");
     try {
       const body = await fetchTask(topic.id);
       const task = unwrapTask(body);
@@ -1159,7 +1217,9 @@ export default function App() {
         task.plc_job_id ||
         (typeof result.plc_job_id === "string" ? result.plc_job_id : null);
       setStatus(String(task.status || ""));
-      setInterrupts((task.interrupts as Record<string, unknown>[]) || []);
+      setInterrupts(collectInterrupts(task));
+      setEvents(collectEvents(task));
+      setCitations(collectCitations(task));
       setPlcJobId(linked || null);
       applyCanvasFromTask(task);
       const assistant =
@@ -1226,7 +1286,20 @@ export default function App() {
     wsRef.current = connectResearchStream(id, (event) => {
       const etype = String(event.event_type || event.type || "");
       const payload = (event.payload || {}) as Record<string, unknown>;
+      const ev = normalizeEvent(event);
+      if (ev) setEvents((prev) => mergeEvents(prev, [ev]));
       if (etype === "task.status") setStatus(String(payload.status || ""));
+      if (etype === "interrupt.required" || etype === "interrupt") {
+        setInterrupts((prev) =>
+          mergeInterrupts(prev, normalizeInterrupts([payload]).filter((x) => !x.resolved)),
+        );
+      }
+      if (etype === "interrupt.resolved" || etype === "interrupt_resolved") {
+        setInterrupts([]);
+      }
+      if (etype === "citation.added" || etype === "citation") {
+        setCitations((prev) => mergeCitations(prev, normalizeCitations([payload])));
+      }
       if (etype === "message.delta" && payload.text) {
         setMessages((prev) => {
           const last = prev[prev.length - 1];
@@ -1298,7 +1371,9 @@ export default function App() {
       setTopics((prev) => [topic, ...prev.filter((t) => t.id !== id)]);
       setActiveId(id);
       setStatus(String(task.status || ""));
-      setInterrupts((task.interrupts as Record<string, unknown>[]) || []);
+      setInterrupts(collectInterrupts(task));
+      setEvents((prev) => mergeEvents(prev, collectEvents(task)));
+      setCitations((prev) => mergeCitations(prev, collectCitations(task)));
       pushMsg("assistant", turn.assistant_message || "", {
         citations: attachCitationNodes(turn.citations, canvas.nodes),
       });
@@ -1567,16 +1642,18 @@ export default function App() {
     }
   }
 
-  async function onResume(resolution: string) {
+  async function onResume(resolution: string, interruptId?: string) {
     if (!activeId) return;
     setBusy(true);
     try {
-      await resumeTask(activeId, resolution);
+      await resumeTask(activeId, resolution, interruptId);
       pushMsg("system", resolution);
       const body = await fetchTask(activeId);
       const task = unwrapTask(body);
       setStatus(String(task.status || ""));
-      setInterrupts((task.interrupts as Record<string, unknown>[]) || []);
+      setInterrupts(collectInterrupts(task));
+      setEvents((prev) => mergeEvents(prev, collectEvents(task)));
+      setCitations((prev) => mergeCitations(prev, collectCitations(task)));
       applyCanvasFromTask(task);
     } catch (err) {
       pushMsg("system", err instanceof Error ? err.message : String(err));
@@ -1808,24 +1885,12 @@ export default function App() {
             ))}
 
             {interrupts.length > 0 ? (
-              <div className="interrupt">
-                <div className="row-actions">
-                  <button type="button" disabled={busy} onClick={() => void onResume("approve")}>
-                    批准
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={busy}
-                    onClick={() => void onResume("reject")}
-                  >
-                    拒绝
-                  </button>
-                  <button type="button" className="ghost" disabled={busy} onClick={() => void onCancel()}>
-                    取消
-                  </button>
-                </div>
-              </div>
+              <InterruptBar
+                interrupts={interrupts}
+                busy={busy}
+                onResolve={(id, resolution) => void onResume(resolution, id)}
+                onCancel={() => void onCancel()}
+              />
             ) : null}
             <div ref={chatEndRef} />
           </div>
@@ -1965,11 +2030,33 @@ export default function App() {
           onDoubleClick={() => resetTriSplit("chat")}
         />
 
-        <section className="col canvas" aria-label="画布">
+        <section className="col canvas" aria-label="研究视图">
           <div className="col-head">
-            <h2>画布</h2>
+            <div className="canvas-tabs" role="tablist" aria-label="研究视图">
+              <button
+                type="button"
+                className={canvasTab === "canvas" ? "on" : ""}
+                onClick={() => setCanvasTab("canvas")}
+              >
+                画布
+              </button>
+              <button
+                type="button"
+                className={canvasTab === "timeline" ? "on" : ""}
+                onClick={() => setCanvasTab("timeline")}
+              >
+                时间线
+              </button>
+              <button
+                type="button"
+                className={canvasTab === "citations" ? "on" : ""}
+                onClick={() => setCanvasTab("citations")}
+              >
+                引用{citations.length ? ` ${citations.length}` : ""}
+              </button>
+            </div>
             <div className="col-head-actions">
-              {plcJobId && plcJob?.status === "ready" ? (
+              {canvasTab === "canvas" && plcJobId && plcJob?.status === "ready" ? (
                 <>
                   <button
                     type="button"
@@ -2011,7 +2098,7 @@ export default function App() {
                   ) : null}
                 </>
               ) : null}
-              {plcJobId && plcJob?.export_ready ? (
+              {canvasTab === "canvas" && plcJobId && plcJob?.export_ready ? (
                 <a className="ghost compact" href={plcExportUrl(plcJobId)} target="_blank" rel="noreferrer">
                   导出
                 </a>
@@ -2019,8 +2106,10 @@ export default function App() {
             </div>
           </div>
           <div className="canvas-body canvas-kg">
-            <PlcCoverageStrip detail={plcJob} />
-            <KnowledgeCanvas
+            {canvasTab === "canvas" ? (
+              <>
+                <PlcCoverageStrip detail={plcJob} />
+                <KnowledgeCanvas
               data={canvas}
               logicGraph={
                 plcJob?.logic_graph
@@ -2058,7 +2147,13 @@ export default function App() {
               onAskInChat={onAskInChat}
               focusRequest={canvasFocus}
               busy={busy}
-            />
+                />
+              </>
+            ) : canvasTab === "timeline" ? (
+              <Timeline events={events} />
+            ) : (
+              <CitationRail citations={citations} />
+            )}
           </div>
         </section>
       </div>

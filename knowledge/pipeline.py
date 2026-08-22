@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from knowledge.chunking.semantic import chunk_parse_ir
+from knowledge.embeddings import active_embed_model
 from knowledge.extract.entities import extract_from_chunks
 from knowledge.models import IngestResult
 from knowledge.parsers.router import parse_document
@@ -70,6 +71,10 @@ class KnowledgePipeline:
 
         reg.documents.update_status(meta.doc_id, "embedding")
         payloads = [c.to_payload() for c in chunks]
+        # docs/knowledge/08: every point records its embedding model identity
+        embed_model = active_embed_model(reg.settings)
+        for p in payloads:
+            p["embed_model"] = embed_model
         channels = {"vector": False, "bm25": False, "graph": False}
         warnings = list(ir.warnings)
 

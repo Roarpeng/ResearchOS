@@ -6,6 +6,7 @@ import hashlib
 import logging
 import math
 import struct
+from dataclasses import dataclass
 from typing import Sequence
 
 import httpx
@@ -95,3 +96,132 @@ def embed_texts(
 
 def embed_query(query: str, *, settings: KnowledgeSettings | None = None) -> list[float]:
     return embed_texts([query], settings=settings)[0]
+
+
+# ---------------------------------------------------------------------------
+# Embedding policy (docs/knowledge/08-embedding-strategy.md)
+# ---------------------------------------------------------------------------
+
+EMBEDDING_MODELS: dict[str, dict[str, object]] = {
+    "voyage": {"model": "voyage/voyage-3-large", "dim": 1024, "local": False},
+    "openai": {"model": "text-embedding-3-large", "dim": 3072, "local": False},
+    "bge_m3": {"model": "BAAI/bge-m3", "dim": 1024, "local": True},
+    "nomic": {"model": "nomic-embed-text", "dim": 768, "local": True},
+    # Deterministic offline fallback — always available, tests/air-gap default.
+    "pseudo_v1": {"model": "pseudo-hash-v1", "dim": 64, "local": True},
+}
+
+_CLOUD_KEY_ENV = {
+    "voyage": ("VOYAGE_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+}
+
+
+def _provider_available(provider: str) -> bool:
+    if provider == "pseudo_v1":
+        return True
+    info = EMBEDDING_MODELS.get(provider) or {}
+    env_names = _CLOUD_KEY_ENV.get(provider)
+    if env_names:
+        import os
+
+        return any(os.getenv(name or "", "").strip() for name in env_names if name)
+    if provider == "bge_m3":
+        try:
+            import FlagEmbedding  # noqa: F401
+        except ImportError:
+            return False
+        return True
+    if provider == "nomic":
+        try:
+            import sentence_transformers  # noqa: F401
+        except ImportError:
+            return False
+        return True
+    return False
+
+
+@dataclass
+class EmbeddingPolicy:
+    """Resolved embedding route: one model id + dim per active collection."""
+
+    provider: str
+    dim: int
+
+    @property
+    def slug(self) -> str:
+        return self.provider
+
+    @property
+    def is_local(self) -> bool:
+        return bool((EMBEDDING_MODELS.get(self.provider) or {}).get("local"))
+
+
+def resolve_embedding_policy(
+    settings: KnowledgeSettings | None = None,
+) -> EmbeddingPolicy:
+    """Pick the highest-priority available provider (docs/08 配置模型)."""
+    cfg = settings or get_settings()
+    priority = [p.strip() for p in cfg.embedding_priority.split(",") if p.strip()]
+    require_local = cfg.embedding_require_local or cfg.embedding_policy == "local_only"
+    for provider in priority:
+        info = EMBEDDING_MODELS.get(provider)
+        if info is None:
+            continue
+        if require_local and not info.get("local"):
+            continue
+        if not _provider_available(provider):
+            continue
+        dim = int(info["dim"]) if info.get("dim") else cfg.embedding_dim
+        if provider == "pseudo_v1":
+            dim = cfg.embedding_dim
+        return EmbeddingPolicy(provider=provider, dim=dim)
+    return EmbeddingPolicy(provider="pseudo_v1", dim=cfg.embedding_dim)
+
+
+def collection_name(workspace_id: str, slug: str, dim: int) -> str:
+    """Per docs/08 命名建议: chunks_{workspace}_{model_slug}_{dim}."""
+    safe_ws = "".join(ch if ch.isalnum() else "_" for ch in (workspace_id or "default"))
+    return f"chunks_{safe_ws}_{slug}_{dim}"
+
+
+def active_embed_model(settings: KnowledgeSettings | None = None) -> str:
+    """Model id of the currently resolved embedding route."""
+    return resolve_embedding_policy(settings).provider
+
+
+def embed_with_meta(
+    texts: Sequence[str],
+    *,
+    settings: KnowledgeSettings | None = None,
+) -> tuple[list[list[float]], EmbeddingPolicy]:
+    """Embed via the resolved policy; deterministic fallback guarantees success."""
+    cfg = settings or get_settings()
+    clean = [t if t is not None else "" for t in texts]
+    if not clean:
+        return [], resolve_embedding_policy(cfg)
+    policy = resolve_embedding_policy(cfg)
+    if policy.provider == "pseudo_v1":
+        return [pseudo_embed(t, dim=policy.dim) for t in clean], policy
+    vectors = _litellm_embed(clean, cfg)
+    if vectors is None and policy.provider in {"bge_m3", "nomic"}:
+        # Local model runtimes are optional heavy deps; degrade deterministically.
+        logger.warning("local embedding provider %s unavailable; using pseudo_v1", policy.provider)
+        policy = EmbeddingPolicy(provider="pseudo_v1", dim=cfg.embedding_dim)
+        return [pseudo_embed(t, dim=policy.dim) for t in clean], policy
+    if vectors is not None:
+        return vectors, policy
+    return [pseudo_embed(t, dim=policy.dim) for t in clean], EmbeddingPolicy(
+        provider="pseudo_v1", dim=cfg.embedding_dim
+    )
+
+
+def assert_model_compatible(payload_model: object, active_model: str) -> bool:
+    """True when a stored point may be queried with the active model.
+
+    Points without an ``embed_model`` stamp (legacy) stay queryable; explicit
+    mismatches are rejected per docs/08 「禁止用模型 A 查 collection B」.
+    """
+    if payload_model in (None, "", active_model):
+        return True
+    return False

@@ -10,6 +10,7 @@ import typer
 from rich import print as rprint
 
 from knowledge.pipeline import KnowledgePipeline
+from knowledge.store import get_registry
 from researchos_shared import configure_logging
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="ResearchOS Knowledge Engine")
@@ -83,6 +84,47 @@ def search_cmd(
     filters = {"models": [model]} if model else None
     pack = pipeline.search(query, top_k=top_k, filters=filters)
     rprint(json.dumps(pack, ensure_ascii=False, indent=2))
+
+
+@app.command("reembed")
+def reembed_cmd(
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w"),
+    batch_size: int = typer.Option(64, "--batch-size"),
+) -> None:
+    """Re-embed all cached chunks with the active embedding policy (docs/08)."""
+    from knowledge.embeddings import active_embed_model, embed_with_meta
+
+    reg = get_registry()
+    items = [
+        (cid, payload)
+        for cid, payload in reg.chunk_payloads.items()
+        if not workspace
+        or (payload.get("workspace_id") or reg.settings.default_workspace_id) == workspace
+    ]
+    if not items:
+        rprint(json.dumps({"ok": True, "reembedded": 0, "note": "no cached chunks"}))
+        return
+    model = active_embed_model(reg.settings)
+    done = 0
+    for start in range(0, len(items), max(1, batch_size)):
+        batch = items[start : start + max(1, batch_size)]
+        vectors, resolved = embed_with_meta(
+            [p.get("text", "") for _, p in batch], settings=reg.settings
+        )
+        for (cid, payload), vec in zip(batch, vectors):
+            payload["embed_model"] = model
+            reg.vector.upsert(cid, vec, payload)
+        done += len(batch)
+        rprint(f"reembedded {done}/{len(items)} (model={resolved.provider})")
+    from knowledge.persist import save_registry
+
+    save_registry(reg)
+    rprint(
+        json.dumps(
+            {"ok": True, "reembedded": done, "model": model},
+            ensure_ascii=False,
+        )
+    )
 
 
 if __name__ == "__main__":

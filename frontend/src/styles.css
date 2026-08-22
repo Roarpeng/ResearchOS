@@ -2485,6 +2485,274 @@ button.btn-primary.compact {
   }
 }
 
+/* --- Research console: tabs, timeline, citations, HITL interrupt --- */
+
+.canvas-tabs {
+  display: inline-flex;
+  gap: 0.2rem;
+}
+
+.canvas-tabs button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  transition:
+    color var(--dur-fast) var(--ease-color),
+    background-color var(--dur-fast) var(--ease-color);
+}
+
+.canvas-tabs button.on {
+  color: var(--ink);
+  background: var(--bg);
+}
+
+.timeline,
+.citation-rail {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.35rem 0.15rem 0.35rem 0;
+}
+
+.timeline-list,
+.citation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.timeline-item {
+  position: relative;
+  padding: 0.4rem 0.5rem 0.4rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.timeline-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.timeline-dot {
+  position: absolute;
+  left: 0.5rem;
+  top: 0.62rem;
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: 0 0 auto;
+}
+
+.timeline-item.tone-ok .timeline-dot {
+  background: #0f766e;
+}
+
+.timeline-item.tone-bad .timeline-dot {
+  background: #b91c1c;
+}
+
+.timeline-item.tone-busy .timeline-dot {
+  background: #b45309;
+}
+
+.timeline-type {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--accent-hover);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.timeline-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-ts {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-detail {
+  margin: 0.45rem 0 0;
+  padding: 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  background: var(--bg);
+  border-radius: 6px;
+  overflow: auto;
+  max-height: 240px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.citation-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.45rem;
+  align-items: start;
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.citation-jump {
+  border: 1px solid var(--line-strong);
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  border-radius: 6px;
+  padding: 0.08rem 0.4rem;
+  cursor: pointer;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .citation-jump:hover {
+    border-color: var(--accent);
+  }
+}
+
+.citation-body {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.citation-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+  word-break: break-word;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  a.citation-title:hover {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+}
+
+.citation-locator {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--accent-hover);
+}
+
+.citation-quote {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.citation-source {
+  font-size: 0.68rem;
+}
+
+/* Inline `[^Cn]` markers in the report body */
+.citation-ref {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.72em;
+  font-weight: 600;
+  color: var(--accent-hover);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  border-radius: 4px;
+  padding: 0 0.28em;
+  margin: 0 0.12em;
+  vertical-align: super;
+  line-height: 1.2;
+  scroll-margin-top: 6rem;
+}
+
+.citation-ref.flash {
+  animation: citation-flash 1.3s var(--ease-out);
+}
+
+@keyframes citation-flash {
+  0%,
+  100% {
+    background: var(--accent-soft);
+  }
+  30% {
+    background: #f59e0b;
+    color: #78350f;
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.35);
+  }
+}
+
+.interrupt-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.interrupt-kicker {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #b45309;
+}
+
+.interrupt-kind {
+  font-family: var(--mono);
+}
+
+.interrupt-prompt {
+  margin: 0 0 0.55rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.interrupt-more {
+  margin: 0 0 0.55rem;
+}
+
+.row-actions button.danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line));
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .citation-ref.flash {
+    animation: none;
+  }
+}
+
 @media (max-width: 960px) {
   .tri {
     margin: 0;
