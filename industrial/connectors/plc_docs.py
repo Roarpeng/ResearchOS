@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 
@@ -15,6 +15,8 @@ class PlcDocEntry:
     url: str
     summary: str
     tags: tuple[str, ...] = ()
+    #: Provenance of this entry: "" (legacy), "knowledge", or "fallback_catalog".
+    source: str = ""
 
 
 class PlcDocsConnector(Protocol):
@@ -100,5 +102,110 @@ class FakePlcDocsConnector:
             "url": entry.url,
             "summary": entry.summary,
             "tags": list(entry.tags),
+            "readonly": True,
+        }
+
+
+_KB_SNIPPET_CHARS = 240
+
+
+class KnowledgeBackedPlcDocsConnector:
+    """KB-first manual connector; ``FAKE_CATALOG`` is a degraded fallback only.
+
+    ``search`` queries the knowledge layer (``KnowledgePipeline.search``) and maps
+    its passages onto :class:`PlcDocEntry`. A knowledge-layer failure or a zero-hit
+    result degrades to a filtered ``FAKE_CATALOG`` search. Network/store exceptions
+    are swallowed and treated as empty hits, so callers never see a raised error.
+    """
+
+    def __init__(self, *, top_k: int = 8, pipeline: Any | None = None) -> None:
+        self._top_k = top_k
+        #: Optional injected object exposing ``.search(query, top_k=...)`` (tests).
+        self._pipeline = pipeline
+        self._cache: dict[str, PlcDocEntry] = {}
+
+    def _kb(self) -> Any:
+        if self._pipeline is not None:
+            return self._pipeline
+        from knowledge.pipeline import KnowledgePipeline
+
+        return KnowledgePipeline()
+
+    def _kb_passages(self, query: str) -> list[dict[str, Any]]:
+        try:
+            pack = self._kb().search(query, top_k=self._top_k)
+        except Exception:
+            return []
+        if not isinstance(pack, dict):
+            return []
+        return list(pack.get("passages") or [])
+
+    def _passage_to_entry(self, passage: dict[str, Any]) -> PlcDocEntry:
+        citation = passage.get("citation") or {}
+        locator = citation.get("locator") or {}
+        source_id = str(
+            passage.get("source_id")
+            or citation.get("source_id")
+            or passage.get("chunk_id")
+            or ""
+        )
+        title = str(
+            citation.get("title") or citation.get("source") or source_id or "knowledge"
+        )
+        url = str(citation.get("url") or locator.get("url") or "")
+        snippet = str(passage.get("text") or "")[:_KB_SNIPPET_CHARS]
+        return PlcDocEntry(
+            id=source_id,
+            title=title,
+            vendor="knowledge",
+            family="",
+            url=url,
+            summary=snippet,
+            tags=(),
+            source="knowledge",
+        )
+
+    def kb_passages(self, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Raw knowledge-layer passages (for ``plc.alarm.explain`` augmentation)."""
+        return self._kb_passages(query)[:limit]
+
+    def search(self, query: str, *, limit: int = 10) -> list[PlcDocEntry]:
+        q = (query or "").strip()
+        if not q:
+            return []
+        hits = [self._passage_to_entry(p) for p in self._kb_passages(q)]
+        if hits:
+            self._cache = {e.id: e for e in hits}
+            return hits[:limit]
+        fallback = [
+            replace(e, source="fallback_catalog")
+            for e in FakePlcDocsConnector().search(q, limit=limit)
+        ]
+        self._cache = {e.id: e for e in fallback}
+        return fallback
+
+    def get(self, doc_id: str) -> PlcDocEntry | None:
+        if doc_id in self._cache:
+            return self._cache[doc_id]
+        entry = FakePlcDocsConnector().get(doc_id)
+        if entry is None:
+            return None
+        return replace(entry, source="fallback_catalog")
+
+    def list_vendors(self) -> list[str]:
+        return sorted(
+            {e.vendor for e in FAKE_CATALOG} | {e.vendor for e in self._cache.values()}
+        )
+
+    def as_dict(self, entry: PlcDocEntry) -> dict[str, Any]:
+        return {
+            "id": entry.id,
+            "title": entry.title,
+            "vendor": entry.vendor,
+            "family": entry.family,
+            "url": entry.url,
+            "summary": entry.summary,
+            "tags": list(entry.tags),
+            "source": entry.source,
             "readonly": True,
         }

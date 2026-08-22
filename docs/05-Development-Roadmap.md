@@ -50,7 +50,7 @@
 
 ---
 
-## Phase 3 — Knowledge Engine（MVP Done）
+## Phase 3 — Knowledge Engine（MVP Done → 增强）
 
 **目标：** 文档入库与 Hybrid 检索。
 
@@ -60,24 +60,33 @@
 - [x] 实体关系 → 图适配器（Neo4j 或内存）
 - [x] RRF 融合与 Citation 字段
 - [x] MCP：`documents` / `vector-store` / `knowledge-graph`
+- [x] 查询理解 + HyDE 钩子（`HYDE_ENABLED`，LLM 可选、模板兜底）
+- [x] 统一元数据过滤器 + Review 时间窗
+- [x] 分型 Neo4j Schema（类型 Label / 唯一约束 / REFERENCES→Chunk / UPDATED_BY）
+- [x] Embedding 策略（docs/knowledge/08：优先级/一 collection 一模型/模型戳记/跨模型拒绝/reembed CLI）
 
 **退出标准：** 一文档三通道可召回（内存后端默认）；Context Pack 可溯源。  
 **对齐：** [ADR-0003](./adr/0003-hybrid-graphrag.md)、[`knowledge/GraphRAG.md`](./knowledge/GraphRAG.md)
 
 ---
 
-## Phase 4 — Research Agent & Reports（MVP Done）
+## Phase 4 — Research Agent & Reports（MVP Done → 增强）
 
 **目标：** 自主研究闭环与可发布报告。
 
 - [x] Research / Analysis / Citation / Reviewer / Writer / Memory
-- [x] Search Router MCP（mock + 可选 Tavily/SearXNG）
+- [x] **ETL Agent**（docs/agents/03：Ingest→Parse→Index，回执 `meta.etl_receipts`，幂等）
+- [x] Search Router MCP（mock + Tavily/SearXNG/**Brave**，freshness/domain/safesearch 透传）
 - [x] 工具预算字段与 Reviewer 引用门禁
 - [x] Markdown 规范中间态
-- [x] Report MCP（Typst/Pandoc 可选降级写 md）
-- [x] Memory stub 回写标记
+- [x] Report MCP（Typst/Pandoc 可选降级写 md）+ `report.preview` / `report.validate_citations`
+- [x] Memory 回写 + **Reviewer 矛盾检测 / success_criteria 门禁 / gap 定向回派**
+- [x] Citation trust_level / publisher / accessed_at
+- [x] 工作流：deep_research 多轮定向研究、continuous_learning 轻量管道、competitive_analysis 映射
+- [x] MCP 安全层基座（scope 目录/角色画像/SSRF 防护/配额/审计/脱敏，`tools/security.py`）
+- [x] MCP：knowledge 门面（`knowledge.retrieve`/`fulltext.search`/`ingest_status`）、`vector.delete`
 
-**退出标准：** 开放问题 → 带引用 Markdown（PDF 视本机 Typst）；演示级知识回写标记。  
+**退出标准：** 开放问题 → 带引用 Markdown（PDF 视本机 Typst）；Reviewer 能阻断无引用关键论断并给出定向补充指令。  
 **对齐：** [ADR-0006](./adr/0006-report-pipeline-markdown-typst.md)、[ADR-0007](./adr/0007-search-router-mcp.md)
 
 ---

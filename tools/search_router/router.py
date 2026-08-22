@@ -8,13 +8,14 @@ from typing import Any, Literal
 
 from tools.search_router.providers import (
     available_providers,
+    brave_search,
     mock_search,
     searx_search,
     tavily_search,
 )
 from tools.search_router.schema import SearchHit, SearchQueryResult
 
-ProviderName = Literal["auto", "mock", "tavily", "searxng"]
+ProviderName = Literal["auto", "mock", "tavily", "brave", "searxng"]
 
 
 @dataclass
@@ -58,6 +59,8 @@ class SearchRouter:
             order.append("searxng")
         if status["tavily"]["available"]:
             order.append("tavily")
+        if status["brave"]["available"]:
+            order.append("brave")
         if status["searxng"]["available"] and "searxng" not in order:
             order.append("searxng")
         order.append("mock")
@@ -77,9 +80,20 @@ class SearchRouter:
         limit: int = 8,
         provider: ProviderName = "auto",
         lang: str | None = None,
+        freshness: str | None = None,
+        include_domains: list[str] | None = None,
+        exclude_domains: list[str] | None = None,
+        safesearch: str | None = None,
         **_filters: Any,
     ) -> SearchQueryResult:
-        _ = lang  # reserved for provider adapters
+        """Search with docs/mcp/02 options (freshness/domain/safesearch passthrough)."""
+        opts: dict[str, Any] = {
+            "lang": lang,
+            "freshness": freshness,
+            "include_domains": include_domains,
+            "exclude_domains": exclude_domains,
+            "safesearch": safesearch,
+        }
         if self.budget.remaining_queries() <= 0:
             return SearchQueryResult(
                 ok=False,
@@ -95,7 +109,15 @@ class SearchRouter:
         for name in self._fallback_order(provider):
             tried.append(name)
             try:
-                hits = self._dispatch(name, query, limit)
+                hits = self._dispatch(name, query, limit, opts)
+                hits = self._apply_domain_filters(
+                    hits,
+                    include_domains=include_domains,
+                    exclude_domains=exclude_domains,
+                )
+                if not hits and (include_domains or exclude_domains):
+                    # Provider results fully filtered out — try next provider.
+                    continue
                 self.budget.used_queries += 1
                 for hit in hits:
                     self._fetch_cache[hit.id] = hit
@@ -124,6 +146,32 @@ class SearchRouter:
             error=last_error or "all providers failed",
             diagnostics={"tried": tried},
         )
+
+    @staticmethod
+    def _apply_domain_filters(
+        hits: list[SearchHit],
+        *,
+        include_domains: list[str] | None,
+        exclude_domains: list[str] | None,
+    ) -> list[SearchHit]:
+        """Normalized domain constraints applied on every provider's hits."""
+
+        def host_of(url: str | None) -> str:
+            if not url:
+                return ""
+            return url.split("/")[2].lower() if "://" in url else url.lower()
+
+        inc = [d.lower().lstrip(".") for d in (include_domains or [])]
+        exc = [d.lower().lstrip(".") for d in (exclude_domains or [])]
+        out: list[SearchHit] = []
+        for hit in hits:
+            host = host_of(hit.url)
+            if exc and any(host == d or host.endswith("." + d) for d in exc):
+                continue
+            if inc and not any(host == d or host.endswith("." + d) for d in inc):
+                continue
+            out.append(hit)
+        return out
 
     def fetch(self, result_id: str | None = None, url: str | None = None) -> dict[str, Any]:
         if self.budget.remaining_fetches() <= 0:
@@ -164,11 +212,33 @@ class SearchRouter:
 
         return {"ok": False, "error": "result_id or url required"}
 
-    def _dispatch(self, name: str, query: str, limit: int) -> list[SearchHit]:
+    def _dispatch(
+        self,
+        name: str,
+        query: str,
+        limit: int,
+        opts: dict[str, Any] | None = None,
+    ) -> list[SearchHit]:
+        opts = opts or {}
         if name == "mock":
             return mock_search(query, limit=limit)
         if name == "tavily":
-            return tavily_search(query, limit=limit)
+            freshness = opts.get("freshness")
+            return tavily_search(
+                query,
+                limit=limit,
+                time_range=freshness if freshness in {"day", "week", "month", "year"} else None,
+            )
+        if name == "brave":
+            return brave_search(
+                query,
+                limit=limit,
+                freshness=opts.get("freshness"),
+                include_domains=opts.get("include_domains"),
+                exclude_domains=opts.get("exclude_domains"),
+                safesearch=opts.get("safesearch"),
+            )
         if name == "searxng":
-            return searx_search(query, limit=limit)
+            lang = opts.get("lang")
+            return searx_search(query, limit=limit, language=lang)  # type: ignore[arg-type]
         raise ValueError(f"unknown provider: {name}")

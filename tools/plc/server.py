@@ -19,12 +19,28 @@ import re
 from pathlib import Path
 from typing import Any
 
-from industrial.connectors.plc_docs import FakePlcDocsConnector
+from industrial.connectors.plc_docs import (
+    FakePlcDocsConnector,
+    KnowledgeBackedPlcDocsConnector,
+)
 from tools._mcp_compat import create_mcp_server
 
 mcp = create_mcp_server("plc")
 
-_connector = FakePlcDocsConnector()
+
+def _make_connector() -> Any:
+    """PLC docs connector selected by ``PLC_DOCS_CONNECTOR`` (knowledge|fake).
+
+    Defaults to ``knowledge`` (KB-first); ``fake`` restores the legacy catalog-only
+    connector.
+    """
+    mode = os.getenv("PLC_DOCS_CONNECTOR", "knowledge").strip().lower()
+    if mode == "fake":
+        return FakePlcDocsConnector()
+    return KnowledgeBackedPlcDocsConnector()
+
+
+_connector = _make_connector()
 
 #: Sample alarm knowledge base — explanations must always cite a manual.
 ALARM_CATALOG: dict[str, dict[str, Any]] = {
@@ -46,6 +62,16 @@ ALARM_CATALOG: dict[str, dict[str, Any]] = {
         "manual_ref": "plc_beck_compactlogix",
     },
 }
+
+
+def _alarm_kb_passages(code: str, info: dict[str, Any]) -> list[dict[str, Any]]:
+    """Knowledge-layer passages relevant to an alarm (empty when KB unavailable)."""
+    fn = getattr(_connector, "kb_passages", None)
+    if not callable(fn):
+        return []
+    parts = [code, str(info.get("description") or "")]
+    parts.extend(str(c) for c in (info.get("candidates") or []))
+    return list(fn(" ".join(parts)) or [])
 
 
 def _flag_enabled(name: str) -> bool:
@@ -91,9 +117,10 @@ def plc_alarm_explain(alarm_code: str) -> dict[str, Any]:
             "alarm_code": code,
             "hint": "No curated explanation; retrieve manuals via plc.manual.search.",
         }
+    kb_passages = _alarm_kb_passages(code, info)
     manual = _connector.get(info["manual_ref"])
     citation = _connector.as_dict(manual) if manual else None
-    return {
+    payload: dict[str, Any] = {
         "ok": True,
         "readonly": True,
         "alarm_code": code,
@@ -102,6 +129,9 @@ def plc_alarm_explain(alarm_code: str) -> dict[str, Any]:
         "citation": citation,
         "disclaimer": "Advisory only; follow enterprise change management (MOC).",
     }
+    if kb_passages:
+        payload["kb_passages"] = kb_passages
+    return payload
 
 
 @mcp.tool(name="plc.tia.analyze")

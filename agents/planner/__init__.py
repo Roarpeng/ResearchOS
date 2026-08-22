@@ -38,21 +38,34 @@ INDUSTRIAL_STEPS: list[tuple[str, str, str]] = [
     ("S8", "Persist memory", "memory"),
 ]
 
+# Continuous Learning (Phase: incremental signals) — lightweight pipeline:
+# ingest already-gathered evidence (no-op when absent), delta analysis, memory.
+# No writer/report so a subscription batch stays cheap.
+CONTINUOUS_LEARNING_STEPS: list[tuple[str, str, str]] = [
+    ("S1", "ETL ingest batch", "etl"),
+    ("S2", "Delta analysis (reviews/specs)", "analysis"),
+    ("S3", "Persist memory", "memory"),
+]
+
 
 def _steps_for_workflow(workflow: str) -> list[tuple[str, str, str]]:
-    if str(workflow or "").strip().lower() in {"industrial", "engineering"}:
+    wf = str(workflow or "").strip().lower()
+    if wf in {"industrial", "engineering"}:
         return INDUSTRIAL_STEPS
+    if wf in {"continuous_learning", "rss_update", "incremental"}:
+        return CONTINUOUS_LEARNING_STEPS
     return DEFAULT_STEPS
 
 
 def build_rule_based_plan(
     raw_query: str, *, version: int = 1, workflow: str = "deep_research"
 ) -> Plan:
-    """Produce a simple research → analysis → reviewer → writer plan."""
+    """Produce a rule-based plan for the requested workflow."""
     query = (raw_query or "").strip() or "Untitled research goal"
+    wf = str(workflow or "").strip().lower() or "deep_research"
     steps: list[PlanStep] = []
     prev_id: str | None = None
-    for step_id, title, agent in _steps_for_workflow(workflow):
+    for step_id, title, agent in _steps_for_workflow(wf):
         step: PlanStep = {
             "id": step_id,
             "title": title,
@@ -67,7 +80,7 @@ def build_rule_based_plan(
     return {
         "version": version,
         "approved": False,
-        "summary": f"Plan for: {query[:200]}",
+        "summary": f"[{wf}] Plan for: {query[:200]}",
         "steps": steps,
     }
 

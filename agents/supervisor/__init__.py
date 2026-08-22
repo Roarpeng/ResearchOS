@@ -95,6 +95,128 @@ def next_executable_step(state: TaskState) -> dict[str, Any] | None:
     return None
 
 
+# --- deep_research multi-round extension -------------------------------------
+
+# Analysis gaps that indicate evidence deficiency and therefore justify one
+# extra directed research round. Citation-only gaps are left to the Reviewer.
+_HIGH_PRIORITY_GAP_MARKERS = (
+    "missing_",
+    "thin_evidence",
+    "insufficient",
+    "no evidence",
+)
+
+
+def _max_research_rounds(meta: dict[str, Any]) -> int:
+    """Resolve max_research_rounds: meta override first, then env, default 1."""
+    if "max_research_rounds" in meta:
+        try:
+            return max(0, int(meta.get("max_research_rounds") or 0))
+        except (TypeError, ValueError):
+            return 0
+    raw = os.getenv("DEEP_RESEARCH_ROUNDS", "1")
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _is_high_priority_gap(gap: str) -> bool:
+    text = (gap or "").strip().lower()
+    return any(marker in text for marker in _HIGH_PRIORITY_GAP_MARKERS)
+
+
+def _high_priority_gaps(analysis_results: dict[str, Any]) -> list[str]:
+    found: list[str] = []
+    for block in (analysis_results or {}).values():
+        for gap in (block or {}).get("gaps") or []:
+            if _is_high_priority_gap(str(gap)):
+                found.append(str(gap))
+    return found
+
+
+def _analysis_steps_completed(steps: list[dict[str, Any]]) -> bool:
+    analysis_steps = [
+        s
+        for s in steps
+        if str(s.get("agent") or "").split(":", 1)[0] == "analysis"
+    ]
+    return bool(analysis_steps) and all(
+        s.get("status") == "completed" for s in analysis_steps
+    )
+
+
+def _insert_research_round(
+    steps: list[dict[str, Any]], *, round_number: int, gap_hint: str
+) -> list[dict[str, Any]]:
+    """Insert R{round_number} (agent=research) before the first citation step and
+    reset that citation step and every later step back to pending."""
+    out: list[dict[str, Any]] = []
+    inserted = False
+    prev_id: str | None = None
+    for step in steps:
+        base = str(step.get("agent") or "").split(":", 1)[0]
+        if not inserted and base == "citation":
+            out.append(
+                {
+                    "id": f"R{round_number}",
+                    "title": f"Directed research round {round_number}",
+                    "agent": "research",
+                    "status": "pending",
+                    "depends_on": [prev_id] if prev_id else [],
+                    "notes": (
+                        f"deep_research follow-up; gaps: {gap_hint}"
+                        if gap_hint
+                        else "deep_research follow-up for high-priority gaps"
+                    ),
+                }
+            )
+            inserted = True
+        if inserted:
+            out.append({**step, "status": "pending"})
+        else:
+            out.append(dict(step))
+        prev_id = step.get("id")
+    return out
+
+
+def plan_deep_research_round(
+    state: TaskState, *, max_rounds: int | None = None
+) -> dict[str, Any] | None:
+    """Return plan/meta deltas to append a directed research round, or None.
+
+    Applies only to the ``deep_research`` workflow when every analysis step has
+    completed, high-priority analysis gaps remain, and the insertion budget
+    (``meta.deep_research_round`` < ``max_research_rounds``) is not exhausted.
+    Returns ``{"plan": new_plan, "meta": {"deep_research_round": round}}`` where
+    ``round`` is the newly incremented counter, or ``None`` when nothing changes.
+    """
+    goal = state.get("goal") or {}
+    if str(goal.get("workflow") or "").strip().lower() != "deep_research":
+        return None
+    plan = state.get("plan") or {}
+    steps = list(plan.get("steps") or [])
+    meta = dict(state.get("meta") or {})
+    if max_rounds is None:
+        max_rounds = _max_research_rounds(meta)
+    round_no = int(meta.get("deep_research_round") or 0)
+    if round_no >= max_rounds:
+        return None
+    if not _analysis_steps_completed(steps):
+        return None
+    gaps = _high_priority_gaps(state.get("analysis_results") or {})
+    if not gaps:
+        return None
+    next_round = round_no + 1
+    new_steps = _insert_research_round(
+        steps, round_number=next_round, gap_hint="; ".join(gaps)[:160]
+    )
+    return {
+        "plan": {**plan, "steps": new_steps},
+        "meta": {"deep_research_round": next_round},
+    }
+
+
 def decide_route(state: TaskState, *, auto_approve: bool | None = None) -> tuple[str, dict[str, Any]]:
     """Return (route, side_effects) without mutating status for interrupt payload.
 
@@ -173,6 +295,18 @@ def decide_route(state: TaskState, *, auto_approve: bool | None = None) -> tuple
         plan["approved"] = True
         effective["plan"] = plan
 
+    # deep_research: append a directed research round when analysis is complete
+    # but high-priority gaps remain and the round budget allows.
+    extension = plan_deep_research_round(effective)  # type: ignore[arg-type]
+    if extension is not None:
+        effective = {
+            **effective,
+            "plan": extension["plan"],
+            "meta": {**(effective.get("meta") or {}), **(extension.get("meta") or {})},
+        }
+        side["plan"] = extension["plan"]
+        side["meta"] = extension["meta"]
+
     step = next_executable_step(effective)  # type: ignore[arg-type]
     if step:
         agent = str(step.get("agent") or "research")
@@ -208,6 +342,8 @@ def supervisor_node(state: TaskState) -> dict[str, Any]:
     meta["supervisor_hops"] = hops
     if "max_supervisor_hops" not in meta:
         meta["max_supervisor_hops"] = int(os.getenv("MAX_SUPERVISOR_HOPS", "32"))
+    if "max_research_rounds" not in meta:
+        meta["max_research_rounds"] = _max_research_rounds(meta)
     updates["meta"] = meta
 
     route, side = decide_route(state)
@@ -219,6 +355,11 @@ def supervisor_node(state: TaskState) -> dict[str, Any]:
         # Re-decide after approval so we don't loop on approve forever
         state_after = {**state, "plan": plan, "meta": meta}
         route, side = decide_route(state_after, auto_approve=True)
+
+    if side.get("plan") is not None:
+        updates["plan"] = side["plan"]
+    if side.get("meta"):
+        updates["meta"] = {**(updates.get("meta") or {}), **side["meta"]}
 
     if side.get("interrupt"):
         updates["interrupts"] = [side["interrupt"]]
@@ -256,5 +397,6 @@ __all__ = [
     "AGENT_TO_NODE",
     "decide_route",
     "next_executable_step",
+    "plan_deep_research_round",
     "supervisor_node",
 ]

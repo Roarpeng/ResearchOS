@@ -152,9 +152,9 @@ ResearchOS/
 | Phase 0 — Architecture & Docs | **Done** |
 | Phase 1 — Infrastructure | **MVP Done**（Compose + Gateway） |
 | Phase 2 — Agent Runtime | **MVP Done**（LangGraph + HITL） |
-| Phase 3 — Knowledge Engine | **MVP Done**（Hybrid/RRF + 内存后端） |
-| Phase 4 — Research Agent & Reports | **MVP Done**（全链路 Agent + Report MCP） |
-| Phase 5 — Engineering / Industrial Copilot | **Stub Done**（连接器 + Decision Memo） |
+| Phase 3 — Knowledge Engine | **MVP Done → 增强**（Hybrid/RRF + HyDE/过滤器 + 分型图谱 Schema + Embedding 策略） |
+| Phase 4 — Research Agent & Reports | **MVP Done → 增强**（全链路含 ETL Agent、质量闭环、deep-research 多轮、continuous-learning） |
+| Phase 5 — Engineering / Industrial Copilot | **Stub → MVP**（TIA 全链路 + 设备层 KG + mcp-plc 只读分析 + ROS2 切片 + Motion/Failure Agent） |
 
 详见 [`ROADMAP.md`](./ROADMAP.md)。
 

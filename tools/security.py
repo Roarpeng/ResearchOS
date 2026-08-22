@@ -181,6 +181,8 @@ def side_effect_level(tool_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 _METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal", "100.100.100.200"}
+_LOCAL_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home")
+_LOCAL_HOST_NAMES = {"localhost", "host.docker.internal", "gateway.docker.internal"}
 _MAX_URL_LEN = 2048
 
 
@@ -218,8 +220,19 @@ def validate_url(
     host = parts.hostname or ""
     if not host:
         raise SecurityError("invalid_url", "missing host")
-    if host.lower() in _METADATA_HOSTS:
+    lowered_host = host.lower()
+    if lowered_host in _METADATA_HOSTS:
         raise SecurityError("ssrf_blocked", "cloud metadata host denied")
+    if lowered_host in _LOCAL_HOST_NAMES or lowered_host.endswith(_LOCAL_HOST_SUFFIXES):
+        raise SecurityError("ssrf_blocked", f"local host {host!r} denied")
+
+    # Literal-IP hosts are checked even without DNS resolution.
+    try:
+        literal_ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        literal_ip = None
+    if literal_ip is not None and _is_blocked_ip(literal_ip):
+        raise SecurityError("ssrf_blocked", f"literal address {host} is denied")
 
     if egress_allowlist:
         lowered = host.lower()
