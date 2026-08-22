@@ -5,15 +5,17 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from gateway.app.services.plc.chat_evidence import (
+from gateway.app.services.plc.evidence.blocks import _resolve_block_focus
+from gateway.app.services.plc.evidence.cards import (
     _describe_block_function,
-    _describe_instance_from_kg,
     _format_block_runtime_explain,
-    _format_signal_trace,
-    _format_typed_as_nest_lines,
-    _lookup_instance_entity,
-    _resolve_block_focus,
 )
+from gateway.app.services.plc.evidence.instances import (
+    _describe_instance_from_kg,
+    _lookup_instance_entity,
+)
+from gateway.app.services.plc.evidence.nested import _format_typed_as_nest_lines
+from gateway.app.services.plc.evidence.signal import _format_signal_trace
 from gateway.app.services.plc.chat_intents import (
     _strip_at_hint,
     _wants_block_explain,
