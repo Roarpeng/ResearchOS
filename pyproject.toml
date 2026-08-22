@@ -57,6 +57,8 @@ researchos-mcp-kg = "tools.knowledge_graph.server:main"
 researchos-mcp-knowledge = "tools.knowledge.server:main"
 researchos-mcp-ros2 = "tools.ros2.server:main"
 researchos-mcp-github = "tools.github.server:main"
+researchos-mcp-isaac = "tools.isaac.server:main"
+researchos-mcp-cad = "tools.cad.server:main"
 researchos-mcp-plc = "tools.plc.server:main"
 researchos-tia-cli = "agents.plc.tia_cli:main"
 

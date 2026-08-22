@@ -30,12 +30,13 @@
 - [x] 手册检索知识化：`KnowledgeBackedPlcDocsConnector`（知识库优先，静态目录兜底）
 - [x] Motion Agent / Failure Analysis Agent（只读：轴链视图 / 5-Why 反向追踪，证据仅引真实图边）
 
-## Phase 5 Digital Twin — Stub / 部分
+## Phase 5 Digital Twin — Mock 闭环 Done / 真机待接
 
 - [x] ROS2：只读工作区扫描（package.xml/msg/srv/action 解析）+ `mcp-ros2`（codegen 默认关闭）
-- [ ] IsaacSim：未接入（`trial.submit→status→artifacts` 任务化待实现）
+- [x] IsaacSim：`mcp-isaac` mock 后端走通 `submit(approval 门禁)→status→artifacts`（指标按种子确定，CI 可断言；真实 GPU 节点经代理接入）
+- [x] CAD：`mcp-cad` STEP 结构树/版本差集/BOM 知识检索（无几何内核；缩略图作业显式禁用）
 - [ ] Robot/AGV 域模型：待定义
-- [ ] CAD：仅 BOM 元数据 stub（STEP 结构树待实现）
+- [ ] 真实 GPU 环境：短场景试验指标 JSON schema 与 NGC 容器对接
 
 ## 后续候选（按影响排序）
 
