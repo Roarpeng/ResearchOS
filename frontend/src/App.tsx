@@ -41,6 +41,14 @@ export default function App() {
     onDeepDive,
     onFocusNode,
     onAskInChat,
+    onViewSources,
+    onMarkNote,
+    workbenchOpen,
+    workbenchTab,
+    noteFocusKey,
+    switchCue,
+    setWorkbenchOpen,
+    setWorkbenchTab,
     onOptimizePropose,
     onRetryStructure,
     onScopePrompt,
@@ -68,13 +76,17 @@ export default function App() {
   } = useTriSplit();
 
   useEffect(() => {
-    if (!showSettings) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setShowSettings(false);
+      if (e.key !== "Escape") return;
+      if (showSettings) {
+        setShowSettings(false);
+        return;
+      }
+      if (workbenchOpen) setWorkbenchOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showSettings]);
+  }, [showSettings, workbenchOpen, setWorkbenchOpen]);
 
   async function copyMessage(m: ChatMsg) {
     try {
@@ -174,17 +186,27 @@ export default function App() {
           citations={citations}
           chatScope={chatScope}
           events={events}
+          messages={messages}
+          noteFocusKey={noteFocusKey}
           plcJob={plcJob}
           plcJobId={plcJobId}
+          switchCue={switchCue}
+          workbenchOpen={workbenchOpen}
+          workbenchTab={workbenchTab}
           onAskInChat={onAskInChat}
           onCanvasChange={setCanvas}
           onConfirmWriteback={onConfirmWriteback}
           onDeepDive={onDeepDive}
+          onFocusNode={onFocusNode}
+          onMarkNote={onMarkNote}
           onSelectNode={applyChatScope}
           onOptimizePropose={onOptimizePropose}
           onRetryStructure={onRetryStructure}
           onSclPreview={sclPreviewFor}
           onTabChange={setCanvasTab}
+          onViewSources={onViewSources}
+          onWorkbenchClose={() => setWorkbenchOpen(false)}
+          onWorkbenchTabChange={setWorkbenchTab}
           onWritebackHint={writebackHintFor}
         />
       </div>

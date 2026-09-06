@@ -20,6 +20,7 @@ export function normalizeCanvas(raw: unknown): KnowledgeCanvasData {
       kind: row.kind ? String(row.kind) : "insight",
       x: Number(row.x ?? 80),
       y: Number(row.y ?? 80),
+      export_status: row.export_status ? String(row.export_status) : undefined,
       source: (row.source || {}) as KnowledgeNode["source"],
     };
   });
@@ -92,11 +93,16 @@ export function plcCanvasFromJob(detail: PlcJobDetail): KnowledgeCanvasData | nu
     } else if (b.protected) {
       bits.push("Know-how 保护");
     }
+    const exportStatus = String(
+      (b as { status?: string }).status ||
+        (b.protected ? "skipped" : b.interface_only ? "pending" : "exported"),
+    );
     nodes.push({
       id: `plc_b_${detail.id}_${b.name}`,
       label: b.name,
       summary: b.comment || bits.join(" · "),
       kind,
+      export_status: exportStatus,
       x: 0,
       y: 0,
       source: {
@@ -190,6 +196,7 @@ export function plcCanvasFromJob(detail: PlcJobDetail): KnowledgeCanvasData | nu
               : "plc_block",
       x: 0,
       y: 0,
+      export_status: external ? "pending" : "exported",
       source: {
         type: "plc",
         plc_job_id: detail.id,

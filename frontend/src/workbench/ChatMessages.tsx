@@ -50,11 +50,13 @@ function EvidenceChips({
   return (
     <div className="evidence-chips" aria-label="图谱证据">
       {citations.slice(0, 6).map((c, i) => {
-        const label = [c.block, c.edge_type, c.target ? `→ ${c.target}` : ""]
+        const label = [c.block, c.locator || c.network, c.edge_type, c.target ? `→ ${c.target}` : ""]
           .filter(Boolean)
           .join(" ");
         const focusRef = c.nodeId || c.block || "";
-        const title = [c.network, c.snippet || c.evidence].filter(Boolean).join(" · ");
+        const title = [c.locator || c.network, c.snippet || c.evidence, c.source_status]
+          .filter(Boolean)
+          .join(" · ");
         if (focusRef && onFocusNode) {
           return (
             <button

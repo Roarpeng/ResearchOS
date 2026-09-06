@@ -82,6 +82,7 @@ The frontend mirrors this separation at the application boundary:
 frontend/src/App.tsx               # application-level assembly
      |-- frontend/src/plc/
      |   |-- canvasModel.ts        # job-to-canvas normalization and derivations
+     |   |-- canvas/               # Inspector + right Workbench, jump contract
      |   |-- detail.ts             # progress, write-back hints, diffs
      |   |-- CoverageStrip.tsx     # PLC coverage + M1 structure status list
      |   `-- usePlcWorkspace.ts    # PLC workspace state and orchestration

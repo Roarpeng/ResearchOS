@@ -8,6 +8,7 @@
 |------|------|
 | [01-ux-principles.md](./01-ux-principles.md) | 流式步骤、引用、人工中断等 UX 原则 |
 | [02-research-console.md](./02-research-console.md) | 研究控制台信息架构、状态与组件边界 |
+| [handover-canvas-ux-workbench](../handover-canvas-ux-workbench.md) | 画布 Inspector + 右侧 Workbench 交互契约 |
 
 ## 产品定位（前端视角）
 

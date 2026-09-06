@@ -51,6 +51,7 @@ PLC 网关能力最初集中在 `gateway/app/services/plc_jobs.py`，前端工�
 `frontend/src/App.tsx` 只保留应用级组装。PLC 领域模型和工作台数据变换放在 `frontend/src/plc/`：
 
 - `canvasModel.ts`: job 到 knowledge canvas 的规范化与派生模型。
+- `canvas/`: Inspector + 右侧 Workbench、跳转契约、人注与引用归一（见 [handover-canvas-ux-workbench](../handover-canvas-ux-workbench.md)）。
 - `detail.ts`: 进度、回写提示、SCL diff 和详情展示变换。
 - `CoverageStrip.tsx`: PLC 覆盖度展示。
 - `usePlcWorkspace.ts`: topics、active job、消息、上传草稿、busy/status、interrupts、canvas、chat scope、events、citations 和视图 tab 的 workspace 状态与编排。
