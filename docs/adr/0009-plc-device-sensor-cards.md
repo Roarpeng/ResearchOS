@@ -57,6 +57,7 @@ Schema 名：
 ## Remaining gaps
 
 - 标签地址与机架/槽位的电气映射未做（避免臆造 Device↔Tag 边）
+- 已折叠 `TagTable.Symbol` 访问名为同一符号；跨表重名仍可能拆成两张卡
 - HMI 像素文案 / 多语言优先文化未解析；仅结构 `linked_tags` + 可选 comment
 - Brief UI 仍是 stub（本切片只保证 API 段）
 - 聊天「这个传感器做什么」未改 `chat_router`（避免与 Q2 抢路由）
