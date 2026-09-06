@@ -268,10 +268,12 @@ def citations_for_retrieval(job: dict[str, Any], retrieval: dict[str, Any]) -> l
             {
                 "block": src,
                 "network": network,
+                "locator": network,
                 "evidence": str(props.get("evidence") or et),
                 "edge_type": et,
                 "target": tgt,
                 "snippet": snippet,
+                "source_status": "exported" if snippet or network else "indexed",
             }
         )
         if len(citations) >= 24:
@@ -285,10 +287,12 @@ def citations_for_retrieval(job: dict[str, Any], retrieval: dict[str, Any]) -> l
                     {
                         "block": name,
                         "network": (h.get("titles") or [""])[0] if h.get("titles") else "",
+                        "locator": (h.get("titles") or [""])[0] if h.get("titles") else "",
                         "evidence": "retrieval_hit",
                         "edge_type": "",
                         "target": "",
                         "snippet": snippet,
+                        "source_status": "exported" if snippet else "indexed",
                     }
                 )
     return citations[:24]
@@ -323,8 +327,8 @@ def _deterministic_answer(retrieval: dict[str, Any], query: str) -> str:
     hits = retrieval.get("hits") or []
     if not hits:
         return (
-            f"针对问题「{query}」，知识图谱中未检索到足够相关的块/网络。\n"
-            "可换关键词，或 `@块名` 指定单块。"
+            f"**未导出/未索引**：针对问题「{query}」，知识图谱中未检索到足够相关的块/网络，"
+            "不能编造逻辑。\n可换关键词，或 `@块名` 指定单块。"
         )
 
     lines = [f"**问题：** {query}", "**图谱检索结论：**"]

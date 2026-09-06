@@ -1105,6 +1105,53 @@ body.col-resizing * {
   margin-bottom: 0.35rem;
 }
 
+.plc-brief {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.45rem 0.55rem 0.55rem;
+  margin-bottom: 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.plc-brief.compact {
+  margin-bottom: 0.3rem;
+}
+
+.plc-brief-kicker {
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.plc-brief-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.plc-brief-meta,
+.plc-brief-run,
+.plc-brief-calls,
+.plc-brief-hw,
+.plc-brief-gaps {
+  color: var(--muted, #667);
+}
+
+.plc-brief-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
 .plc-coverage {
   display: flex;
   gap: 0.6rem;

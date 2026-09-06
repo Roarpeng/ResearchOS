@@ -70,6 +70,17 @@ def test_answer_query_pack_returns_citations():
     assert "证据" in pack["content"] or "CALLS" in pack["content"]
 
 
+def test_empty_hits_say_not_exported():
+    job = {
+        "project_name": "Empty",
+        "blocks": [],
+        "knowledge_graph": {"nodes": [], "edges": []},
+        "scl_sources": {},
+    }
+    pack = answer_query_pack(job, "主循环怎么跑？")
+    assert "未导出/未索引" in pack["content"]
+
+
 def test_citations_for_retrieval_include_scl_snippet():
     job = _job()
     retrieval = retrieve_kg_for_query(job, "FB_Motor 自锁")

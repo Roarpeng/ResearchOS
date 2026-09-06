@@ -136,6 +136,13 @@ def _block_list(project: Any, structure: dict[str, Any] | None = None) -> list[d
                 "status_reason": "",
                 "status_detail": "",
                 "retryable": False,
+                "export_status": (
+                    "interface_only"
+                    if is_iface_only
+                    else "protected"
+                    if is_protected and not body_ok
+                    else "unknown"
+                ),
             }
         )
     return _annotate_blocks_from_structure(blocks, structure)
@@ -255,11 +262,39 @@ def run_ingest_job(
             if imported.project_path
             else imported.export_dir.name
         )
-        _start_progress(job, "ir", "构建 PLC-IR / 知识图谱 / SCL")
+        _start_progress(
+            job,
+            "structure",
+            "结构先行：块清单 / 接口 / 调用图（不等待全文翻译）",
+        )
+
+        def _on_structure(project_obj: Any, kg_obj: Any) -> None:
+            from gateway.app.services.plc.brief import persist_structure_snapshot
+            from gateway.app.services.plc.job_store import _finish_progress, _start_progress
+
+            job["blocks"] = _block_list(project_obj)
+            persist_structure_snapshot(job, project_obj, kg_obj, phase="structure")
+            job["ingest_phase"] = "bodies_queued"
+            _finish_progress(
+                job,
+                detail=f"brief_ready blocks={len(job.get('blocks') or [])}",
+            )
+            _start_progress(
+                job,
+                "bodies",
+                "排队拉取 SCL/LAD 程序体",
+                detail=f"queued={len(job.get('body_pull_queue') or [])}",
+            )
+
+        from agents.plc.tia.ir import PlcProject
+
+        pre_project = imported.project if isinstance(imported.project, PlcProject) else None
         result = analyze_tia_exports(
             str(imported.export_dir),
             project_name=name,
             publish_graph=publish_graph,
+            project=pre_project,
+            on_structure=_on_structure,
         )
         pipeline_timings = merge_timings(pipeline_timings, result.get("timings"))
         project = result["project"]
@@ -298,7 +333,11 @@ def run_ingest_job(
         job["graph_publish"] = result.get("graph_publish")
         job["structure"] = result.get("structure") or {}
         job["blocks"] = _block_list(project, job["structure"])
+        from gateway.app.services.plc.brief import hardware_rows, refresh_brief_artifacts
+
+        job["hardware"] = hardware_rows(job, project)
         job["coverage"] = result.get("coverage") or {}
+        refresh_brief_artifacts(job)
         job["export_dir"] = str(work / "package")
         job["export_ready"] = True
         ir_bits = {
@@ -418,10 +457,13 @@ def run_ingest_job(
             timings_summary(pipeline_timings),
         )
         job["status"] = "ready"
+        job["ingest_phase"] = "ready"
+        job["brief_ready"] = True
         job["error"] = None
     except Exception as exc:  # noqa: BLE001 — surface to API
         logger.exception("PLC ingest failed job_id=%s", job_id)
         job["status"] = "failed"
+        job["ingest_phase"] = "failed"
         job["error"] = str(exc)
         # Close any running progress step
         if (job.get("progress") or []) and job["progress"][-1].get("status") == "running":

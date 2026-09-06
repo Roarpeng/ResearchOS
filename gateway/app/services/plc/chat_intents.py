@@ -173,3 +173,9 @@ def _wants_signal_trace(message: str) -> bool:
         k in msg
         for k in ("谁读写", "读写这些", "信号读写", "谁读", "谁写", "READS", "WRITES", "信号子图")
     )
+
+
+def _wants_handover_prompt(message: str) -> bool:
+    from gateway.app.services.plc.handover import wants_handover_question
+
+    return wants_handover_question(message)

@@ -12,6 +12,7 @@ def test_router_facing_plc_service_symbols_are_callable() -> None:
     symbols = [
         "analyze_job",
         "answer_block_chat",
+        "build_project_brief",
         "append_chat_turn",
         "build_device_cards",
         "build_export_zip",

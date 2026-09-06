@@ -23,6 +23,9 @@ PLC 网关能力最初集中在 `gateway/app/services/plc_jobs.py`，前端工�
 | `paths.py` | 上传保存、允许路径、zip 安全 |
 | `job_store.py` | Job CRUD、进度、分析、导出、聊天记录 |
 | `ingest.py` | TIA 导入编排、IR block 列表、源 XML 收集 |
+| `brief.py` | 分层 Project Brief（结构先行，不阻塞全文翻译） |
+| `citations.py` | 节点问答引用契约（块名 + 定位符 + 源片段） |
+| `handover.py` | 工程师三问模板（不自动写回 SCL） |
 | `logic_graph.py` | OB 扫描周期图与逻辑图刷新 |
 | `changesets.py` | 变更提议、优化提议、HITL 回写编排 |
 | `chat_intents.py` | 聊天意图与 @ 提示解析 |
@@ -57,6 +60,7 @@ PLC 网关能力最初集中在 `gateway/app/services/plc_jobs.py`，前端工�
 - `detail.ts`: 进度、回写提示、SCL diff 和详情展示变换。
 - `CoverageStrip.tsx`: PLC 覆盖度展示。
 - `DeviceSensorPanel.tsx`: Q1 设备/传感器卡片列表、详情与工程师批注。
+- `ProjectBrief.tsx`: 分层工程简报卡。
 - `usePlcWorkspace.ts`: topics、active job、消息、上传草稿、busy/status、interrupts、canvas、chat scope、events、citations 和视图 tab 的 workspace 状态与编排。
 
 面板级组合放在 `frontend/src/workbench/`：

@@ -59,6 +59,9 @@ gateway/app/services/plc/
      |-- paths.py                  # upload allowlist, safe zip handling
      |-- job_store.py              # jobs, progress, analysis, export, chat history
      |-- ingest.py                 # TIA import orchestration, M1 structure inventory, retry
+     |-- brief.py                  # layered Project Brief (structure-first)
+     |-- citations.py              # node-chat citation contract
+     |-- handover.py               # engineer Q1–Q3 templates (no auto SCL writeback)
      |-- logic_graph.py            # OB scan-order and logic-graph refresh
      |-- changesets.py             # proposals, optimization, HITL write-back
      |-- chat_intents.py           # intent and @mention parsing
@@ -88,6 +91,7 @@ frontend/src/App.tsx               # application-level assembly
      |   |-- detail.ts             # progress, write-back hints, diffs
      |   |-- CoverageStrip.tsx     # PLC coverage + M1 structure status list
      |   |-- DeviceSensorPanel.tsx # Q1 device/sensor cards + annotation
+     |   |-- ProjectBrief.tsx      # layered handover Brief card
      |   `-- usePlcWorkspace.ts    # PLC workspace state and orchestration
      `-- frontend/src/workbench/
          |-- useTriSplit.ts        # tri-pane sizing state

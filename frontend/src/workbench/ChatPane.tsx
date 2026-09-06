@@ -1,6 +1,6 @@
 import type { FormEvent, RefObject } from "react";
 import InterruptBar from "../InterruptBar";
-import type { PlcJobDetail } from "../api";
+import type { PlcEngineerPrompt, PlcJobDetail } from "../api";
 import { ChatMessages, type ChatSendOptions } from "./ChatMessages";
 import { NESTED_CHIPS, ROLE_CHIPS, type ChatMsg, type ChatScope } from "./model";
 
@@ -26,9 +26,11 @@ type ChatPaneProps = {
   onFileChange: (file: File | null) => void;
   onResolveInterrupt: (resolution: string, interruptId?: string) => void;
   onScopePrompt: (prompt: string) => void;
+  onProjectPrompt?: (prompt: string) => void;
   onSend: (event: FormEvent<HTMLFormElement>) => Promise<void> | void;
   onSendTurn: (options: ChatSendOptions) => Promise<void> | void;
   scopePrompts: (scope: ChatScope) => string[];
+  projectPrompts?: PlcEngineerPrompt[];
 };
 
 export function ChatPane({
@@ -53,9 +55,11 @@ export function ChatPane({
   onFileChange,
   onResolveInterrupt,
   onScopePrompt,
+  onProjectPrompt,
   onSend,
   onSendTurn,
   scopePrompts,
+  projectPrompts = [],
 }: ChatPaneProps) {
   return (
     <main
@@ -100,6 +104,23 @@ export function ChatPane({
         ) : null}
         <div ref={chatEndRef} />
       </div>
+
+      {!chatScope && plcJob && projectPrompts.length ? (
+        <div className="chat-scope-prompts" aria-label="工程师交接三问">
+          {projectPrompts.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="ghost compact"
+              disabled={busy}
+              title={item.prompt}
+              onClick={() => onProjectPrompt?.(item.prompt)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {chatScope ? (
         <div className="chat-scope-prompts" aria-label="针对当前节点的建议">

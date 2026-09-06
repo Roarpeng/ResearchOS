@@ -1,7 +1,8 @@
 import type { Dispatch, SetStateAction } from "react";
 import CitationRail from "../CitationRail";
 import Timeline from "../Timeline";
-import { plcExportUrl, plcZapUrl, type PlcJobDetail } from "../api";
+import { plcExportUrl, plcZapUrl, type PlcJobDetail, type PlcProjectBrief } from "../api";
+import { ProjectBriefCard } from "../plc/ProjectBrief";
 import KnowledgeCanvas, {
   type CanvasFocusRequest,
   type KnowledgeCanvasData,
@@ -30,6 +31,7 @@ type ResearchWorkspaceProps = {
   switchCue: string | null;
   workbenchOpen: boolean;
   workbenchTab: NodeWorkbenchTab;
+  projectBrief?: PlcProjectBrief | null;
   onAskInChat: (node: KnowledgeNode) => void;
   onCanvasChange: Dispatch<SetStateAction<KnowledgeCanvasData>>;
   onConfirmWriteback: (blockName?: string | null) => Promise<void> | void;
@@ -45,6 +47,7 @@ type ResearchWorkspaceProps = {
   onWorkbenchClose: () => void;
   onWorkbenchTabChange: (tab: NodeWorkbenchTab) => void;
   onWritebackHint: (blockName: string) => WritebackChipHint;
+  onAskHandover?: (prompt: string) => void;
 };
 
 function logicGraphFromJob(job: PlcJobDetail | null) {
@@ -85,6 +88,7 @@ export function ResearchWorkspace({
   switchCue,
   workbenchOpen,
   workbenchTab,
+  projectBrief,
   onAskInChat,
   onCanvasChange,
   onConfirmWriteback,
@@ -100,6 +104,7 @@ export function ResearchWorkspace({
   onWorkbenchClose,
   onWorkbenchTabChange,
   onWritebackHint,
+  onAskHandover,
 }: ResearchWorkspaceProps) {
   const scopedBlockName =
     chatScope && chatScope.kind !== "plc_tag" ? chatScope.blockName : undefined;
@@ -146,6 +151,13 @@ export function ResearchWorkspace({
             onClick={() => onTabChange("citations")}
           >
             引用{citations.length ? ` ${citations.length}` : ""}
+          </button>
+          <button
+            type="button"
+            className={canvasTab === "brief" ? "on" : ""}
+            onClick={() => onTabChange("brief")}
+          >
+            简报
           </button>
         </div>
         <div className="col-head-actions">
@@ -199,6 +211,14 @@ export function ResearchWorkspace({
           />
         ) : canvasTab === "canvas" ? (
           <>
+            {plcJobId ? (
+              <ProjectBriefCard
+                brief={projectBrief || null}
+                compact
+                onAsk={onAskHandover}
+                onOpenFull={() => onTabChange("brief")}
+              />
+            ) : null}
             <PlcCoverageStrip
               detail={plcJob}
               busy={busy}
@@ -254,6 +274,8 @@ export function ResearchWorkspace({
           </>
         ) : canvasTab === "timeline" ? (
           <Timeline events={events} />
+        ) : canvasTab === "brief" ? (
+          <ProjectBriefCard brief={projectBrief || null} onAsk={onAskHandover} />
         ) : (
           <CitationRail citations={citations} />
         )}

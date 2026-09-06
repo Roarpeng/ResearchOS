@@ -77,6 +77,7 @@
 | [`industrial/`](./industrial/README.md) | Robotics / ROS2 / PLC / CAD / Isaac Sim 扩展 |
 | [`reference/`](./reference/source-conversation-summary.md) | 源对话摘要与架构决策速查 |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | 架构阶段贡献指南 |
+| [handover-assistant-BRIEF-v1.1](./handover-assistant-BRIEF-v1.1.md) | PLC 交接助手：三问、M1–M3、带引用的现场解说员 |
 
 ---
 

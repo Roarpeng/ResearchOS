@@ -84,11 +84,14 @@ def _pending_ingest_message(job: dict[str, Any]) -> str:
     kind, source_label = _plc_source_kind(job)
     label = source_label or job.get("project_name") or job.get("id")
     status = job.get("status") or "queued"
+    extra = ""
+    if job.get("brief_ready"):
+        extra = "结构简报已可用（全文翻译仍在排队），可先问硬件/主循环/如何调整。"
     return (
         f"工程已接收，正在解析…\n"
         f"已检测为{kind}：{label}\n"
         f"作业 ID：{job['id']}（状态：{status}）\n"
-        f"解析完成后画布会自动更新，届时可直接提问。"
+        f"{extra or '解析完成后画布会自动更新，届时可直接提问。'}"
     )
 
 
@@ -453,10 +456,11 @@ async def handle_chat_turn(
                 return _pack(task, assistant_message=msg, route="plc", plc_job=job)
 
             job_status = str(job.get("status") or "")
-            if job_status in {"queued", "running"}:
+            if job_status in {"queued", "running"} and not job.get("brief_ready"):
                 msg = (
                     f"工程仍在解析中（状态：{job_status}），请稍候再提问。"
                     f"作业 ID：{job['id']}"
+                    "结构清单就绪后可先读 Project Brief，不必等全文翻译。"
                 )
                 plc.append_chat_turn(job, role="user", content=user_text, block_name=None)
                 plc.append_chat_turn(job, role="assistant", content=msg, block_name=None)

@@ -49,6 +49,26 @@ class PlcChatTurn(BaseModel):
     citations: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class PlcProjectBrief(BaseModel):
+    """Layered handover Brief — readable before full SCL translate."""
+
+    job_id: str | None = None
+    project_name: str = ""
+    phase: str = "queued"
+    brief_ready: bool = False
+    purpose: str = ""
+    main_ob: str | None = None
+    main_entry: str | None = None
+    block_counts_by_status: dict[str, int] = Field(default_factory=dict)
+    top_level_calls: list[dict[str, Any]] = Field(default_factory=list)
+    device_sensor_summary: dict[str, Any] = Field(default_factory=dict)
+    run_logic_entry: str = ""
+    export_gaps: list[dict[str, Any]] = Field(default_factory=list)
+    block_stubs: list[dict[str, Any]] = Field(default_factory=list)
+    engineer_prompts: list[dict[str, str]] = Field(default_factory=list)
+    timing: dict[str, Any] = Field(default_factory=dict)
+
+
 class PlcAnalyzeRequest(BaseModel):
     """Optional block focus for deterministic KG/folded-logic analysis."""
 
@@ -87,6 +107,8 @@ class PlcJobSummary(BaseModel):
         default=None,
         description="Language/Part/TODO histogram; also on GET job detail",
     )
+    brief_ready: bool = False
+    ingest_phase: str | None = None
 
 
 class PlcJobDetail(PlcJobSummary):
@@ -117,6 +139,9 @@ class PlcJobDetail(PlcJobSummary):
         default_factory=dict,
         description="Trusted structure inventory: units + layers + counts",
     )
+    hardware: list[dict[str, Any]] = Field(default_factory=list)
+    body_pull_queue: list[dict[str, Any]] = Field(default_factory=list)
+    block_stubs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PlcProposeChangeRequest(BaseModel):

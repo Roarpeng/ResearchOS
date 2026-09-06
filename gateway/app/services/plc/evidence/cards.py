@@ -155,7 +155,7 @@ def _describe_block_function(
         lines.append(f"注意：{note}")
 
     if interface_only or (protected and not body_available):
-        lines.append("程序体：不可用（未解密 / 未导出）— 不做 SCL 展开")
+        lines.append("程序体：未导出/未索引（未解密 / 无程序体）— 不做 SCL 展开，不编造内部逻辑")
         if include_full_scl:
             lines.extend(_format_block_scl_markdown(job, block_name))
             lines.extend(
@@ -242,7 +242,7 @@ def _format_block_runtime_explain(
     if not (interface_only or (protected and not body_available)):
         lines.extend(_format_scl_logic_block(folded))
     else:
-        lines.append("程序体：不可用（未解密 / 未导出）")
+        lines.append("程序体：未导出/未索引（未解密 / 无程序体）")
 
     lines.extend(
         _format_typed_as_nest_lines(

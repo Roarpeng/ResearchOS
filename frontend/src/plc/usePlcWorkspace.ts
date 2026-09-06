@@ -11,6 +11,7 @@ import {
   cancelTask,
   connectResearchStream,
   deleteResearchTask,
+  fetchPlcBrief,
   fetchPlcJob,
   fetchTask,
   listResearchTasks,
@@ -24,6 +25,7 @@ import {
   waitForPlcJob,
   type PlcCitation,
   type PlcJobDetail,
+  type PlcProjectBrief,
 } from "../api";
 import {
   canvasFocusFromJump,
@@ -87,7 +89,25 @@ export type PlcSendOptions = {
   scopeLabel?: string;
 };
 
-export type PlcCanvasTab = "canvas" | "sensors" | "timeline" | "citations";
+export type PlcCanvasTab = "canvas" | "brief" | "sensors" | "timeline" | "citations";
+
+export const ENGINEER_HANDOVER_PROMPTS = [
+  {
+    id: "q1_hardware",
+    label: "硬件/传感器",
+    prompt: "这个工程有哪些硬件和传感器？请按已导出证据列出；未导出或未建索引的标「未导出/未索引」，不要编造。",
+  },
+  {
+    id: "q2_run_logic",
+    label: "运行逻辑",
+    prompt: "主循环怎么跑？入口 OB 和顶层调用链是什么？请引用块名与网络/行，并附源片段。",
+  },
+  {
+    id: "q3_hitl_adjust",
+    label: "如何调整",
+    prompt: "如果要改这段运行逻辑，HITL 该怎么确认调整？不要自动写回 SCL，只说明确认路径。",
+  },
+] as const;
 
 export function usePlcWorkspace() {
   const [topics, setTopics] = useState<Topic[]>([]);
@@ -112,6 +132,7 @@ export function usePlcWorkspace() {
   const [switchCue, setSwitchCue] = useState<string | null>(null);
   const switchCueTimer = useRef<number | null>(null);
   const lastWorkbenchNode = useRef<string | null>(null);
+  const [projectBrief, setProjectBrief] = useState<PlcProjectBrief | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -299,9 +320,20 @@ export function usePlcWorkspace() {
     return prompts;
   }
 
+  function projectPrompts() {
+    return (projectBrief?.engineer_prompts?.length
+      ? projectBrief.engineer_prompts
+      : ENGINEER_HANDOVER_PROMPTS.map((p) => ({ ...p }))
+    ).map((p) => ({ id: p.id, label: p.label, prompt: p.prompt }));
+  }
+
   function onScopePrompt(prompt: string) {
     const node = scopedNode();
     if (node) void onDeepDive(node, prompt);
+  }
+
+  function onProjectPrompt(prompt: string) {
+    void sendTurn({ message: prompt, displayUser: prompt });
   }
 
   function startNew() {
@@ -323,6 +355,7 @@ export function usePlcWorkspace() {
     setSwitchCue(null);
     lastWorkbenchNode.current = null;
     setCanvas(emptyCanvas());
+    setProjectBrief(null);
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -384,6 +417,12 @@ export function usePlcWorkspace() {
     const detail = await fetchPlcJob(jobId);
     setPlcJob(detail);
     setPlcJobId(jobId);
+    try {
+      const brief = await fetchPlcBrief(jobId);
+      setProjectBrief(brief);
+    } catch {
+      setProjectBrief(null);
+    }
     return detail;
   }
 
@@ -433,6 +472,11 @@ export function usePlcWorkspace() {
             onProgress: (d) => {
               setPlcJob(d);
               setStatus(formatPlcProgress(d));
+              if (d.brief_ready) {
+                void fetchPlcBrief(linked)
+                  .then(setProjectBrief)
+                  .catch(() => undefined);
+              }
             },
           });
           setPlcJob(detail);
@@ -576,6 +620,11 @@ export function usePlcWorkspace() {
               intervalMs: 1500,
               onProgress: (d) => {
                 setPlcJob(d);
+                if (d.brief_ready) {
+                  void fetchPlcBrief(String(linked))
+                    .then(setProjectBrief)
+                    .catch(() => undefined);
+                }
                 const label = formatPlcProgress(d);
                 setStatus(label);
                 if (progressId) {
@@ -934,6 +983,7 @@ export function usePlcWorkspace() {
     messages,
     plcJob,
     plcJobId,
+    projectBrief,
     topics,
     status,
     applyChatScope,
@@ -956,7 +1006,9 @@ export function usePlcWorkspace() {
     setWorkbenchTab,
     onOptimizePropose,
     onRetryStructure,
+    onProjectPrompt,
     onScopePrompt,
+    projectPrompts,
     onResume,
     onSend,
     openTopic,

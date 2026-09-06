@@ -76,6 +76,7 @@ from gateway.app.services.plc.chat_intents import (
     _wants_understand_logic,
 )
 from gateway.app.services.plc.chat_router import answer_block_chat as _answer_block_chat
+from gateway.app.services.plc.brief import build_project_brief
 from gateway.app.services.plc.device_cards import (
     build_device_cards,
     clear_device_card_annotation,
@@ -85,7 +86,6 @@ from gateway.app.services.plc.device_cards import (
     set_device_card_annotation,
 )
 from gateway.app.services.plc.project_brief import (
-    build_project_brief,
     device_sensor_summary_section,
 )
 from gateway.app.services.plc.ingest import (
@@ -204,6 +204,7 @@ __all__ = [
     "_wants_understand_logic",
     "analyze_job",
     "answer_block_chat",
+    "build_project_brief",
     "append_chat_turn",
     "build_device_cards",
     "build_export_zip",
@@ -282,10 +283,13 @@ def _format_optimize_scl_chat(
 
 
 def answer_block_chat(job: dict[str, Any], message: str, block_name: str | None) -> str:
-    return _answer_block_chat(
+    from gateway.app.services.plc.citations import finalize_grounded_answer
+
+    content = _answer_block_chat(
         job,
         message,
         block_name,
         confirm_writeback=confirm_job_writeback,
         propose_optimize=propose_job_optimize,
     )
+    return finalize_grounded_answer(job, message, block_name, content)
