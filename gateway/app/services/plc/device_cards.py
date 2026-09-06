@@ -239,8 +239,20 @@ def _network_titles(kg: dict[str, Any]) -> dict[tuple[str, str], str]:
     return titles
 
 
-def _used_by(kg: dict[str, Any], tag_name: str) -> list[dict[str, Any]]:
-    tid = f"Tag::{tag_name}"
+def _tag_aliases(name: str, table: str = "") -> list[str]:
+    """Qualified Openness refs (HMI.StartCmd) alias the table symbol (StartCmd)."""
+    aliases = [name]
+    if table and not name.startswith(f"{table}."):
+        aliases.append(f"{table}.{name}")
+    if "." in name:
+        aliases.append(name.split(".", 1)[-1])
+    if name.startswith("#"):
+        aliases.append(name[1:])
+    return list(dict.fromkeys(a for a in aliases if a))
+
+
+def _used_by(kg: dict[str, Any], tag_name: str, table: str = "") -> list[dict[str, Any]]:
+    wanted = {f"Tag::{alias}" for alias in _tag_aliases(tag_name, table)}
     titles = _network_titles(kg)
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
@@ -248,7 +260,7 @@ def _used_by(kg: dict[str, Any], tag_name: str) -> list[dict[str, Any]]:
         et = str(edge.get("type") or "")
         if et not in {"READS", "WRITES"}:
             continue
-        if str(edge.get("target") or "") != tid:
+        if str(edge.get("target") or "") not in wanted:
             continue
         src = str(edge.get("source") or "")
         if not src.startswith("Block::"):
@@ -349,7 +361,7 @@ def _build_tag_card(
     status, meaning, source = _resolve_meaning(
         comment=comment, hmi_texts=hmi_texts, annotation=annotation
     )
-    used = _used_by(kg, name)
+    used = _used_by(kg, name, table)
     citations: list[dict[str, str]] = []
     if comment:
         citations.append(
@@ -480,6 +492,15 @@ def build_device_cards(job: dict[str, Any]) -> list[dict[str, Any]]:
     extra = _hardware_extra(job)
     cards: list[dict[str, Any]] = []
     seen: set[str] = set()
+    table_symbols: set[str] = set()
+    for node in _nodes(kg):
+        if str(node.get("type") or "") != "Tag":
+            continue
+        nid = str(node.get("id") or "")
+        props = node.get("props") or {}
+        name = _clean(props.get("name") or (nid.split("::", 1)[-1] if "::" in nid else nid))
+        if name and _tag_table_of(kg, nid or f"Tag::{name}"):
+            table_symbols.add(name)
 
     for node in _nodes(kg):
         ntype = str(node.get("type") or "")
@@ -488,6 +509,8 @@ def build_device_cards(job: dict[str, Any]) -> list[dict[str, Any]]:
         if ntype == "Tag":
             name = _clean(props.get("name") or (nid.split("::", 1)[-1] if "::" in nid else nid))
             if not name or name in seen:
+                continue
+            if "." in name and name.split(".", 1)[-1] in table_symbols:
                 continue
             card = _build_tag_card(job, name=name, props=props, kg=kg, hmi=hmi)
             if card is None:

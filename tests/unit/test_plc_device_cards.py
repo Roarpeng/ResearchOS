@@ -80,6 +80,8 @@ def test_motor_tags_cite_comments_and_usages(motor_job: dict) -> None:
     assert start["meaning_source"] == "tag_comment"
     assert start["tag_table"] == "HMI"
     assert isinstance(start["used_by"], list)
+    users = {u["block"] for u in start["used_by"]}
+    assert "Main" in users or "FB_Motor" in users
 
     stop = cards["StopCmd"]
     assert stop["meaning_status"] == "cited"
@@ -162,3 +164,5 @@ def test_local_interface_pins_without_address_are_not_cards(motor_job: dict) -> 
     names = {c["symbol_name"] for c in build_device_cards(motor_job)}
     assert "#Running" not in names
     assert "#Start" not in names
+    # Qualified access refs fold onto the tag-table symbol
+    assert "HMI.StartCmd" not in names
