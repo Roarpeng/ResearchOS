@@ -42,6 +42,7 @@ export function FigureCanvas({
   onExportPng,
 }: FigureCanvasProps) {
   const stageRef = useRef<Konva.Stage>(null);
+  const [labels, setLabels] = useState<Record<number, string>>({});
   const normalized = assets.map((a) => ({
     id: a.id,
     width: a.width || 200,
@@ -63,19 +64,28 @@ export function FigureCanvas({
           {layout.items.map((item, i) => (
             <FigureImage key={item.assetId} item={item} src={assets[i].src} />
           ))}
-          {layout.items.map((item, i) => (
-            <Text
-              key={`${item.assetId}-label`}
-              text={String.fromCharCode(97 + i)}
-              x={item.x + item.width / 2}
-              y={item.y - 20}
-              fontSize={16}
-              fontStyle="bold"
-              align="center"
-              width={30}
-              offsetX={15}
-            />
-          ))}
+          {layout.items.map((item, i) => {
+            const label = labels[i] ?? String.fromCharCode(97 + i);
+            return (
+              <Text
+                key={`${item.assetId}-label`}
+                text={label}
+                x={item.x + item.width / 2}
+                y={item.y - 20}
+                fontSize={16}
+                fontStyle="bold"
+                align="center"
+                width={30}
+                offsetX={15}
+                onClick={() => {
+                  const next = window.prompt("标签文字", label);
+                  if (next !== null && next !== "") {
+                    setLabels((prev) => ({ ...prev, [i]: next }));
+                  }
+                }}
+              />
+            );
+          })}
           {showScaleBar ? (
             <>
               <Line points={[barX, barY, barX + 160, barY]} stroke="#000" strokeWidth={2} />
