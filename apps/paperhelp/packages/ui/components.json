@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "new-york",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "src/styles/globals.css",
+    "baseColor": "neutral",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "aliases": {
+    "components": "@paperhelp/ui/components",
+    "utils": "@paperhelp/ui/lib/utils",
+    "ui": "@paperhelp/ui/components/ui",
+    "lib": "@paperhelp/ui/lib",
+    "hooks": "@paperhelp/ui/hooks"
+  },
+  "iconLibrary": "lucide"
+}

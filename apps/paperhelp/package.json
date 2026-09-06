@@ -1,0 +1,24 @@
+{
+  "name": "paperhelp",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "dev:desktop": "node scripts/with-cargo-path.mjs pnpm --filter desktop tauri dev",
+    "build:desktop": "node scripts/with-cargo-path.mjs pnpm --filter desktop tauri build"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.4"
+  },
+  "packageManager": "pnpm@10.26.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "puppeteer"
+    ]
+  }
+}
