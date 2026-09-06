@@ -1251,3 +1251,38 @@ export async function installSkillFromHub(item: HubSkillItem) {
   });
   return parseJson<AgentWorkspaceSettings>(res);
 }
+
+/* ---- Vault (research-folder capture → knowledge layer) ---- */
+
+export type VaultScanResult = {
+  count: number;
+  supported: number;
+  files: Array<{ path: string; size: number; supported: boolean }>;
+};
+
+export type VaultIngestResult = {
+  scanned: number;
+  ingested: number;
+  skipped_unchanged: number;
+  skipped_unsupported: number;
+  failed: number;
+  details: Array<Record<string, unknown>>;
+};
+
+export async function scanVault(root: string) {
+  const res = await fetch(`${GATEWAY_BASE}/api/v1/vault/scan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ root }),
+  });
+  return parseJson<VaultScanResult>(res);
+}
+
+export async function ingestVault(root: string, workspaceId?: string) {
+  const res = await fetch(`${GATEWAY_BASE}/api/v1/vault/ingest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ root, workspace_id: workspaceId ?? null }),
+  });
+  return parseJson<VaultIngestResult>(res);
+}
