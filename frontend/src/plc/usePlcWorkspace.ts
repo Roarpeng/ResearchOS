@@ -87,7 +87,7 @@ export type PlcSendOptions = {
   scopeLabel?: string;
 };
 
-export type PlcCanvasTab = "canvas" | "timeline" | "citations";
+export type PlcCanvasTab = "canvas" | "sensors" | "timeline" | "citations";
 
 export function usePlcWorkspace() {
   const [topics, setTopics] = useState<Topic[]>([]);

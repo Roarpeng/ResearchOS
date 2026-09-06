@@ -76,6 +76,18 @@ from gateway.app.services.plc.chat_intents import (
     _wants_understand_logic,
 )
 from gateway.app.services.plc.chat_router import answer_block_chat as _answer_block_chat
+from gateway.app.services.plc.device_cards import (
+    build_device_cards,
+    clear_device_card_annotation,
+    find_card_by_symbol,
+    get_device_card,
+    list_device_cards,
+    set_device_card_annotation,
+)
+from gateway.app.services.plc.project_brief import (
+    build_project_brief,
+    device_sensor_summary_section,
+)
 from gateway.app.services.plc.ingest import (
     _annotate_block_nest_depth,
     _block_list,
@@ -193,7 +205,15 @@ __all__ = [
     "analyze_job",
     "answer_block_chat",
     "append_chat_turn",
+    "build_device_cards",
     "build_export_zip",
+    "build_project_brief",
+    "clear_device_card_annotation",
+    "device_sensor_summary_section",
+    "find_card_by_symbol",
+    "get_device_card",
+    "list_device_cards",
+    "set_device_card_annotation",
     "confirm_job_writeback",
     "create_job_record",
     "delete_job",

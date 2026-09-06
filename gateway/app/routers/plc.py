@@ -12,6 +12,9 @@ from fastapi.responses import Response
 from gateway.app.deps import PrincipalDep, RequestIdDep
 from gateway.app.schemas.common import ApiResponse
 from gateway.app.schemas.plc import (
+    DeviceCardAnnotationRequest,
+    DeviceCardListResponse,
+    DeviceSensorCard,
     PlcAnalyzeRequest,
     PlcChatRequest,
     PlcChatTurn,
@@ -24,6 +27,7 @@ from gateway.app.schemas.plc import (
     PlcProposeChangeRequest,
     PlcStructureRetryRequest,
     PlcWritebackRequest,
+    ProjectBriefResponse,
 )
 from gateway.app.services import plc_jobs as plc
 
@@ -157,6 +161,156 @@ async def get_plc_job(
     # Legacy jobs may only have Project→Block CONTAINS in logic_graph; refresh in place.
     plc.refresh_logic_graph(job)
     return ApiResponse(ok=True, data=_detail(job), request_id=request_id)
+
+
+def _ready_job(job_id: str) -> dict[str, Any]:
+    job = plc.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "PLC_JOB_NOT_FOUND", "message": "PLC job not found"},
+        )
+    if job.get("status") != "ready":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PLC_JOB_NOT_READY",
+                "message": f"Job status is {job.get('status')}, expected ready",
+            },
+        )
+    return job
+
+
+@router.get("/jobs/{job_id}/device-cards", response_model=ApiResponse[DeviceCardListResponse])
+async def list_plc_device_cards(
+    job_id: str,
+    principal: PrincipalDep,
+    request_id: RequestIdDep,
+    q: str = "",
+    io_type: str = "",
+    meaning_status: str = "",
+    kind: str = "",
+    limit: int = 200,
+) -> ApiResponse[DeviceCardListResponse]:
+    """Q1 I/O ↔ device/sensor cards. Missing comments stay meaning_unconfirmed."""
+    _ = principal
+    job = _ready_job(job_id)
+    payload = plc.list_device_cards(
+        job, q=q, io_type=io_type, meaning_status=meaning_status, kind=kind, limit=limit
+    )
+    return ApiResponse(
+        ok=True,
+        data=DeviceCardListResponse.model_validate(payload),
+        request_id=request_id,
+    )
+
+
+@router.get(
+    "/jobs/{job_id}/device-cards/{kind}/{name:path}",
+    response_model=ApiResponse[DeviceSensorCard],
+)
+async def get_plc_device_card(
+    job_id: str,
+    kind: str,
+    name: str,
+    principal: PrincipalDep,
+    request_id: RequestIdDep,
+) -> ApiResponse[DeviceSensorCard]:
+    _ = principal
+    job = _ready_job(job_id)
+    card = plc.get_device_card(job, f"{kind}:{name}")
+    if card is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "PLC_DEVICE_CARD_NOT_FOUND", "message": f"No card {kind}:{name}"},
+        )
+    return ApiResponse(
+        ok=True,
+        data=DeviceSensorCard.model_validate(card),
+        request_id=request_id,
+    )
+
+
+@router.put(
+    "/jobs/{job_id}/device-cards/{kind}/{name:path}/annotation",
+    response_model=ApiResponse[DeviceSensorCard],
+)
+async def annotate_plc_device_card(
+    job_id: str,
+    kind: str,
+    name: str,
+    body: DeviceCardAnnotationRequest,
+    principal: PrincipalDep,
+    request_id: RequestIdDep,
+) -> ApiResponse[DeviceSensorCard]:
+    """Engineer annotation takes priority over cited comments / HMI text."""
+    job = _ready_job(job_id)
+    try:
+        card = plc.set_device_card_annotation(
+            job,
+            f"{kind}:{name}",
+            text=body.text,
+            author=body.author or principal.subject,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "PLC_DEVICE_CARD_NOT_FOUND", "message": f"No card {kind}:{name}"},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "PLC_DEVICE_CARD_ANNOTATION_INVALID", "message": str(exc)},
+        ) from exc
+    return ApiResponse(
+        ok=True,
+        data=DeviceSensorCard.model_validate(card),
+        request_id=request_id,
+    )
+
+
+@router.delete(
+    "/jobs/{job_id}/device-cards/{kind}/{name:path}/annotation",
+    response_model=ApiResponse[DeviceSensorCard],
+)
+async def clear_plc_device_card_annotation(
+    job_id: str,
+    kind: str,
+    name: str,
+    principal: PrincipalDep,
+    request_id: RequestIdDep,
+) -> ApiResponse[DeviceSensorCard]:
+    _ = principal
+    job = _ready_job(job_id)
+    try:
+        card = plc.clear_device_card_annotation(job, f"{kind}:{name}")
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "PLC_DEVICE_CARD_NOT_FOUND", "message": f"No card {kind}:{name}"},
+        ) from exc
+    return ApiResponse(
+        ok=True,
+        data=DeviceSensorCard.model_validate(card),
+        request_id=request_id,
+    )
+
+
+@router.get("/jobs/{job_id}/brief", response_model=ApiResponse[ProjectBriefResponse])
+async def get_plc_project_brief(
+    job_id: str,
+    principal: PrincipalDep,
+    request_id: RequestIdDep,
+) -> ApiResponse[ProjectBriefResponse]:
+    """Project Brief stub. MUST include sections.device_sensor_summary for M2."""
+    _ = principal
+    job = _ready_job(job_id)
+    brief = plc.build_project_brief(job)
+    return ApiResponse(
+        ok=True,
+        data=ProjectBriefResponse.model_validate(brief),
+        request_id=request_id,
+    )
 
 
 @router.post("/jobs/{job_id}/chat", response_model=ApiResponse[PlcChatTurn])

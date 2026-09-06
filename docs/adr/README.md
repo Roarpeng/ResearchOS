@@ -32,6 +32,7 @@
 | 0006 | 报告管线：Markdown → Typst/Pandoc | Accepted | [0006-report-pipeline-markdown-typst.md](./0006-report-pipeline-markdown-typst.md) |
 | 0007 | 搜索路由器：MCP Search Router | Accepted | [0007-search-router-mcp.md](./0007-search-router-mcp.md) |
 | 0008 | PLC Gateway 与 Workbench 模块边界 | Accepted | [0008-plc-gateway-workbench-module-boundaries.md](./0008-plc-gateway-workbench-module-boundaries.md) |
+| 0009 | Q1 Device/Sensor Cards（硬件/传感器含义） | Accepted | [0009-plc-device-sensor-cards.md](./0009-plc-device-sensor-cards.md) |
 
 ## 如何新增 ADR
 

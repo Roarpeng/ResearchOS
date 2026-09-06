@@ -56,6 +56,8 @@
 | [0005](./adr/0005-n8n-orchestration-boundary.md) | n8n 边界：非核心运行时 |
 | [0006](./adr/0006-report-pipeline-markdown-typst.md) | 报告管线 Markdown → Typst/Pandoc |
 | [0007](./adr/0007-search-router-mcp.md) | 搜索路由器（MCP Search Router） |
+| [0008](./adr/0008-plc-gateway-workbench-module-boundaries.md) | PLC Gateway 与 Workbench 模块边界 |
+| [0009](./adr/0009-plc-device-sensor-cards.md) | Q1 Device/Sensor Cards（硬件/传感器含义） |
 
 ---
 

@@ -206,7 +206,7 @@ export function buildSignalSubgraph(
       y: cy + r * Math.sin(angle),
       source: {
         type: "plc",
-        quote: t.name,
+        quote: [t.address, t.comment].filter(Boolean).join(" · ") || t.name,
         block_name: blockName,
         plc_job_id: focus.source?.plc_job_id,
         project: focus.source?.project,

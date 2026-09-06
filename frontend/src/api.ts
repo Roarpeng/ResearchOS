@@ -595,6 +595,127 @@ export async function waitForPlcJob(
   }
 }
 
+export type DeviceCardMeaningStatus = "cited" | "annotated" | "meaning_unconfirmed";
+
+export type DeviceSensorCard = {
+  schema?: string;
+  id: string;
+  kind: "tag" | "device" | string;
+  symbol_name: string;
+  address?: string;
+  comment?: string;
+  io_type?: string;
+  data_type?: string;
+  tag_table?: string;
+  meaning_status: DeviceCardMeaningStatus | string;
+  meaning_text?: string;
+  meaning_source?: string;
+  hmi_texts?: Array<{ device?: string; screen?: string; text?: string }>;
+  used_by?: Array<{
+    block?: string;
+    access?: string;
+    network_id?: string;
+    network_title?: string;
+    part?: string;
+  }>;
+  hardware?: {
+    name?: string;
+    type?: string;
+    address?: string;
+    rack?: string;
+    slot?: string;
+    failsafe?: boolean;
+  } | null;
+  annotation?: { text?: string; author?: string; updated_at?: string } | null;
+  citations?: Array<{ kind?: string; locator?: string; quote?: string }>;
+};
+
+export type DeviceCardList = {
+  schema?: string;
+  job_id?: string;
+  project_name?: string;
+  counts?: {
+    total?: number;
+    returned?: number;
+    cited?: number;
+    annotated?: number;
+    meaning_unconfirmed?: number;
+  };
+  cards: DeviceSensorCard[];
+};
+
+export type ProjectBrief = {
+  schema?: string;
+  job_id?: string;
+  project_name?: string;
+  status?: string;
+  sections?: {
+    device_sensor_summary?: {
+      schema?: string;
+      owned_by?: string;
+      total_cards?: number;
+      cited?: number;
+      annotated?: number;
+      meaning_unconfirmed?: number;
+      io_type_counts?: Record<string, number>;
+      cards?: Array<Record<string, unknown>>;
+      unconfirmed_ids?: string[];
+      gaps?: string[];
+    };
+  };
+  notes?: string[];
+  card_count?: number;
+};
+
+export async function listPlcDeviceCards(
+  jobId: string,
+  opts?: { q?: string; io_type?: string; meaning_status?: string; kind?: string },
+) {
+  const qs = new URLSearchParams();
+  if (opts?.q) qs.set("q", opts.q);
+  if (opts?.io_type) qs.set("io_type", opts.io_type);
+  if (opts?.meaning_status) qs.set("meaning_status", opts.meaning_status);
+  if (opts?.kind) qs.set("kind", opts.kind);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const res = await fetch(`${GATEWAY_BASE}/api/v1/plc/jobs/${jobId}/device-cards${suffix}`, {
+    headers: { Accept: "application/json" },
+  });
+  return parseJson<DeviceCardList>(res);
+}
+
+export async function fetchPlcDeviceCard(jobId: string, kind: string, name: string) {
+  const res = await fetch(
+    `${GATEWAY_BASE}/api/v1/plc/jobs/${jobId}/device-cards/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`,
+    { headers: { Accept: "application/json" } },
+  );
+  return parseJson<DeviceSensorCard>(res);
+}
+
+export async function annotatePlcDeviceCard(
+  jobId: string,
+  kind: string,
+  name: string,
+  text: string,
+  author = "",
+) {
+  const res = await fetch(
+    `${GATEWAY_BASE}/api/v1/plc/jobs/${jobId}/device-cards/${encodeURIComponent(kind)}/${encodeURIComponent(name)}/annotation`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ text, author }),
+    },
+  );
+  return parseJson<DeviceSensorCard>(res);
+}
+
+export async function fetchPlcProjectBrief(jobId: string) {
+  const res = await fetch(`${GATEWAY_BASE}/api/v1/plc/jobs/${jobId}/brief`, {
+    headers: { Accept: "application/json" },
+  });
+  return parseJson<ProjectBrief>(res);
+}
+
 export async function listPlcJobs() {
   const res = await fetch(`${GATEWAY_BASE}/api/v1/plc/jobs`, {
     headers: { Accept: "application/json" },
