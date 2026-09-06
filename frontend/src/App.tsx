@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { FigurePanel } from "./manuscript/FigurePanel";
 import { VaultPanel } from "./manuscript/VaultPanel";
 import { usePlcWorkspace } from "./plc/usePlcWorkspace";
 import type { ChatMsg } from "./workbench/model";
@@ -11,6 +12,7 @@ import { useTriSplit } from "./workbench/useTriSplit";
 export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showVault, setShowVault] = useState(false);
+  const [showFigure, setShowFigure] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const {
@@ -118,6 +120,9 @@ export default function App() {
           {status ? <span className="status-chip">{status}</span> : null}
           <button type="button" className="ghost" onClick={() => setShowVault(true)}>
             资料库
+          </button>
+          <button type="button" className="ghost" onClick={() => setShowFigure(true)}>
+            图件
           </button>
           <button type="button" className="ghost" onClick={() => setShowSettings(true)}>
             设置
@@ -227,6 +232,7 @@ export default function App() {
 
       {showSettings ? <SettingsModal onClose={() => setShowSettings(false)} /> : null}
       {showVault ? <VaultPanel onClose={() => setShowVault(false)} /> : null}
+      {showFigure ? <FigurePanel onClose={() => setShowFigure(false)} /> : null}
     </div>
   );
 }
