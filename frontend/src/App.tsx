@@ -41,6 +41,7 @@ export default function App() {
     onConfirmWriteback,
     onDeepDive,
     onFocusNode,
+    jumpToCanvasNode,
     onAskInChat,
     onViewSources,
     onMarkNote,
@@ -200,6 +201,7 @@ export default function App() {
           workbenchTab={workbenchTab}
           projectBrief={projectBrief}
           onAskHandover={onProjectPrompt}
+          onJumpCanvas={jumpToCanvasNode}
           onAskInChat={onAskInChat}
           onCanvasChange={setCanvas}
           onConfirmWriteback={onConfirmWriteback}
