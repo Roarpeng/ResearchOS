@@ -63,6 +63,16 @@ def vault_stop(root: str) -> dict[str, Any]:
     return watcher.stop()
 
 
+@mcp.tool(name="vault.capture", description="Quick capture: write a timestamped note into the folder inbox.")
+def vault_capture(root: str, text: str, tag: str | None = None) -> dict[str, Any]:
+    return core.append_note(root, text, tag=tag)
+
+
+@mcp.tool(name="vault.import_chat", description="Import a chat transcript into per-turn Markdown notes.")
+def vault_import_chat(root: str, text: str) -> dict[str, Any]:
+    return core.import_chat_transcript(root, text)
+
+
 def main() -> None:
     mcp.run()
 

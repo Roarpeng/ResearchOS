@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -195,3 +196,51 @@ class VaultWatcher:
             except Exception as exc:  # noqa: BLE001
                 logger.exception("vault watcher cycle failed: %s", exc)
             self._stop.wait(self.interval)
+
+
+def append_note(root: str | Path, text: str, tag: str | None = None, subdir: str = "inbox") -> dict[str, Any]:
+    """Quick capture: write a timestamped Markdown note into the research folder."""
+    import datetime
+
+    base = Path(root) / subdir
+    base.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    name = f"{stamp}-{tag}.md" if tag else f"{stamp}.md"
+    path = base / name
+    path.write_text(f"# {text}\n", encoding="utf-8")
+    return {"path": str(path), "note": text, "tag": tag}
+
+
+_CHAT_TS_RE = re.compile(r"^\s*(\d{1,2}:\d{2}(?::\d{2})?|\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2})")
+
+
+def import_chat_transcript(
+    root: str | Path,
+    text: str,
+    subdir: str = "chat",
+) -> dict[str, Any]:
+    """Split a chat transcript into per-turn Markdown notes (timestamp heuristic)."""
+    base = Path(root) / subdir
+    base.mkdir(parents=True, exist_ok=True)
+
+    turns: list[tuple[str, str]] = []
+    ts: str | None = None
+    buf: list[str] = []
+    for line in text.splitlines():
+        m = _CHAT_TS_RE.match(line)
+        if m:
+            if ts is not None:
+                turns.append((ts, "\n".join(buf).strip()))
+            ts = m.group(1)
+            buf = [line[len(m.group(0)) :].strip()]
+        elif ts is not None:
+            buf.append(line)
+    if ts is not None:
+        turns.append((ts, "\n".join(buf).strip()))
+
+    notes: list[dict[str, Any]] = []
+    for i, (stamp, body) in enumerate(turns, 1):
+        path = base / f"turn-{i:03d}.md"
+        path.write_text(f"# [{stamp}]\n\n{body}\n", encoding="utf-8")
+        notes.append({"path": str(path), "timestamp": stamp, "text": body})
+    return {"turns": len(notes), "notes": notes}
