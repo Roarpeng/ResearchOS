@@ -60,6 +60,7 @@ researchos-mcp-github = "tools.github.server:main"
 researchos-mcp-isaac = "tools.isaac.server:main"
 researchos-mcp-cad = "tools.cad.server:main"
 researchos-mcp-plc = "tools.plc.server:main"
+researchos-mcp-vault = "tools.vault.server:main"
 researchos-tia-cli = "agents.plc.tia_cli:main"
 
 [build-system]
