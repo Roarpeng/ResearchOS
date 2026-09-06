@@ -47,3 +47,25 @@ def test_build_manifest() -> None:
     )
     assert m["figure_count"] == 3
     assert m["journal"] == "Crop Journal"
+
+
+def test_render_markdown_intermediate() -> None:
+    from scientific.manuscript.journalize import render_markdown
+
+    sections = assemble_sections({"sections": [{"key": "results", "title": "Results"}]}, [
+        {"section": "results", "source_id": "doc_1", "chunk_id": "chk_1", "text": "wheat yield +12%"},
+    ])
+    md = render_markdown(
+        title="T",
+        authors=["A"],
+        abstract="Abs.",
+        sections=sections,
+        ai_disclosure="d",
+        references=["Li et al. 2024"],
+    )
+    assert md.startswith("# T")
+    assert "## Abstract" in md
+    assert "## Results" in md
+    assert md.count("## Results") == 1  # assembler heading deduped
+    assert "## AI Use Disclosure" in md
+    assert "- Li et al. 2024" in md

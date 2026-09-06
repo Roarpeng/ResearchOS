@@ -91,3 +91,37 @@ def build_manifest(
         "ai_disclosure": ai_disclosure,
         "reference_style": "author-year",  # overridden by style when available
     }
+
+
+def render_markdown(
+    *,
+    title: str,
+    authors: list[str],
+    abstract: str,
+    sections: list[DraftSection],
+    ai_disclosure: str,
+    references: list[str],
+) -> str:
+    """Canonical Markdown intermediate for tools/report (Typst/Pandoc → PDF/DOCX, ADR-0006)."""
+    lines = [
+        f"# {title}",
+        "",
+        f"*{', '.join(authors)}*",
+        "",
+        "## Abstract",
+        "",
+        abstract,
+        "",
+    ]
+    for s in sections:
+        lines.append(f"## {s.title}")
+        lines.append("")
+        for body_line in s.body.splitlines():
+            stripped = body_line.strip()
+            if stripped.startswith("## ") and stripped[3:].strip() == s.title:
+                continue  # drop the duplicated heading emitted by the assembler
+            lines.append(body_line)
+        lines.append("")
+    lines += ["## AI Use Disclosure", "", ai_disclosure, "", "## References", ""]
+    lines += [f"- {r}" for r in references]
+    return "\n".join(lines)
