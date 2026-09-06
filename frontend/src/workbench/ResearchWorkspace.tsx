@@ -8,10 +8,11 @@ import KnowledgeCanvas, {
   type KnowledgeNode,
   type WritebackChipHint,
 } from "../KnowledgeCanvas";
+import { NodeWorkbench, type NodeWorkbenchTab } from "../plc/canvas/NodeWorkbench";
 import { PlcCoverageStrip } from "../plc/CoverageStrip";
 import type { PlcCanvasTab } from "../plc/usePlcWorkspace";
 import type { CitationItem, ResearchEvent } from "../researchModel";
-import type { ChatScope } from "./model";
+import type { ChatMsg, ChatScope } from "./model";
 
 type ResearchWorkspaceProps = {
   busy: boolean;
@@ -21,17 +22,27 @@ type ResearchWorkspaceProps = {
   citations: CitationItem[];
   chatScope: ChatScope | null;
   events: ResearchEvent[];
+  messages: ChatMsg[];
+  noteFocusKey: number;
   plcJob: PlcJobDetail | null;
   plcJobId: string | null;
+  switchCue: string | null;
+  workbenchOpen: boolean;
+  workbenchTab: NodeWorkbenchTab;
   onAskInChat: (node: KnowledgeNode) => void;
   onCanvasChange: Dispatch<SetStateAction<KnowledgeCanvasData>>;
   onConfirmWriteback: (blockName?: string | null) => Promise<void> | void;
   onDeepDive: (node: KnowledgeNode, question: string) => Promise<void> | void;
+  onFocusNode: (ref: string) => void;
+  onMarkNote: (node: KnowledgeNode) => void;
   onSelectNode: (node: KnowledgeNode | null) => void;
   onOptimizePropose: () => Promise<void> | void;
   onRetryStructure?: (names?: string[]) => Promise<void> | void;
   onSclPreview: (blockName: string) => Array<{ block?: string }>;
   onTabChange: (tab: PlcCanvasTab) => void;
+  onViewSources: (node: KnowledgeNode) => void;
+  onWorkbenchClose: () => void;
+  onWorkbenchTabChange: (tab: NodeWorkbenchTab) => void;
   onWritebackHint: (blockName: string) => WritebackChipHint;
 };
 
@@ -66,21 +77,42 @@ export function ResearchWorkspace({
   citations,
   chatScope,
   events,
+  messages,
+  noteFocusKey,
   plcJob,
   plcJobId,
+  switchCue,
+  workbenchOpen,
+  workbenchTab,
   onAskInChat,
   onCanvasChange,
   onConfirmWriteback,
   onDeepDive,
+  onFocusNode,
+  onMarkNote,
   onSelectNode,
   onOptimizePropose,
   onRetryStructure,
   onSclPreview,
   onTabChange,
+  onViewSources,
+  onWorkbenchClose,
+  onWorkbenchTabChange,
   onWritebackHint,
 }: ResearchWorkspaceProps) {
   const scopedBlockName =
     chatScope && chatScope.kind !== "plc_tag" ? chatScope.blockName : undefined;
+  const workbenchNode =
+    (chatScope &&
+      (canvas.nodes.find((n) => n.id === chatScope.nodeId) || {
+        id: chatScope.nodeId,
+        label: chatScope.label,
+        kind: chatScope.kind,
+        x: 0,
+        y: 0,
+        source: { type: "plc", block_name: chatScope.blockName },
+      })) ||
+    null;
 
   return (
     <section className="col canvas" aria-label="研究视图">
@@ -155,23 +187,47 @@ export function ResearchWorkspace({
               busy={busy}
               onRetryStructure={onRetryStructure}
             />
-            <KnowledgeCanvas
-              data={canvas}
-              logicGraph={logicGraphFromJob(plcJob)}
-              knowledgeGraph={plcJob?.knowledge_graph || null}
-              onChange={onCanvasChange}
-              onDeepDive={onDeepDive}
-              onConfirmWriteback={(node) => {
-                const name = String(node.source?.block_name || node.label || "").trim();
-                return onConfirmWriteback(name || undefined);
-              }}
-              writebackHint={onWritebackHint}
-              getSclPreview={onSclPreview}
-              onSelectNode={onSelectNode}
-              onAskInChat={onAskInChat}
-              focusRequest={canvasFocus}
-              busy={busy}
-            />
+            <div className={`kg-stage${workbenchOpen ? " with-workbench" : ""}`}>
+              <KnowledgeCanvas
+                data={canvas}
+                logicGraph={logicGraphFromJob(plcJob)}
+                knowledgeGraph={plcJob?.knowledge_graph || null}
+                plcJob={plcJob}
+                onChange={onCanvasChange}
+                onSelectNode={onSelectNode}
+                onAskInChat={onAskInChat}
+                onViewSources={onViewSources}
+                onMarkNote={onMarkNote}
+                focusRequest={canvasFocus}
+                busy={busy}
+              />
+              {workbenchOpen && workbenchNode ? (
+                <NodeWorkbench
+                  node={workbenchNode}
+                  job={plcJob}
+                  messages={messages}
+                  busy={busy}
+                  tab={workbenchTab}
+                  noteFocusKey={noteFocusKey}
+                  switchCue={switchCue}
+                  inspectCtx={{
+                    job: plcJob,
+                    knowledgeGraph: plcJob?.knowledge_graph || null,
+                  }}
+                  writebackHint={onWritebackHint}
+                  getSclPreview={onSclPreview}
+                  onTabChange={onWorkbenchTabChange}
+                  onClose={onWorkbenchClose}
+                  onAsk={onDeepDive}
+                  onOptimizePropose={onOptimizePropose}
+                  onConfirmWriteback={(node) => {
+                    const name = String(node.source?.block_name || node.label || "").trim();
+                    return onConfirmWriteback(name || undefined);
+                  }}
+                  onJumpCitation={onFocusNode}
+                />
+              ) : null}
+            </div>
           </>
         ) : canvasTab === "timeline" ? (
           <Timeline events={events} />

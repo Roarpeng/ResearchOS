@@ -70,6 +70,7 @@
 | [`api/`](./api/README.md) | Gateway REST / Auth / Research API / Knowledge API / WebSocket |
 | [`workflows/`](./workflows/README.md) | 竞品分析、Deep Research、持续学习工作流 |
 | [`frontend/`](./frontend/README.md) | 流式 UI、引用展示、研究控制台 |
+| [handover-canvas-ux-workbench](./handover-canvas-ux-workbench.md) | Knowledge Canvas Inspector + 右侧 Workbench 交互契约 |
 | [`deployment/`](./deployment/README.md) | Docker Compose、配置、GPU/Ollama、私有化、可观测性 |
 | [`industrial/`](./industrial/README.md) | Robotics / ROS2 / PLC / CAD / Isaac Sim 扩展 |
 | [`reference/`](./reference/source-conversation-summary.md) | 源对话摘要与架构决策速查 |

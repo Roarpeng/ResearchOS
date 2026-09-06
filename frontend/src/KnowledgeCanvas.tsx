@@ -7,11 +7,16 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import type { PlcJobDetail } from "./api";
+import { NodeInspector } from "./plc/canvas/NodeInspector";
+import { resolveExportStatus, typeGlyph } from "./plc/canvas/inspectModel";
 export type CanvasFocusRequest = {
   key: number;
   nodeId?: string;
   blockName?: string;
   clear?: boolean;
+  /** After focus+select, open the right-side Workbench (ask this node). */
+  ask?: boolean;
 };
 
 export type KnowledgeSource = {
@@ -28,6 +33,7 @@ export type KnowledgeSource = {
   project?: string;
   path?: string;
   plc_job_id?: string;
+  /** M1 export status when present (`exported` / `failed` / `skipped` / `pending`). */
   export_status?: string;
 };
 
@@ -47,6 +53,8 @@ export type KnowledgeNode = {
   ring?: number;
   /** Highest-degree node in its galaxy. */
   hub?: boolean;
+  /** Per-unit export status from M1 inventory, if the job provides it. */
+  export_status?: string;
 };
 
 export type KnowledgeEdge = {
@@ -94,19 +102,18 @@ type Props = {
   /** Full PLC KG — used to overlay IO/signal subgraph when a block is selected. */
   knowledgeGraph?: PlcKnowledgeGraphData | null;
   onChange: (next: KnowledgeCanvasData) => void;
-  onDeepDive: (node: KnowledgeNode, question: string) => Promise<void> | void;
-  /** Node-scoped HITL confirm (same gate as header 「确认反写.zap」). */
-  onConfirmWriteback?: (node: KnowledgeNode) => Promise<void> | void;
-  /** Disable/skip-reason for 「确认反写」 when the focused block has no writable ops. */
-  writebackHint?: (blockName: string) => WritebackChipHint;
-  /** HITL SCL preview available for this block (shown in chat). */
-  getSclPreview?: (blockName: string) => Array<{ block?: string }>;
   /** Selecting a PLC node pins chat scope; does not send a turn. */
   onSelectNode?: (node: KnowledgeNode | null) => void;
-  /** Double-click or inspector「在对话中问」— focus the main composer. */
+  /** Double-click / Space / Inspector「问这节点」— open the right Workbench. */
   onAskInChat?: (node: KnowledgeNode) => void;
-  /** Citation chip / scope-clear → select or deselect on the canvas. */
+  /** Inspector「看引用源」. */
+  onViewSources?: (node: KnowledgeNode) => void;
+  /** Inspector「标记人注」. */
+  onMarkNote?: (node: KnowledgeNode) => void;
+  /** Citation chip / Brief / device-card jump → select or deselect on the canvas. */
   focusRequest?: CanvasFocusRequest | null;
+  /** Optional job for Inspector export status + I/O lines. */
+  plcJob?: PlcJobDetail | null;
   busy?: boolean;
 };
 
@@ -1639,7 +1646,17 @@ function GraphPane({
               <circle className="kg-hub-halo" cx={n.x} cy={n.y} r={baseR + 10} />
             ) : null}
             <circle cx={n.x} cy={n.y} r={isFocus ? baseR + 4 : baseR} />
+            <text className="kg-node-icon" x={n.x} y={n.y + 4} textAnchor="middle">
+              {typeGlyph(gt)}
+            </text>
+            <circle
+              className={`kg-status-dot tone-${resolveExportStatus(n).tone}`}
+              cx={n.x + (isFocus ? baseR + 4 : baseR) * 0.72}
+              cy={n.y - (isFocus ? baseR + 4 : baseR) * 0.72}
+              r={4}
+            />
             <text
+              className="kg-node-name"
               x={n.x}
               y={n.y + (isFocus || isHub ? 34 : 28)}
               textAnchor="middle"
@@ -1659,13 +1676,12 @@ export default function KnowledgeCanvas({
   logicGraph,
   knowledgeGraph,
   onChange,
-  onDeepDive,
-  onConfirmWriteback,
-  writebackHint,
-  getSclPreview,
   onSelectNode,
   onAskInChat,
+  onViewSources,
+  onMarkNote,
   focusRequest,
+  plcJob,
   busy,
 }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1920,6 +1936,14 @@ export default function KnowledgeCanvas({
     onAskInChat?.(node);
   }
 
+  function clearSelection() {
+    setSelectedId(null);
+    setSelectedLogicId(null);
+    setSelectedLogicEdge(null);
+    setHighlighted(new Set());
+    onSelectNode?.(null);
+  }
+
   function onLogicNodeUp(_e: ReactPointerEvent, id: string) {
     const node = knowledgeNodeFromLogicId(id);
     setSelectedLogicId(id);
@@ -1966,16 +1990,10 @@ export default function KnowledgeCanvas({
     window.addEventListener("pointerup", up);
   }
 
-  const diveTarget =
-    selected?.id.startsWith("sig_") && selectedBase ? selectedBase : selected;
-
   useEffect(() => {
     if (!focusRequest) return;
     if (focusRequest.clear) {
-      setSelectedId(null);
-      setSelectedLogicId(null);
-      setSelectedLogicEdge(null);
-      setHighlighted(new Set());
+      clearSelection();
       return;
     }
     const token = focusRequest.nodeId || focusRequest.blockName || "";
@@ -1992,10 +2010,26 @@ export default function KnowledgeCanvas({
           n.label === token,
       ) ||
       knowledgeNodeFromLogicId(token);
-    if (node) applyNodeSelection(node);
+    if (node) {
+      applyNodeSelection(node);
+      if (focusRequest.ask) onAskInChat?.(node);
+    }
     // focusRequest.key is the trigger; node lookup uses latest maps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusRequest?.key]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== " " && e.code !== "Space") return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (!selectedId) return;
+      e.preventDefault();
+      askAboutNode(selectedId);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedId]);
 
   const hasSelection =
     Boolean(selectedId || selectedLogicId || selectedLogicEdge) || highlighted.size > 0;
@@ -2153,187 +2187,21 @@ export default function KnowledgeCanvas({
       </div>
 
       {selected ? (
-        <div className="kg-pop" role="dialog" aria-label="知识节点">
-          <div className="kg-pop-head">
-            <strong>{selected.label}</strong>
-            <button
-              type="button"
-              className="ghost compact"
-              onClick={() => {
-                setSelectedId(null);
-                setSelectedLogicId(null);
-                setHighlighted(new Set());
-              }}
-            >
-              关闭
-            </button>
-          </div>
-          <p className="kg-summary">{selected.summary}</p>
-          {signalOverlay.nodes.length && !selected.id.startsWith("sig_") ? (
-            <p className="kg-summary muted">
-              已展开 {signalOverlay.nodes.length} 个 IO/信号（READS/WRITES）
-            </p>
-          ) : null}
-          <div className="kg-source">
-            <div className="k">来源</div>
-            <div className="v">
-              {selected.source?.type || "dialogue"}
-              {selected.source?.block_type ? ` · ${selected.source.block_type}` : ""}
-              {selected.source?.instance_of
-                ? ` · 实例←${selected.source.instance_of}`
-                : selected.source?.entity_kind === "instance"
-                  ? " · 实例 DB"
-                  : ""}
-              {selected.source?.nest_depth
-                ? ` · 嵌套深度 ${selected.source.nest_depth}`
-                : ""}
-              {selected.source?.project ? ` · ${selected.source.project}` : ""}
-            </div>
-            {selected.source?.path ? <pre className="kg-quote">{selected.source.path}</pre> : null}
-            {selected.source?.quote ? <pre className="kg-quote">{selected.source.quote}</pre> : null}
-          </div>
-          <button
-            type="button"
-            className="kg-ask-chat"
-            disabled={busy}
-            onClick={() => {
-              if (!selected) return;
-              onAskInChat?.(selected);
-            }}
-          >
-            在对话中问
-          </button>
-          <div className="kg-quick">
-            <button
-              type="button"
-              className="ghost compact"
-              disabled={busy || !diveTarget}
-              onClick={() => {
-                if (!diveTarget || busy) return;
-                void onDeepDive(diveTarget, "展开 SCL");
-              }}
-            >
-              展开 SCL
-            </button>
-            <button
-              type="button"
-              className="ghost compact"
-              disabled={busy || !diveTarget}
-              onClick={() => {
-                if (!diveTarget || busy) return;
-                void onDeepDive(diveTarget, "分析节点");
-              }}
-            >
-              分析逻辑
-            </button>
-            <button
-              type="button"
-              className="ghost compact"
-              disabled={busy || !diveTarget}
-              onClick={() => {
-                if (!diveTarget || busy) return;
-                void onDeepDive(diveTarget, "理解逻辑");
-              }}
-            >
-              理解逻辑
-            </button>
-            <button
-              type="button"
-              className="ghost compact"
-              disabled={busy || !diveTarget}
-              onClick={() => {
-                if (!diveTarget || busy) return;
-                void onDeepDive(diveTarget, "优化逻辑");
-              }}
-            >
-              优化逻辑
-            </button>
-            <button
-              type="button"
-              className="ghost compact"
-              disabled={busy || !diveTarget}
-              onClick={() => {
-                if (!diveTarget || busy) return;
-                void onDeepDive(diveTarget, "优化SCL");
-              }}
-            >
-              优化SCL
-            </button>
-            <button
-              type="button"
-              className="ghost compact"
-              disabled={
-                busy ||
-                !diveTarget ||
-                diveTarget.kind === "plc_tag" ||
-                (writebackHint
-                  ? !writebackHint(
-                      String(diveTarget.source?.block_name || diveTarget.label || ""),
-                    ).canWrite
-                  : false)
-              }
-              title={
-                diveTarget
-                  ? writebackHint?.(
-                      String(diveTarget.source?.block_name || diveTarget.label || ""),
-                    )?.reason || "确认 changeset 并 Openness 反写归档 .zap"
-                  : undefined
-              }
-              onClick={() => {
-                if (!diveTarget || busy || diveTarget.kind === "plc_tag") return;
-                const hint = writebackHint?.(
-                  String(diveTarget.source?.block_name || diveTarget.label || ""),
-                );
-                if (hint && !hint.canWrite) return;
-                if (onConfirmWriteback) {
-                  void onConfirmWriteback(diveTarget);
-                  return;
-                }
-                void onDeepDive(diveTarget, "确认反写");
-              }}
-            >
-              确认反写
-            </button>
-            <button
-              type="button"
-              className="ghost compact"
-              disabled={busy || !diveTarget}
-              onClick={() => {
-                if (!diveTarget || busy) return;
-                void onDeepDive(diveTarget, "嵌套链");
-              }}
-            >
-              嵌套链
-            </button>
-            <button
-              type="button"
-              className="ghost compact"
-              disabled={busy || !diveTarget}
-              onClick={() => {
-                if (!diveTarget || busy) return;
-                void onDeepDive(diveTarget, "谁读写这些信号");
-              }}
-            >
-              信号读写
-            </button>
-            <button
-              type="button"
-              className="ghost compact"
-              disabled={busy || !diveTarget}
-              onClick={() => {
-                if (!diveTarget || busy) return;
-                void onDeepDive(diveTarget, "优化建议");
-              }}
-            >
-              优化建议
-            </button>
-          </div>
-          {diveTarget && getSclPreview?.(
-            String(diveTarget.source?.block_name || diveTarget.label || ""),
-          ).length ? (
-            <p className="kg-scl-hint">对话栏已给出该块 SCL 预览（Diff / 改写前 / 改写后）</p>
-          ) : null}
-        </div>
+        <NodeInspector
+          node={selected}
+          busy={busy}
+          ctx={{
+            job: plcJob,
+            knowledgeGraph,
+            signalSummaries: selected.id.startsWith("sig_")
+              ? [selected.summary || ""].filter(Boolean)
+              : signalOverlay.nodes.map((n) => n.summary || n.label).filter(Boolean),
+          }}
+          onAsk={(n) => onAskInChat?.(n)}
+          onViewSources={(n) => onViewSources?.(n)}
+          onMarkNote={(n) => onMarkNote?.(n)}
+          onClose={clearSelection}
+        />
       ) : null}
     </div>
   );

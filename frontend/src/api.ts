@@ -227,11 +227,15 @@ export type KnowledgeCanvasPayload = {
 export type PlcCitation = {
   block?: string;
   network?: string;
+  /** M3 locator, e.g. `Network 10 / line 3`. */
+  locator?: string;
+  line?: number;
   evidence?: string;
   nodeId?: string;
   edge_type?: string;
   target?: string;
   snippet?: string;
+  source_status?: string;
 };
 
 export type ChatTurnResult = {

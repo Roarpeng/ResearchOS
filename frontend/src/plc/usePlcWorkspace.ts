@@ -26,6 +26,13 @@ import {
   type PlcJobDetail,
 } from "../api";
 import {
+  canvasFocusFromJump,
+  jumpToken,
+  type CanvasJumpIntent,
+  type NodeWorkbenchTab,
+} from "./canvas/index";
+import { demoKnowledgeCanvas, demoPlcJob } from "./canvas/demoFixture";
+import {
   canvasGalaxyScore,
   emptyCanvas,
   normalizeCanvas,
@@ -99,6 +106,12 @@ export function usePlcWorkspace() {
   const [events, setEvents] = useState<ResearchEvent[]>([]);
   const [citations, setCitations] = useState<CitationItem[]>([]);
   const [canvasTab, setCanvasTab] = useState<PlcCanvasTab>("canvas");
+  const [workbenchOpen, setWorkbenchOpen] = useState(false);
+  const [workbenchTab, setWorkbenchTab] = useState<NodeWorkbenchTab>("meaning");
+  const [noteFocusKey, setNoteFocusKey] = useState(0);
+  const [switchCue, setSwitchCue] = useState<string | null>(null);
+  const switchCueTimer = useRef<number | null>(null);
+  const lastWorkbenchNode = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -141,6 +154,18 @@ export function usePlcWorkspace() {
   }, [refreshTopics]);
 
   useEffect(() => {
+    try {
+      if (!new URLSearchParams(window.location.search).has("canvasDemo")) return;
+      setCanvas(demoKnowledgeCanvas());
+      setPlcJob(demoPlcJob());
+      setPlcJobId("demo-canvas");
+      setStatus("canvas-demo");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
@@ -167,35 +192,87 @@ export function usePlcWorkspace() {
     });
   }
 
+  function flashSwitchCue(label: string) {
+    if (switchCueTimer.current) window.clearTimeout(switchCueTimer.current);
+    setSwitchCue(`已切换节点 · ${label}`);
+    switchCueTimer.current = window.setTimeout(() => setSwitchCue(null), 2200);
+  }
+
   function applyChatScope(node: KnowledgeNode | null) {
     if (!node || !isPlcScopeNode(node)) {
       setChatScope(null);
+      lastWorkbenchNode.current = null;
+      setWorkbenchOpen(false);
       return;
     }
-    setChatScope(chatScopeFromNode(node));
+    const next = chatScopeFromNode(node);
+    if (
+      workbenchOpen &&
+      lastWorkbenchNode.current &&
+      lastWorkbenchNode.current !== next.nodeId
+    ) {
+      flashSwitchCue(next.label);
+    }
+    lastWorkbenchNode.current = next.nodeId;
+    setChatScope(next);
   }
 
   function clearChatScope() {
     setChatScope(null);
+    lastWorkbenchNode.current = null;
+    setWorkbenchOpen(false);
     setCanvasFocus({ key: Date.now(), clear: true });
   }
 
   function onAskInChat(node: KnowledgeNode) {
     applyChatScope(node);
+    setCanvasTab("canvas");
+    setWorkbenchOpen(true);
+    setWorkbenchTab("run");
     focusComposer();
+  }
+
+  function onViewSources(node: KnowledgeNode) {
+    applyChatScope(node);
+    setCanvasTab("canvas");
+    setWorkbenchOpen(true);
+    setWorkbenchTab("run");
+  }
+
+  function onMarkNote(node: KnowledgeNode) {
+    applyChatScope(node);
+    setCanvasTab("canvas");
+    setWorkbenchOpen(true);
+    setWorkbenchTab("meaning");
+    setNoteFocusKey(Date.now());
+  }
+
+  function jumpToCanvasNode(intent: CanvasJumpIntent) {
+    const token = jumpToken(intent);
+    const node =
+      (intent.nodeId ? canvas.nodes.find((n) => n.id === intent.nodeId) : undefined) ||
+      canvas.nodes.find(
+        (n) =>
+          n.id === token ||
+          n.source?.block_name === token ||
+          n.label === token ||
+          n.label === intent.symbol,
+      );
+    if (node) applyChatScope(node);
+    setCanvasTab("canvas");
+    setCanvasFocus(canvasFocusFromJump(intent));
+    if (intent.ask && node) {
+      setWorkbenchOpen(true);
+      setWorkbenchTab("run");
+    }
   }
 
   function onFocusNode(ref: string) {
     const token = String(ref || "").trim();
     if (!token) return;
-    const node =
-      canvas.nodes.find((n) => n.id === token) ||
-      canvas.nodes.find((n) => n.source?.block_name === token || n.label === token);
-    if (node) applyChatScope(node);
-    setCanvasFocus({
-      key: Date.now(),
-      nodeId: node?.id || (token.startsWith("plc_") || token.startsWith("sig_") ? token : undefined),
-      blockName: node?.source?.block_name || node?.label || token,
+    jumpToCanvasNode({
+      nodeId: token.startsWith("plc_") || token.startsWith("sig_") ? token : undefined,
+      blockName: token,
     });
   }
 
@@ -242,6 +319,9 @@ export function usePlcWorkspace() {
     setPlcJobId(null);
     setChatScope(null);
     setCanvasFocus(null);
+    setWorkbenchOpen(false);
+    setSwitchCue(null);
+    lastWorkbenchNode.current = null;
     setCanvas(emptyCanvas());
     if (fileRef.current) fileRef.current.value = "";
   }
@@ -317,6 +397,9 @@ export function usePlcWorkspace() {
     setPlcJobId(null);
     setChatScope(null);
     setCanvasFocus(null);
+    setWorkbenchOpen(false);
+    setSwitchCue(null);
+    lastWorkbenchNode.current = null;
     setEvents([]);
     setCitations([]);
     setCanvasTab("canvas");
@@ -862,6 +945,15 @@ export function usePlcWorkspace() {
     onDeepDive,
     onFocusNode,
     onAskInChat,
+    onViewSources,
+    onMarkNote,
+    jumpToCanvasNode,
+    workbenchOpen,
+    workbenchTab,
+    noteFocusKey,
+    switchCue,
+    setWorkbenchOpen,
+    setWorkbenchTab,
     onOptimizePropose,
     onRetryStructure,
     onScopePrompt,
