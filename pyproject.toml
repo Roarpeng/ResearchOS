@@ -45,6 +45,11 @@ parsers = [
 report = [
   "pypandoc>=1.14",
 ]
+plot = [
+  "matplotlib>=3.8.0",
+  "pandas>=2.0.0",
+  "openpyxl>=3.1.0",
+]
 
 [project.scripts]
 researchos-gateway = "gateway.app.main:run"
@@ -62,6 +67,7 @@ researchos-mcp-cad = "tools.cad.server:main"
 researchos-mcp-plc = "tools.plc.server:main"
 researchos-mcp-vault = "tools.vault.server:main"
 researchos-mcp-scholar = "tools.scholar.server:main"
+researchos-mcp-plot = "tools.plot.server:main"
 researchos-tia-cli = "agents.plc.tia_cli:main"
 
 [build-system]
