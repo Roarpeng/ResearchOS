@@ -11,6 +11,7 @@ ResearchOS API 以 FastAPI Gateway 为统一入口，对外提供认证、会话
 | [03-research-api.md](./03-research-api.md) | 创建研究任务、流式事件、获取报告 |
 | [04-knowledge-api.md](./04-knowledge-api.md) | 文档入库、检索、图谱与知识空间 |
 | [05-websocket-events.md](./05-websocket-events.md) | WebSocket 事件协议、载荷与重连 |
+| [06-plc-handover-q1.md](./06-plc-handover-q1.md) | Q1 设备/传感器卡片与 Project Brief 段（M2 消费） |
 
 ## 设计目标
 

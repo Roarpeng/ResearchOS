@@ -48,6 +48,7 @@ def create_job_record(
         "structure": {},
         "chat": [],
         "engineer_understanding": None,
+        "device_card_annotations": {},
         "export_dir": None,
         "export_ready": False,
         "project_path": None,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PlcJobCreatePath(BaseModel):
@@ -144,6 +144,77 @@ class PlcStructureRetryRequest(BaseModel):
         default_factory=list,
         description="Optional unit names to emphasize; empty retries the full inventory",
     )
+
+
+class DeviceCardAnnotationRequest(BaseModel):
+    """Engineer note that overrides cited tag/HMI comments on a Q1 card."""
+
+    text: str = Field(..., min_length=1, max_length=2000)
+    author: str = Field(default="", max_length=120)
+
+
+class DeviceCardCitation(BaseModel):
+    kind: str
+    locator: str = ""
+    quote: str = ""
+
+
+class DeviceCardUsage(BaseModel):
+    block: str
+    access: str
+    network_id: str = ""
+    network_title: str = ""
+    part: str = ""
+
+
+class DeviceCardHmiText(BaseModel):
+    device: str = ""
+    screen: str = ""
+    text: str = ""
+
+
+class DeviceSensorCard(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    schema_: str = Field(default="researchos.device_sensor_card.v1", alias="schema")
+    id: str
+    kind: str
+    symbol_name: str
+    address: str = ""
+    comment: str = ""
+    io_type: str = "UNKNOWN"
+    data_type: str = ""
+    tag_table: str = ""
+    meaning_status: str
+    meaning_text: str = ""
+    meaning_source: str = "none"
+    hmi_texts: list[DeviceCardHmiText] = Field(default_factory=list)
+    used_by: list[DeviceCardUsage] = Field(default_factory=list)
+    hardware: dict[str, Any] | None = None
+    annotation: dict[str, Any] | None = None
+    citations: list[DeviceCardCitation] = Field(default_factory=list)
+
+
+class DeviceCardListResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    schema_: str = Field(default="researchos.device_sensor_card.v1", alias="schema")
+    job_id: str | None = None
+    project_name: str = ""
+    counts: dict[str, Any] = Field(default_factory=dict)
+    cards: list[DeviceSensorCard] = Field(default_factory=list)
+
+
+class ProjectBriefResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    schema_: str = Field(default="researchos.project_brief.v1", alias="schema")
+    job_id: str | None = None
+    project_name: str = ""
+    status: str = ""
+    sections: dict[str, Any] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+    card_count: int = 0
 
 
 class PlcWritebackRequest(BaseModel):

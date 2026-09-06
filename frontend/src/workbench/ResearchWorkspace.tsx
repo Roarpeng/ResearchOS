@@ -10,6 +10,7 @@ import KnowledgeCanvas, {
 } from "../KnowledgeCanvas";
 import { NodeWorkbench, type NodeWorkbenchTab } from "../plc/canvas/NodeWorkbench";
 import { PlcCoverageStrip } from "../plc/CoverageStrip";
+import { DeviceSensorInspect, DeviceSensorPanel } from "../plc/DeviceSensorPanel";
 import type { PlcCanvasTab } from "../plc/usePlcWorkspace";
 import type { CitationItem, ResearchEvent } from "../researchModel";
 import type { ChatMsg, ChatScope } from "./model";
@@ -127,6 +128,13 @@ export function ResearchWorkspace({
           </button>
           <button
             type="button"
+            className={canvasTab === "sensors" ? "on" : ""}
+            onClick={() => onTabChange("sensors")}
+          >
+            传感器
+          </button>
+          <button
+            type="button"
             className={canvasTab === "timeline" ? "on" : ""}
             onClick={() => onTabChange("timeline")}
           >
@@ -180,13 +188,28 @@ export function ResearchWorkspace({
         </div>
       </div>
       <div className="canvas-body canvas-kg">
-        {canvasTab === "canvas" ? (
+        {canvasTab === "sensors" ? (
+          <DeviceSensorPanel
+            jobId={plcJob?.status === "ready" ? plcJobId : null}
+            focusSymbol={
+              chatScope?.kind === "plc_tag" && !chatScope.nodeId.startsWith("plc_tt_")
+                ? chatScope.label
+                : undefined
+            }
+          />
+        ) : canvasTab === "canvas" ? (
           <>
             <PlcCoverageStrip
               detail={plcJob}
               busy={busy}
               onRetryStructure={onRetryStructure}
             />
+            {plcJobId &&
+            plcJob?.status === "ready" &&
+            chatScope?.kind === "plc_tag" &&
+            !chatScope.nodeId.startsWith("plc_tt_") ? (
+              <DeviceSensorInspect jobId={plcJobId} symbol={chatScope.label} />
+            ) : null}
             <div className={`kg-stage${workbenchOpen ? " with-workbench" : ""}`}>
               <KnowledgeCanvas
                 data={canvas}

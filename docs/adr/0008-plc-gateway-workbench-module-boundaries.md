@@ -30,6 +30,8 @@ PLC 网关能力最初集中在 `gateway/app/services/plc_jobs.py`，前端工�
 | `chat_evidence.py` | 兼容层：re-export `evidence/*` 的既有私有助手 |
 | `writeback_views.py` | 回写确认、优化预览与执行 recap |
 | `chat_router.py` | 聊天响应路由与编排 |
+| `device_cards.py` | Q1 I/O ↔ 设备/传感器卡片（引用字段，不编造含义） |
+| `project_brief.py` | Project Brief 契约；Q1 拥有 `device_sensor_summary` |
 
 ### Evidence Package
 
@@ -54,6 +56,7 @@ PLC 网关能力最初集中在 `gateway/app/services/plc_jobs.py`，前端工�
 - `canvas/`: Inspector + 右侧 Workbench、跳转契约、人注与引用归一（见 [handover-canvas-ux-workbench](../handover-canvas-ux-workbench.md)）。
 - `detail.ts`: 进度、回写提示、SCL diff 和详情展示变换。
 - `CoverageStrip.tsx`: PLC 覆盖度展示。
+- `DeviceSensorPanel.tsx`: Q1 设备/传感器卡片列表、详情与工程师批注。
 - `usePlcWorkspace.ts`: topics、active job、消息、上传草稿、busy/status、interrupts、canvas、chat scope、events、citations 和视图 tab 的 workspace 状态与编排。
 
 面板级组合放在 `frontend/src/workbench/`：

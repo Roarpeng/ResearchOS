@@ -73,7 +73,9 @@ gateway/app/services/plc/
      |   `-- signal.py             # signal-trace rendering
      |-- chat_evidence.py          # compatibility re-exports for evidence helpers
      |-- writeback_views.py        # confirmation previews and execution recaps
-     `-- chat_router.py            # chat response orchestration
+     |-- chat_router.py            # chat response orchestration
+     |-- device_cards.py           # Q1 I/O ↔ device/sensor cards (cited meaning)
+     `-- project_brief.py          # Project Brief; Q1 owns device_sensor_summary
 ```
 
 The frontend mirrors this separation at the application boundary:
@@ -85,6 +87,7 @@ frontend/src/App.tsx               # application-level assembly
      |   |-- canvas/               # Inspector + right Workbench, jump contract
      |   |-- detail.ts             # progress, write-back hints, diffs
      |   |-- CoverageStrip.tsx     # PLC coverage + M1 structure status list
+     |   |-- DeviceSensorPanel.tsx # Q1 device/sensor cards + annotation
      |   `-- usePlcWorkspace.ts    # PLC workspace state and orchestration
      `-- frontend/src/workbench/
          |-- useTriSplit.ts        # tri-pane sizing state
