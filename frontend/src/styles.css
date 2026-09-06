@@ -1135,6 +1135,69 @@ body.col-resizing * {
   background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
 }
 
+.plc-coverage.is-failed {
+  border-color: #b91c1c;
+  background: color-mix(in srgb, #b91c1c 8%, var(--surface));
+}
+
+.plc-coverage.is-warning {
+  border-color: #b45309;
+  background: color-mix(in srgb, #b45309 8%, var(--surface));
+}
+
+.plc-structure-counts,
+.plc-structure-list {
+  margin-top: 0.2rem;
+}
+
+.plc-status-failed,
+.plc-chip.is-failed {
+  color: #b91c1c;
+  border-color: #b91c1c;
+  background: color-mix(in srgb, #b91c1c 12%, transparent);
+}
+
+.plc-status-skipped,
+.plc-status-pending,
+.plc-chip.is-warning {
+  color: #b45309;
+  border-color: #b45309;
+  background: color-mix(in srgb, #b45309 12%, transparent);
+}
+
+.plc-chip em {
+  font-style: normal;
+  margin-left: 0.25rem;
+  font-weight: 700;
+}
+
+.plc-structure-retry {
+  margin-left: 0.25rem;
+  vertical-align: middle;
+}
+
+.kg-node.export-failed circle,
+.lg-node.export-failed circle {
+  stroke: #b91c1c;
+  stroke-width: 3;
+}
+
+.kg-node.export-skipped circle,
+.kg-node.export-pending circle,
+.lg-node.export-skipped circle,
+.lg-node.export-pending circle {
+  stroke: #b45309;
+  stroke-width: 3;
+  stroke-dasharray: 3 2;
+}
+
+.kg-node.gt-DEVICE circle,
+.lg-node.gt-DEVICE circle,
+.kg-node.plc_device circle,
+.lg-node.plc_device circle {
+  fill: #0e7490;
+}
+
 .evidence-chips {
   display: flex;
   flex-wrap: wrap;

@@ -1238,8 +1238,28 @@ def merge_parse_results(project: PlcProject, results: list[XmlParseResult]) -> N
             project.project_texts.update({str(k): str(v) for k, v in item.payload.items()})
         elif item.kind == "error" and item.note:
             project.extraction_notes.append(item.note)
+            project.parse_gaps.append(
+                {
+                    "name": Path(item.rel).stem or item.rel,
+                    "rel": item.rel,
+                    "kind": "block",
+                    "status": "failed",
+                    "reason": "openness_error",
+                    "detail": item.note,
+                }
+            )
         elif item.kind == "skip":
             skipped.append(item.rel)
+            project.parse_gaps.append(
+                {
+                    "name": Path(item.rel).stem or item.rel,
+                    "rel": item.rel,
+                    "kind": "block",
+                    "status": "skipped",
+                    "reason": "unrecognized",
+                    "detail": f"unrecognized XML skipped: {item.rel}",
+                }
+            )
     if skipped:
         preview = ", ".join(skipped[:8])
         more = f" (+{len(skipped) - 8} more)" if len(skipped) > 8 else ""
@@ -1250,16 +1270,18 @@ def merge_parse_results(project: PlcProject, results: list[XmlParseResult]) -> N
 
 def _attach_export_manifest(project: PlcProject, export_path: Path) -> None:
     path = export_path / "manifest.json"
-    if not path.is_file():
-        return
-    try:
-        import json
+    if path.is_file():
+        try:
+            import json
 
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            project.export_manifest = data
-    except Exception as exc:  # noqa: BLE001
-        project.extraction_notes.append(f"manifest.json unreadable: {exc}")
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                project.export_manifest = data
+        except Exception as exc:  # noqa: BLE001
+            project.extraction_notes.append(f"manifest.json unreadable: {exc}")
+    from agents.plc.tia.structure import attach_export_journal
+
+    attach_export_journal(project, export_path)
 
 
 def _has_parsed_surface(project: PlcProject) -> bool:

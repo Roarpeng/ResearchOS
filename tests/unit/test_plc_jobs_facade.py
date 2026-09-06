@@ -24,6 +24,7 @@ def test_router_facing_plc_service_symbols_are_callable() -> None:
         "query_job_graph",
         "refresh_logic_graph",
         "resolve_allowed_path",
+        "retry_structure_export",
         "run_ingest_job",
         "save_upload",
     ]

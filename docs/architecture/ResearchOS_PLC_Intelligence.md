@@ -58,7 +58,7 @@ gateway/app/services/plc_jobs.py   # compatibility facade and test seams
 gateway/app/services/plc/
      |-- paths.py                  # upload allowlist, safe zip handling
      |-- job_store.py              # jobs, progress, analysis, export, chat history
-     |-- ingest.py                 # TIA import orchestration and source collection
+     |-- ingest.py                 # TIA import orchestration, M1 structure inventory, retry
      |-- logic_graph.py            # OB scan-order and logic-graph refresh
      |-- changesets.py             # proposals, optimization, HITL write-back
      |-- chat_intents.py           # intent and @mention parsing
@@ -83,7 +83,7 @@ frontend/src/App.tsx               # application-level assembly
      |-- frontend/src/plc/
      |   |-- canvasModel.ts        # job-to-canvas normalization and derivations
      |   |-- detail.ts             # progress, write-back hints, diffs
-     |   |-- CoverageStrip.tsx     # PLC coverage display
+     |   |-- CoverageStrip.tsx     # PLC coverage + M1 structure status list
      |   `-- usePlcWorkspace.ts    # PLC workspace state and orchestration
      `-- frontend/src/workbench/
          |-- useTriSplit.ts        # tri-pane sizing state

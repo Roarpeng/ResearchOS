@@ -169,14 +169,24 @@ def write_result_package(
         json.dumps(conversion, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     from agents.plc.tia.coverage import build_coverage_report, coverage_markdown
+    from agents.plc.tia.structure import build_structure_inventory, structure_summary
 
     coverage = build_coverage_report(
         project, scl_sources, timings=(extra_meta or {}).get("timings")
+    )
+    structure = (extra_meta or {}).get("structure") or build_structure_inventory(
+        project, knowledge_graph=knowledge_graph
+    )
+    coverage["structure"] = (extra_meta or {}).get("structure_summary") or structure_summary(
+        structure
     )
     (reports / "coverage.json").write_text(
         json.dumps(coverage, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     (reports / "coverage.md").write_text(coverage_markdown(coverage), encoding="utf-8")
+    (reports / "structure.json").write_text(
+        json.dumps(structure, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     meta = {
         "project_name": project.name,
         "source_path": project.source_path,

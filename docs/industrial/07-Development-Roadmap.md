@@ -38,6 +38,12 @@
 - [ ] Robot/AGV 域模型：待定义
 - [ ] 真实 GPU 环境：短场景试验指标 JSON schema 与 NGC 容器对接
 
+## Engineer handover（Gateway PLC jobs + Knowledge Canvas）
+
+- [x] **M1 Trusted structure** — 每块必有 `exported` / `failed` / `skipped` / `pending`；失败可见；见 [`M1-Trusted-Structure.md`](./M1-Trusted-Structure.md)
+- [ ] M2 Layered Project Brief
+- [ ] M3 Cited Q&A（SCL optimize / write-back 仍延后）
+
 ## 后续候选（按影响排序）
 
 1. Isaac Sim 仿真任务 MCP（mock 打通产物流）

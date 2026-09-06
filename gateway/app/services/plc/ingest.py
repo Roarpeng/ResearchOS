@@ -22,7 +22,62 @@ from gateway.app.services.plc.logic_graph import (
 
 logger = logging.getLogger("researchos.gateway.plc")
 
-def _block_list(project: Any) -> list[dict[str, Any]]:
+def _annotate_blocks_from_structure(
+    blocks: list[dict[str, Any]],
+    structure: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Copy M1 export status onto parsed blocks and append omitted units."""
+    units = (structure or {}).get("units") or []
+    by_name = {
+        str(u.get("name") or ""): u
+        for u in units
+        if u.get("name") and u.get("kind") in {"block", "db", "udt"}
+    }
+    for row in blocks:
+        unit = by_name.get(str(row.get("name") or ""))
+        if not unit:
+            row.setdefault("status", "exported")
+            row.setdefault("status_reason", "")
+            row.setdefault("status_detail", "")
+            row.setdefault("retryable", False)
+            continue
+        row["status"] = unit.get("status") or "exported"
+        row["status_reason"] = unit.get("reason") or ""
+        row["status_detail"] = unit.get("detail") or ""
+        row["retryable"] = bool(unit.get("retryable"))
+    seen = {str(b.get("name") or "") for b in blocks}
+    for name, unit in by_name.items():
+        if name in seen:
+            continue
+        blocks.append(
+            {
+                "name": name,
+                "type": unit.get("type") or unit.get("kind") or "Block",
+                "number": unit.get("number"),
+                "language": unit.get("language"),
+                "networks": 0,
+                "comment": (unit.get("detail") or unit.get("reason") or "")[:240],
+                "inputs": [],
+                "outputs": [],
+                "inouts": [],
+                "statics": [],
+                "members": [],
+                "instance_of": unit.get("instance_of"),
+                "protected": bool(unit.get("protected")),
+                "interface_only": bool(unit.get("interface_only")),
+                "body_available": bool(unit.get("body_available")),
+                "is_safety": bool(unit.get("is_safety")),
+                "status": unit.get("status") or "pending",
+                "status_reason": unit.get("reason") or "",
+                "status_detail": unit.get("detail") or "",
+                "retryable": bool(unit.get("retryable")),
+            }
+        )
+    blocks.sort(key=lambda b: (b.get("type") or "", b.get("name") or ""))
+    return blocks
+
+
+def _block_list(project: Any, structure: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     for name, block in (getattr(project, "blocks", {}) or {}).items():
         interface = getattr(block, "interface", None) or []
@@ -77,10 +132,13 @@ def _block_list(project: Any) -> list[dict[str, Any]]:
                 "interface_only": is_iface_only,
                 "body_available": body_ok,
                 "is_safety": bool(getattr(block, "is_safety", False)),
+                "status": "exported",
+                "status_reason": "",
+                "status_detail": "",
+                "retryable": False,
             }
         )
-    blocks.sort(key=lambda b: (b.get("type") or "", b.get("name") or ""))
-    return blocks
+    return _annotate_blocks_from_structure(blocks, structure)
 
 
 def _annotate_block_nest_depth(job: dict[str, Any]) -> None:
@@ -224,6 +282,7 @@ def run_ingest_job(
                 "export_dir": str(imported.export_dir),
                 "tia_version": imported.tia_version,
                 "timings": pipeline_timings,
+                "structure": result.get("structure") or {},
             },
         )
         pipeline_timings["package_ms"] = int((time.monotonic() - t_pkg) * 1000)
@@ -237,7 +296,8 @@ def run_ingest_job(
         job["folded_logic"] = result.get("folded_logic") or {}
         job["report"] = interpretation_report(project, result["knowledge_graph"])
         job["graph_publish"] = result.get("graph_publish")
-        job["blocks"] = _block_list(project)
+        job["structure"] = result.get("structure") or {}
+        job["blocks"] = _block_list(project, job["structure"])
         job["coverage"] = result.get("coverage") or {}
         job["export_dir"] = str(work / "package")
         job["export_ready"] = True
@@ -311,6 +371,7 @@ def run_ingest_job(
             )[:400],
         )
         # Empty IR after ingesting a raw .zap/.apxx tree is a hard failure, not "ready".
+        # Skipped/failed program units still count — M1 forbids omitting them.
         if not job["blocks"]:
             from agents.plc.tia.importer import (
                 find_apxx_files,
@@ -381,3 +442,38 @@ def _collect_source_xmls(source_path: str) -> list[str]:
     if p.is_dir():
         return [str(x.resolve()) for x in sorted(p.rglob("*.xml"))][:200]
     return []
+
+
+def retry_structure_export(
+    job_id: str,
+    *,
+    names: list[str] | None = None,
+    publish_graph: bool = True,
+) -> dict[str, Any]:
+    """Re-run Openness/structure ingest so failed/pending units can recover.
+
+    Unit names are recorded on the job for diagnostics. The export CLI is
+    project-wide (list + export), so retry always re-walks the source rather
+    than silently dropping units that were previously skipped.
+    """
+    job = get_job(job_id)
+    if job is None:
+        raise KeyError(job_id)
+    if job.get("status") not in {"ready", "failed", "queued"}:
+        raise ValueError(f"Job status is {job.get('status')}, expected ready, failed, or queued")
+    wanted = [str(n).strip() for n in (names or []) if str(n).strip()]
+    job["structure_retry"] = {
+        "names": wanted,
+        "requested_at": _now().isoformat(),
+    }
+    logger.info(
+        "PLC structure retry job_id=%s names=%s",
+        job_id,
+        wanted or "*",
+    )
+    return run_ingest_job(
+        job_id,
+        publish_graph=publish_graph,
+        plc_name=str(job.get("plc_name") or ""),
+        tia_version=str(job.get("tia_version") or ""),
+    )

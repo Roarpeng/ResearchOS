@@ -203,6 +203,7 @@ def build_coverage_report(
         "categories": build_category_coverage(project),
         "extraction_notes": list(project.extraction_notes),
         "timings": timings or {},
+        "structure": {},
     }
 
 
@@ -298,6 +299,25 @@ def coverage_markdown(coverage: dict[str, Any]) -> str:
         if "cache_hit" in timings or "openness_cache_hit" in timings:
             hit = timings.get("cache_hit", timings.get("openness_cache_hit"))
             lines.append(f"- Export cache hit: {hit}")
+    lines.append("")
+    structure = coverage.get("structure") or {}
+    if structure:
+        lines.append("")
+        lines.append("## Trusted structure (M1)")
+        lines.append(
+            f"- Units: **{structure.get('total') or 0}** · "
+            f"exported={structure.get('exported') or 0} · "
+            f"failed={structure.get('failed') or 0} · "
+            f"skipped={structure.get('skipped') or 0} · "
+            f"pending={structure.get('pending') or 0}"
+        )
+        if structure.get("complete"):
+            lines.append("- Inventory complete: no silent gaps recorded")
+        else:
+            lines.append(
+                f"- Incomplete units visible: {structure.get('incomplete_count') or 0} "
+                "(failed / skipped / pending — never omitted)"
+            )
     lines.append("")
     lines.append(
         "> Know-how protected bodies are never decrypted or guessed. "

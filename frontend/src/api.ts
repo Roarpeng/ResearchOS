@@ -329,6 +329,46 @@ export function connectResearchStream(
 
 /* ---- PLC Intelligence feature ---- */
 
+export type StructureStatus = "exported" | "failed" | "skipped" | "pending";
+
+export type PlcStructureUnit = {
+  name: string;
+  kind?: string;
+  type?: string;
+  category?: string;
+  status: StructureStatus | string;
+  reason?: string;
+  detail?: string;
+  retryable?: boolean;
+  protected?: boolean;
+  interface_only?: boolean;
+  body_available?: boolean;
+  instance_of?: string | null;
+};
+
+export type PlcStructure = {
+  units?: PlcStructureUnit[];
+  counts?: {
+    exported?: number;
+    failed?: number;
+    skipped?: number;
+    pending?: number;
+    total?: number;
+  };
+  layers?: {
+    device_tree?: PlcStructureUnit[];
+    program_blocks?: PlcStructureUnit[];
+    interface_dbs?: PlcStructureUnit[];
+    tags?: PlcStructureUnit[];
+    call_graph?: {
+      edges?: Array<{ source?: string; target?: string; type?: string }>;
+      missing_callees?: PlcStructureUnit[];
+    };
+  };
+  complete?: boolean;
+  incomplete_count?: number;
+};
+
 export type PlcCoverage = {
   todo_rate?: number;
   todo_count?: number;
@@ -354,6 +394,15 @@ export type PlcCoverage = {
       skipped_reasons?: Array<{ name?: string; reason?: string; detail?: string }>;
     }
   >;
+  structure?: {
+    total?: number;
+    exported?: number;
+    failed?: number;
+    skipped?: number;
+    pending?: number;
+    complete?: boolean;
+    incomplete_count?: number;
+  };
 };
 
 export type PlcJobSummary = {
@@ -367,6 +416,7 @@ export type PlcJobSummary = {
   error?: string | null;
   export_ready?: boolean;
   coverage?: PlcCoverage | null;
+  structure?: PlcStructure | null;
 };
 
 export type PlcJobDetail = PlcJobSummary & {
@@ -408,7 +458,12 @@ export type PlcJobDetail = PlcJobSummary & {
     interface_only?: boolean;
     body_available?: boolean;
     is_safety?: boolean;
+    status?: StructureStatus | string;
+    status_reason?: string;
+    status_detail?: string;
+    retryable?: boolean;
   }>;
+  structure?: PlcStructure;
   chat?: Array<{
     role: string;
     content: string;
@@ -479,6 +534,15 @@ export async function createPlcJobFromUpload(file: File, projectName = "") {
     body: form,
   });
   return parseJson<PlcJobSummary>(res);
+}
+
+export async function retryPlcStructure(jobId: string, names: string[] = []) {
+  const res = await fetch(`${GATEWAY_BASE}/api/v1/plc/jobs/${jobId}/structure/retry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ names }),
+  });
+  return parseJson<PlcJobDetail>(res);
 }
 
 export async function fetchPlcJob(jobId: string) {

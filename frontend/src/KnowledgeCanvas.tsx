@@ -28,6 +28,7 @@ export type KnowledgeSource = {
   project?: string;
   path?: string;
   plc_job_id?: string;
+  export_status?: string;
 };
 
 export type KnowledgeNode = {
@@ -119,7 +120,7 @@ export function buildSignalSubgraph(
   const kind = String(focus.kind || "");
   if (
     kind &&
-    !["plc_block", "plc_ob", "plc_db", "plc_udt", "plc_instance"].includes(kind)
+    !["plc_block", "plc_ob", "plc_db", "plc_udt", "plc_instance", "plc_device"].includes(kind)
   ) {
     return { nodes: [], edges: [] };
   }
@@ -353,6 +354,7 @@ const PLC_GRAPH_KINDS = new Set([
   "plc_udt",
   "plc_tag",
   "plc_instance",
+  "plc_device",
 ]);
 
 /** Semantic PLC node class for canvas color (block *types*, not each FB name). */
@@ -364,6 +366,7 @@ export type PlcGraphType =
   | "IDB"
   | "UDT"
   | "TAG"
+  | "DEVICE"
   | "PROJECT"
   | "OTHER";
 
@@ -375,6 +378,7 @@ const GRAPH_TYPE_ORDER: PlcGraphType[] = [
   "IDB",
   "UDT",
   "TAG",
+  "DEVICE",
   "PROJECT",
   "OTHER",
 ];
@@ -387,6 +391,7 @@ const GRAPH_TYPE_LABEL: Record<PlcGraphType, string> = {
   IDB: "实例 DB",
   UDT: "UDT",
   TAG: "标签",
+  DEVICE: "设备",
   PROJECT: "工程",
   OTHER: "其他",
 };
@@ -412,6 +417,7 @@ function rawBlockType(n: GraphTypeNode): string {
 export function resolveGraphType(n: GraphTypeNode): PlcGraphType {
   const kind = String(n.kind || "");
   if (kind === "plc_project") return "PROJECT";
+  if (kind === "plc_device") return "DEVICE";
   if (kind === "plc_tag" || n.type === "TagTable" || n.type === "Tag") return "TAG";
   if (kind === "plc_udt") return "UDT";
   if (kind === "plc_instance" || n.source?.entity_kind === "instance") return "IDB";
@@ -547,7 +553,8 @@ export function autoLayoutKnowledge(
       n.kind === "plc_ob" ||
       n.kind === "plc_db" ||
       n.kind === "plc_udt" ||
-      n.kind === "plc_instance",
+      n.kind === "plc_instance" ||
+      n.kind === "plc_device",
   );
   const byId = new Map(plcNodes.map((n) => [n.id, n]));
   const blockIds = blocks.map((n) => n.id);
@@ -1611,7 +1618,11 @@ function GraphPane({
               n.isolate ? "isolate" : "galaxy"
             } ${isHub ? "hub" : ""} ${isSelected ? "selected" : ""} ${
               isHi ? "highlighted" : ""
-            } ${linkFrom === n.id ? "linking" : ""}`}
+            } ${linkFrom === n.id ? "linking" : ""} ${
+              n.source?.export_status && n.source.export_status !== "exported"
+                ? `export-${n.source.export_status}`
+                : ""
+            }`}
             onPointerDown={(e) => {
               e.stopPropagation();
               onNodeDown(e, n.id);

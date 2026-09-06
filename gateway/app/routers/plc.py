@@ -22,6 +22,7 @@ from gateway.app.schemas.plc import (
     PlcJobSummary,
     PlcOptimizeRequest,
     PlcProposeChangeRequest,
+    PlcStructureRetryRequest,
     PlcWritebackRequest,
 )
 from gateway.app.services import plc_jobs as plc
@@ -338,6 +339,46 @@ async def optimize_plc_job(
         },
         request_id=request_id,
     )
+
+
+@router.post("/jobs/{job_id}/structure/retry", response_model=ApiResponse[PlcJobDetail])
+async def retry_plc_structure(
+    job_id: str,
+    body: PlcStructureRetryRequest,
+    background: BackgroundTasks,
+    principal: PrincipalDep,
+    request_id: RequestIdDep,
+) -> ApiResponse[PlcJobDetail]:
+    """Re-queue Openness/structure ingest so failed/pending units are not left silent."""
+    _ = principal
+    job = plc.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "PLC_JOB_NOT_FOUND", "message": "PLC job not found"},
+        )
+    if job.get("status") not in {"ready", "failed"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PLC_JOB_BUSY",
+                "message": f"Job status is {job.get('status')}, expected ready or failed",
+            },
+        )
+    job["status"] = "queued"
+    job["error"] = None
+    background.add_task(
+        plc.retry_structure_export,
+        job_id,
+        names=list(body.names or []),
+    )
+    logger.info(
+        "plc structure retry queued id=%s names=%s request_id=%s",
+        job_id,
+        body.names or "*",
+        request_id,
+    )
+    return ApiResponse(ok=True, data=_detail(job), request_id=request_id)
 
 
 @router.post("/jobs/{job_id}/writeback", response_model=ApiResponse[dict])

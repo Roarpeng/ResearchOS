@@ -8,6 +8,7 @@ Phase 5 **Engineering Intelligence / Engineering Copilot** 将 ResearchOS 从通
 |------|------|
 | [01-robotics-and-ros2.md](./01-robotics-and-ros2.md) | 机器人知识、ROS2 工具与研究模式 |
 | [02-plc-and-automation.md](./02-plc-and-automation.md) | PLC、工控自动化助手边界 |
+| [M1-Trusted-Structure.md](./M1-Trusted-Structure.md) | 工程师交接 M1：可信结构图（禁止静默缺块） |
 | [03-cad-and-isaacsim.md](./03-cad-and-isaacsim.md) | CAD 资产与 Isaac Sim 仿真联动 |
 
 ## 为什么是「扩展」而不是新系统

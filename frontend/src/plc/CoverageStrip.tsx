@@ -1,4 +1,4 @@
-import type { PlcCoverage, PlcJobDetail } from "../api";
+import type { PlcCoverage, PlcJobDetail, PlcStructureUnit } from "../api";
 
 function coverageConvertedPct(cov: PlcCoverage | null | undefined): number {
   const total = Number(cov?.total_blocks || 0);
@@ -51,32 +51,65 @@ function obCallTree(detail: PlcJobDetail | null): string[] {
   return lines.slice(0, 3);
 }
 
-export function PlcCoverageStrip({ detail }: { detail: PlcJobDetail | null }) {
+function statusClass(status: string): string {
+  if (status === "failed") return "is-failed";
+  if (status === "skipped" || status === "pending") return "is-warning";
+  return "is-ok";
+}
+
+function incompleteUnits(detail: PlcJobDetail | null): PlcStructureUnit[] {
+  const units = detail?.structure?.units || [];
+  if (units.length) {
+    return units.filter((u) => {
+      const st = String(u.status || "");
+      return st === "failed" || st === "skipped" || st === "pending";
+    });
+  }
+  return (detail?.blocks || [])
+    .filter((b) => {
+      const st = String(b.status || "exported");
+      return st === "failed" || st === "skipped" || st === "pending";
+    })
+    .map((b) => ({
+      name: b.name,
+      kind: b.type,
+      type: b.type,
+      status: String(b.status || "pending"),
+      reason: b.status_reason,
+      detail: b.status_detail,
+      retryable: b.retryable,
+    }));
+}
+
+export function PlcCoverageStrip({
+  detail,
+  busy,
+  onRetryStructure,
+}: {
+  detail: PlcJobDetail | null;
+  busy?: boolean;
+  onRetryStructure?: (names?: string[]) => Promise<void> | void;
+}) {
   const cov = detail?.coverage;
-  if (!cov || !Number(cov.total_blocks || 0)) return null;
+  const structure = detail?.structure;
+  const counts = structure?.counts;
+  const incomplete = incompleteUnits(detail);
+  const hasStructure = Boolean(counts?.total || incomplete.length);
+  if (!cov?.total_blocks && !hasStructure) return null;
   const pct = coverageConvertedPct(cov);
   const r = 16;
   const c = 2 * Math.PI * r;
   const dash = (pct / 100) * c;
   const todos = topTodoParts(cov);
   const tree = obCallTree(detail);
-  const rate = Number(cov.todo_rate || 0);
-  const skipChips: string[] = [];
-  const seenSkip = new Set<string>();
-  for (const [cat, row] of Object.entries(cov.categories || {})) {
-    for (const skip of row.skipped_reasons || []) {
-      const reason = String(skip.reason || "").trim();
-      if (!reason) continue;
-      const key = `${cat}:${reason}`;
-      if (seenSkip.has(key)) continue;
-      seenSkip.add(key);
-      skipChips.push(`${cat}/${reason}`);
-      if (skipChips.length >= 8) break;
-    }
-    if (skipChips.length >= 8) break;
-  }
+  const rate = Number(cov?.todo_rate || 0);
+  const failed = Number(counts?.failed || 0);
+  const skipped = Number(counts?.skipped || 0);
+  const pending = Number(counts?.pending || 0);
+  const retryable = incomplete.filter((u) => u.retryable).map((u) => u.name);
+  const stripClass = failed ? "is-failed" : skipped || pending ? "is-warning" : "";
   return (
-    <div className="plc-coverage" aria-label="转换覆盖率">
+    <div className={`plc-coverage ${stripClass}`.trim()} aria-label="转换覆盖率与可信结构">
       <svg className="plc-coverage-ring" viewBox="0 0 40 40" width="40" height="40" aria-hidden="true">
         <circle cx="20" cy="20" r={r} fill="none" stroke="var(--line)" strokeWidth="4" />
         <circle
@@ -96,9 +129,18 @@ export function PlcCoverageStrip({ detail }: { detail: PlcJobDetail | null }) {
       </svg>
       <div className="plc-coverage-meta">
         <div>
-          已转换 {cov.converted ?? 0}/{cov.total_blocks ?? 0} · TODO {rate.toLocaleString(undefined, { style: "percent", maximumFractionDigits: 1 })}
-          {cov.safety_block_count ? ` · F-block ${cov.safety_block_count}` : ""}
+          已转换 {cov?.converted ?? 0}/{cov?.total_blocks ?? 0} · TODO{" "}
+          {rate.toLocaleString(undefined, { style: "percent", maximumFractionDigits: 1 })}
+          {cov?.safety_block_count ? ` · F-block ${cov.safety_block_count}` : ""}
         </div>
+        {counts ? (
+          <div className="plc-structure-counts">
+            结构清单 {counts.total ?? 0}：exported {counts.exported ?? 0}
+            {failed ? <span className="plc-status-failed"> · failed {failed}</span> : null}
+            {skipped ? <span className="plc-status-skipped"> · skipped {skipped}</span> : null}
+            {pending ? <span className="plc-status-pending"> · pending {pending}</span> : null}
+          </div>
+        ) : null}
         {todos.length ? (
           <div className="plc-coverage-todos">
             未译 Part：
@@ -112,15 +154,40 @@ export function PlcCoverageStrip({ detail }: { detail: PlcJobDetail | null }) {
           <div className="muted">无未译 Part</div>
         )}
         {tree.length ? <div className="plc-coverage-tree">OB 调用：{tree.join("；")}</div> : null}
-        {skipChips.length ? (
-          <div className="plc-coverage-todos">
-            Openness 跳过：
-            {skipChips.map((s) => (
-              <span key={s} className="plc-chip">
-                {s}
+        {incomplete.length ? (
+          <div className="plc-structure-list" aria-label="未完整导出单元">
+            {incomplete.slice(0, 12).map((u) => (
+              <span
+                key={`${u.kind}-${u.name}`}
+                className={`plc-chip ${statusClass(String(u.status))}`}
+                title={u.detail || u.reason || String(u.status)}
+              >
+                {u.name}
+                <em>{u.status}</em>
+                {u.reason ? ` ${u.reason}` : ""}
               </span>
             ))}
+            {incomplete.length > 12 ? (
+              <span className="muted">+{incomplete.length - 12} 项见清单</span>
+            ) : null}
+            {onRetryStructure ? (
+              <button
+                type="button"
+                className="ghost compact plc-structure-retry"
+                disabled={busy}
+                title={
+                  retryable.length
+                    ? `重试 ${retryable.length} 个可恢复单元`
+                    : "重新导出全部结构清单"
+                }
+                onClick={() => void onRetryStructure(retryable.length ? retryable : undefined)}
+              >
+                重试导出
+              </button>
+            ) : null}
           </div>
+        ) : counts && counts.total ? (
+          <div className="muted">结构清单完整，无静默缺块</div>
         ) : null}
       </div>
     </div>
