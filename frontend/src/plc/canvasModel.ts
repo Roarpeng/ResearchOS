@@ -70,7 +70,10 @@ export function plcCanvasFromJob(detail: PlcJobDetail): KnowledgeCanvasData | nu
     const btype = String(b.type || "Block").toUpperCase();
     const inst = String(b.instance_of || "").trim();
     const nestDepth = Number(b.nest_depth || 0);
-    const exportStatus = String(b.status || "exported");
+    const exportStatus = String(
+      b.status ||
+        (b.protected ? "skipped" : b.interface_only ? "pending" : "exported"),
+    );
     const kind =
       btype === "OB"
         ? "plc_ob"
@@ -93,10 +96,6 @@ export function plcCanvasFromJob(detail: PlcJobDetail): KnowledgeCanvasData | nu
     } else if (b.protected) {
       bits.push("Know-how 保护");
     }
-    const exportStatus = String(
-      (b as { status?: string }).status ||
-        (b.protected ? "skipped" : b.interface_only ? "pending" : "exported"),
-    );
     nodes.push({
       id: `plc_b_${detail.id}_${b.name}`,
       label: b.name,
