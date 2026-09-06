@@ -119,7 +119,8 @@ n8n **可选**，仅用于调度与通知。详见 [ADR-0005](./docs/adr/0005-n8
 | [仓库布局](./docs/03-Repository-Layout.md) | 目录约定 |
 | [技术选型](./docs/04-Technology-Selection.md) | Stack 决策表 |
 | [开发路线图](./docs/05-Development-Roadmap.md) | 与 ROADMAP 对齐的阶段说明 |
-| [ADR 索引](./docs/adr/README.md) | 架构决策记录 0001–0007 |
+| [ADR 索引](./docs/adr/README.md) | 架构决策记录 0001–0012 |
+| [论文域](./docs/scientific/) | Phase 6 论文垂直域设计/状态/蓝图 |
 
 ---
 
@@ -133,6 +134,7 @@ ResearchOS/
 ├── agents/            # Supervisor & specialist agents
 ├── tools/             # MCP servers & adapters
 ├── knowledge/         # ETL, Hybrid RAG, Graph pipelines
+├── scientific/        # 论文垂直域（manuscript 状态机/溯源/期刊化）
 ├── sdk/               # Client SDK（可选）
 ├── deploy/            # Docker Compose / K8s
 ├── docs/              # 设计文档与 ADR（SoT）
@@ -141,7 +143,7 @@ ResearchOS/
 └── ROADMAP.md
 ```
 
-> 代码目录已按上述布局落地（Phase 1–5 MVP / Stub）。
+> 代码目录已按上述布局落地（Phase 1–6 MVP / Stub）。
 
 ---
 
@@ -155,6 +157,7 @@ ResearchOS/
 | Phase 3 — Knowledge Engine | **MVP Done → 增强**（Hybrid/RRF + HyDE/过滤器 + 分型图谱 Schema + Embedding 策略） |
 | Phase 4 — Research Agent & Reports | **MVP Done → 增强**（全链路含 ETL Agent、质量闭环、deep-research 多轮、continuous-learning） |
 | Phase 5 — Engineering / Industrial Copilot | **Stub → MVP**（TIA 全链路 + 设备层 KG + mcp-plc 只读分析 + ROS2 切片 + Motion/Failure Agent） |
+| Phase 6 — Scientific Manuscript | **MVP 核心**（vault/scholar/plot MCP + manuscript 域 + 前端 manuscript 模块；Writer/Reviewer runtime 胶水与期刊 PDF 待） |
 
 详见 [`ROADMAP.md`](./ROADMAP.md)。
 

@@ -179,6 +179,27 @@ Planner → Research → ETL → Knowledge Graph + Vector → Analysis Agents �
 
 ---
 
+## Phase 6 — Scientific Manuscript（MVP 核心 / 论文垂直域）
+
+**目标：** 研究文件夹（日常资料/只言片语）→ 检索与证据 → 大纲与图规划 → 逐节起草（仅锚定本人资料）
+→ 引用核验（幽灵引用=0）→ 期刊化 → PDF/投稿包 → 知识回流。
+
+| 能力 | 状态 |
+|------|------|
+| `mcp-vault`（文件夹摄取/快捕/对话归档 + SHA256 去重） | Done |
+| `mcp-scholar`（DOI 查表 + 幽灵引用扫描） | Done |
+| `mcp-plot`（数据→可复现代码→PNG 沙箱渲染） | Done |
+| `scientific/manuscript`（状态机/放行闸/provenance/起草骨架/期刊化） | Done |
+| 前端 `manuscript`（VaultPanel + FigureCanvas 自动排版/比例尺/PNG） | Done |
+| Writer/Reviewer 接入 LangGraph runtime | 待（需模型网关联调） |
+| 期刊 PDF/DOCX 导出（`tools/report`） | 待 |
+
+**对齐文档：** ADR-0010/0011/0012、[docs/scientific/](./docs/scientific/)、
+[`scientific/manuscript/README.md`](./scientific/manuscript/README.md)、
+[状态明细 docs/scientific/STATUS.md](./docs/scientific/STATUS.md)
+
+---
+
 ## 跨阶段工程品质（持续）
 
 | 主题 | 要求 |
