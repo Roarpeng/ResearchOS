@@ -1,0 +1,19 @@
+{
+  "journal": "Plant Physiology",
+  "publisher": "American Society of Plant Biologists (ASPB)",
+  "referenceStyle": "author-year",
+  "aiPolicyNote": "⚠️ 待核验占位。ASPB 已发布 AI 使用披露政策;并入前查阅期刊 Author Guidelines 的 AI 政策章节并回填 verifiedAt。",
+  "figure": {
+    "minDpi": 300,
+    "singleColumnMm": 89,
+    "doubleColumnMm": 183,
+    "minLabelPt": 7
+  },
+  "layoutSections": [
+    "title", "authors", "abstract", "keywords",
+    "introduction", "results", "discussion", "materials", "methods",
+    "authorContribution", "conflictOfInterest", "dataAvailability",
+    "references", "supplementary"
+  ],
+  "verifiedAt": null
+}

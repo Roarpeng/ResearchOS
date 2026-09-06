@@ -1,0 +1,20 @@
+{
+  "journal": "Crop Journal",
+  "publisher": "Crop Science Society of China / Elsevier",
+  "referenceStyle": "author-year",
+  "aiPolicyNote": "⚠️ 待核验占位。并入前查阅期刊 AI 政策并回填 verifiedAt。",
+  "page": { "size": "A4", "marginTopMm": 25, "marginBottomMm": 25, "marginLeftMm": 20, "marginRightMm": 20 },
+  "typography": { "fontFamily": "Times New Roman", "fontSizePt": 11, "lineSpacing": 1.5 },
+  "figure": {
+    "minDpi": 300,
+    "singleColumnMm": 89,
+    "doubleColumnMm": 183,
+    "minLabelPt": 7
+  },
+  "layoutSections": [
+    "title", "authors", "abstract", "keywords",
+    "introduction", "materials", "methods", "results", "discussion", "conclusion",
+    "authorContribution", "conflictOfInterest", "dataAvailability", "references", "supplementary"
+  ],
+  "verifiedAt": null
+}

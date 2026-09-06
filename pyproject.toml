@@ -74,6 +74,7 @@ packages = [
   "tools",
   "knowledge",
   "industrial",
+  "scientific",
 ]
 
 [tool.pytest.ini_options]

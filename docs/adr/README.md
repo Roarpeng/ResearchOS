@@ -33,6 +33,9 @@
 | 0007 | 搜索路由器：MCP Search Router | Accepted | [0007-search-router-mcp.md](./0007-search-router-mcp.md) |
 | 0008 | PLC Gateway 与 Workbench 模块边界 | Accepted | [0008-plc-gateway-workbench-module-boundaries.md](./0008-plc-gateway-workbench-module-boundaries.md) |
 | 0009 | Q1 Device/Sensor Cards（硬件/传感器含义） | Accepted | [0009-plc-device-sensor-cards.md](./0009-plc-device-sensor-cards.md) |
+| 0010 | Scientific Manuscript Domain（论文垂直域） | Proposed | [0010-scientific-manuscript-domain.md](./0010-scientific-manuscript-domain.md) |
+| 0011 | Frontend Integration（PaperHelp UI 并入现有 frontend/） | Proposed | [0011-frontend-import-paperhelp.md](./0011-frontend-import-paperhelp.md) |
+| 0012 | Scholar / Vault / Plot MCP 工具层 | Proposed | [0012-scholar-vault-plot-mcp.md](./0012-scholar-vault-plot-mcp.md) |
 
 ## 如何新增 ADR
 

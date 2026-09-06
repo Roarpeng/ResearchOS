@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "paperhelp/provenance-record",
+  "title": "ProvenanceRecord",
+  "description": "论文域论断↔chunk↔来源 的三级溯源记录(ADR-0010)。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["claimId", "claimText", "createdAt"],
+  "properties": {
+    "claimId": { "type": "string", "description": "论断唯一标识,如 taskId:seq" },
+    "claimText": { "type": "string" },
+    "taskId": { "type": "string" },
+    "stage": {
+      "type": "string",
+      "enum": ["outline", "evidence", "figure_plan", "drafting", "review", "journalize", "exported"]
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sourceId", "chunkIds", "locator", "quote"],
+        "properties": {
+          "sourceId": { "type": "string", "description": "knowledge source id(文件/条目)" },
+          "chunkIds": { "type": "array", "items": { "type": "string" } },
+          "locator": { "type": "string", "description": "页码/位置;Citation 溯源" },
+          "quote": { "type": "string", "description": "原文引用片段" },
+          "doi": { "type": "string", "description": "外部文献 DOI(经 mcp-scholar 查表,非生成)" }
+        }
+      }
+    },
+    "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+    "verified": { "type": "boolean", "description": "幽灵引用扫描/mcp-scholar 核验结果" },
+    "artifactId": { "type": "string", "description": "编辑器段落或 Figure 等活对象 id" },
+    "model": { "type": "string" },
+    "promptHash": { "type": "string" },
+    "createdAt": { "type": "string", "format": "date-time" }
+  }
+}

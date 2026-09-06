@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "paperhelp/journal-style",
+  "title": "JournalStyle",
+  "description": "期刊样式模板(数据驱动;CSS 与 Typst 双渲染共用此描述)。并入前须对照期刊官方 Author Guidelines 核验。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["journal", "publisher", "referenceStyle", "aiPolicyNote"],
+  "properties": {
+    "journal": { "type": "string" },
+    "publisher": { "type": "string" },
+    "referenceStyle": {
+      "type": "string",
+      "description": "参考文献格式族(如 author-year / numbered / Vancouver),与 citation 渲染器映射"
+    },
+    "page": {
+      "type": "object",
+      "properties": {
+        "size": { "type": "string", "enum": ["A4", "Letter"] },
+        "marginTopMm": { "type": "number" },
+        "marginBottomMm": { "type": "number" },
+        "marginLeftMm": { "type": "number" },
+        "marginRightMm": { "type": "number" }
+      }
+    },
+    "typography": {
+      "type": "object",
+      "properties": {
+        "fontFamily": { "type": "string" },
+        "fontSizePt": { "type": "number" },
+        "lineSpacing": { "type": "number" },
+        "headingFontFamily": { "type": "string" }
+      }
+    },
+    "figure": {
+      "type": "object",
+      "description": "图件规范(作物学基线:dpi≥300、字号≥7pt、双栏宽≤170mm)",
+      "properties": {
+        "minDpi": { "type": "number" },
+        "singleColumnMm": { "type": "number" },
+        "doubleColumnMm": { "type": "number" },
+        "minLabelPt": { "type": "number" }
+      }
+    },
+    "layoutSections": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["title", "authors", "abstract", "keywords", "introduction", "materials", "methods", "results", "discussion", "conclusion", "authorContribution", "conflictOfInterest", "dataAvailability", "references", "supplementary"]
+      }
+    },
+    "aiPolicyNote": {
+      "type": "string",
+      "description": "该期刊当前 AI 使用政策提示(AI 使用声明生成用;需定期核验更新)"
+    },
+    "verifiedAt": { "type": "string", "format": "date", "description": "值核验日期;null=未核验" }
+  }
+}
