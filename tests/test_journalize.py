@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from scientific.manuscript.draft import DraftSection, assemble_sections
 from scientific.manuscript.journalize import build_manifest, load_journal_style, render_html
 
@@ -69,3 +71,19 @@ def test_render_markdown_intermediate() -> None:
     assert md.count("## Results") == 1  # assembler heading deduped
     assert "## AI Use Disclosure" in md
     assert "- Li et al. 2024" in md
+
+
+def test_render_docx(tmp_path) -> None:
+    pytest.importorskip("pypandoc")
+    from scientific.manuscript.journalize import render_docx, render_markdown
+
+    sections = assemble_sections({"sections": [{"key": "results", "title": "Results"}]}, [
+        {"section": "results", "source_id": "doc_1", "chunk_id": "chk_1", "text": "wheat yield +12%"},
+    ])
+    md = render_markdown(
+        title="T", authors=["A"], abstract="Abs.", sections=sections,
+        ai_disclosure="d", references=["Li et al. 2024"],
+    )
+    out = render_docx(md, tmp_path / "manuscript.docx")
+    assert out["ok"] is True
+    assert (tmp_path / "manuscript.docx").stat().st_size > 0

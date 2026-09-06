@@ -125,3 +125,13 @@ def render_markdown(
     lines += ["## AI Use Disclosure", "", ai_disclosure, "", "## References", ""]
     lines += [f"- {r}" for r in references]
     return "\n".join(lines)
+
+
+def render_docx(markdown: str, out_path: str | Path) -> dict[str, Any]:
+    """Render the canonical Markdown intermediate to DOCX via pandoc (no LaTeX needed)."""
+    import pypandoc
+
+    p = Path(out_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    pypandoc.convert_text(markdown, "docx", format="md", outputfile=str(p))
+    return {"ok": p.exists() and p.stat().st_size > 0, "path": str(p)}
