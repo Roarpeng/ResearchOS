@@ -1286,3 +1286,43 @@ export async function ingestVault(root: string, workspaceId?: string) {
   });
   return parseJson<VaultIngestResult>(res);
 }
+
+/* ---- Plot (data → reproducible code → PNG) ---- */
+
+export type PlotColumnsResult = { path: string; columns: string[]; rows: number };
+
+export type PlotRenderResult = {
+  ok: boolean;
+  image: string | null;
+  script: string;
+  columns: string[];
+  rows: number;
+  kind: string;
+  returncode?: number;
+  stderr?: string;
+};
+
+export async function plotColumns(path: string) {
+  const res = await fetch(`${GATEWAY_BASE}/api/v1/plot/columns`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  return parseJson<PlotColumnsResult>(res);
+}
+
+export async function plotRender(
+  path: string,
+  x: string,
+  y: string,
+  kind = "bar",
+  title = "",
+  outDir?: string,
+) {
+  const res = await fetch(`${GATEWAY_BASE}/api/v1/plot/render`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ path, x, y, kind, title, out_dir: outDir ?? null }),
+  });
+  return parseJson<PlotRenderResult>(res);
+}
