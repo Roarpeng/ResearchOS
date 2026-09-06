@@ -2,10 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   annotatePlcDeviceCard,
   fetchPlcDeviceCard,
-  fetchPlcProjectBrief,
   listPlcDeviceCards,
   type DeviceSensorCard,
-  type ProjectBrief,
 } from "../api";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -205,7 +203,6 @@ export function DeviceSensorPanel({
 }) {
   const [cards, setCards] = useState<DeviceSensorCard[]>([]);
   const [counts, setCounts] = useState<DeviceCardListCounts>({});
-  const [brief, setBrief] = useState<ProjectBrief | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
@@ -216,13 +213,9 @@ export function DeviceSensorPanel({
     if (!jobId) return;
     setError("");
     try {
-      const [list, br] = await Promise.all([
-        listPlcDeviceCards(jobId, q.trim() ? { q: q.trim() } : undefined),
-        fetchPlcProjectBrief(jobId).catch(() => null),
-      ]);
+      const list = await listPlcDeviceCards(jobId, q.trim() ? { q: q.trim() } : undefined);
       setCards(list.cards || []);
       setCounts(list.counts || {});
-      setBrief(br);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "加载设备卡片失败");
     }
@@ -286,10 +279,9 @@ export function DeviceSensorPanel({
           ))}
         </div>
       </div>
-      {brief?.sections?.device_sensor_summary ? (
+      {counts.total ? (
         <p className="io-brief-hint">
-          Project Brief 已含 device_sensor_summary（{brief.sections.device_sensor_summary.total_cards} 张卡片，
-          {brief.sections.device_sensor_summary.meaning_unconfirmed || 0} 未确认）
+          Q1 设备/传感器卡片 {counts.total} 张，{counts.meaning_unconfirmed || 0} 未确认含义
         </p>
       ) : null}
       {error ? <p className="empty">{error}</p> : null}

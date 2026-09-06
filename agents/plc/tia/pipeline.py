@@ -34,6 +34,7 @@ def analyze_tia_exports(
     project_name: str = "",
     publish_graph: bool = False,
     project: PlcProject | None = None,
+    on_structure: Any | None = None,
 ) -> dict[str, Any]:
     """Offline path: parse Openness exports, build KG, convert to SCL.
 
@@ -42,6 +43,9 @@ def analyze_tia_exports(
 
     Pass a pre-parsed ``project`` (journal overlap / cache-hit extract) to skip
     a second XML walk. KG still waits until every block is present.
+
+    ``on_structure(project, kg)`` fires after the call graph exists and **before**
+    full SCL/LAD body conversion, so a Project Brief can be served first.
     """
     timings: dict[str, int] = {}
     if project is None:
@@ -57,6 +61,9 @@ def analyze_tia_exports(
         project = attach_folded(project)
     with timed_step(timings, "kg_ms"):
         kg = build_knowledge_graph(project)
+    if callable(on_structure):
+        with timed_step(timings, "structure_ms"):
+            on_structure(project, kg)
     with timed_step(timings, "scl_ms"):
         scl_sources = convert_project_to_scl(project)
     with timed_step(timings, "report_ms"):

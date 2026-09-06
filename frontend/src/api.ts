@@ -229,13 +229,43 @@ export type PlcCitation = {
   network?: string;
   /** M3 locator, e.g. `Network 10 / line 3`. */
   locator?: string;
-  line?: number;
+  line?: number | null;
   evidence?: string;
   nodeId?: string;
   edge_type?: string;
   target?: string;
   snippet?: string;
   source_status?: string;
+};
+
+export type PlcEngineerPrompt = {
+  id: string;
+  label: string;
+  prompt: string;
+};
+
+export type PlcProjectBrief = {
+  job_id?: string | null;
+  project_name?: string;
+  phase?: string;
+  brief_ready?: boolean;
+  purpose?: string;
+  main_ob?: string | null;
+  main_entry?: string | null;
+  block_counts_by_status?: Record<string, number>;
+  top_level_calls?: Array<{ callee?: string; network?: string; evidence?: string }>;
+  device_sensor_summary?: {
+    available?: boolean;
+    source?: string;
+    note?: string;
+    devices?: Array<{ name: string; device_type?: string; address?: string; comment?: string }>;
+    sensors?: Array<{ name: string; address?: string; comment?: string }>;
+  };
+  run_logic_entry?: string;
+  export_gaps?: Array<{ block: string; status?: string; reason?: string }>;
+  block_stubs?: Array<Record<string, unknown>>;
+  engineer_prompts?: PlcEngineerPrompt[];
+  timing?: Record<string, unknown>;
 };
 
 export type ChatTurnResult = {
@@ -421,6 +451,8 @@ export type PlcJobSummary = {
   export_ready?: boolean;
   coverage?: PlcCoverage | null;
   structure?: PlcStructure | null;
+  brief_ready?: boolean;
+  ingest_phase?: string | null;
 };
 
 export type PlcJobDetail = PlcJobSummary & {
@@ -491,7 +523,17 @@ export type PlcJobDetail = PlcJobSummary & {
   project_path?: string | null;
   export_ready?: boolean;
   export_dir?: string | null;
+  hardware?: Array<Record<string, unknown>>;
+  body_pull_queue?: Array<{ block?: string; reason?: string }>;
+  block_stubs?: Array<Record<string, unknown>>;
 };
+
+export async function fetchPlcBrief(jobId: string) {
+  const res = await fetch(`${GATEWAY_BASE}/api/v1/plc/jobs/${jobId}/brief`, {
+    headers: { Accept: "application/json" },
+  });
+  return parseJson<PlcProjectBrief>(res);
+}
 
 async function parseJson<T>(res: Response): Promise<T> {
   const text = await res.text();

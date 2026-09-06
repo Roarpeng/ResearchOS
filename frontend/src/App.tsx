@@ -30,6 +30,7 @@ export default function App() {
     messages,
     plcJob,
     plcJobId,
+    projectBrief,
     status,
     topics,
     applyChatScope,
@@ -51,7 +52,9 @@ export default function App() {
     setWorkbenchTab,
     onOptimizePropose,
     onRetryStructure,
+    onProjectPrompt,
     onScopePrompt,
+    projectPrompts,
     onResume,
     onSend,
     openTopic,
@@ -162,9 +165,11 @@ export default function App() {
           onFileChange={setFile}
           onResolveInterrupt={(resolution, interruptId) => void onResume(resolution, interruptId)}
           onScopePrompt={onScopePrompt}
+          onProjectPrompt={onProjectPrompt}
           onSend={onSend}
           onSendTurn={sendTurn}
           scopePrompts={scopedPrompts}
+          projectPrompts={projectPrompts()}
         />
 
         <div
@@ -193,6 +198,8 @@ export default function App() {
           switchCue={switchCue}
           workbenchOpen={workbenchOpen}
           workbenchTab={workbenchTab}
+          projectBrief={projectBrief}
+          onAskHandover={onProjectPrompt}
           onAskInChat={onAskInChat}
           onCanvasChange={setCanvas}
           onConfirmWriteback={onConfirmWriteback}

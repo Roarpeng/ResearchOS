@@ -73,6 +73,24 @@ def test_plc_job_path_ingest_chat_export(client: TestClient) -> None:
     assert block_name in chat_body["content"]
     assert isinstance(chat_body.get("citations"), list)
 
+    brief = client.get(
+        f"/api/v1/plc/jobs/{job_id}/brief",
+        headers={"X-API-Key": "ros_ak_test_key"},
+    )
+    assert brief.status_code == 200, brief.text
+    brief_body = brief.json()["data"]
+    assert brief_body["brief_ready"] is True
+    assert "purpose" in brief_body
+    assert "run_logic_entry" in brief_body
+    assert "device_sensor_summary" in brief_body
+    assert "block_counts_by_status" in brief_body
+    assert "export_gaps" in brief_body
+    assert {p["id"] for p in brief_body["engineer_prompts"]} >= {
+        "q1_hardware",
+        "q2_run_logic",
+        "q3_hitl_adjust",
+    }
+
     export = client.get(
         f"/api/v1/plc/jobs/{job_id}/export",
         headers={"X-API-Key": "ros_ak_test_key"},

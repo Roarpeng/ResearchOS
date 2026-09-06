@@ -53,9 +53,11 @@ def test_run_ingest_job_records_progress_duration_and_timings(tmp_path: Path) ->
     assert "extract_ms" in timings
     assert "logic_graph_ms" in timings
     assert "enrich_ms" in timings
+    assert out.get("brief_ready") is True
+    assert out.get("ingest_phase") == "ready"
 
     steps = {p["step"]: p for p in out.get("progress") or []}
-    for step in ("detect", "resolve", "ir", "enrich", "graph", "ready"):
+    for step in ("detect", "resolve", "structure", "bodies", "enrich", "graph", "ready"):
         assert step in steps, step
         assert "duration_ms" in steps[step], step
         assert steps[step]["status"] == "done"

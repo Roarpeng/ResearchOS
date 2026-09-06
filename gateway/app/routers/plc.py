@@ -24,10 +24,10 @@ from gateway.app.schemas.plc import (
     PlcJobDetail,
     PlcJobSummary,
     PlcOptimizeRequest,
+    PlcProjectBrief,
     PlcProposeChangeRequest,
     PlcStructureRetryRequest,
     PlcWritebackRequest,
-    ProjectBriefResponse,
 )
 from gateway.app.services import plc_jobs as plc
 
@@ -296,19 +296,23 @@ async def clear_plc_device_card_annotation(
     )
 
 
-@router.get("/jobs/{job_id}/brief", response_model=ApiResponse[ProjectBriefResponse])
+@router.get("/jobs/{job_id}/brief", response_model=ApiResponse[PlcProjectBrief])
 async def get_plc_project_brief(
     job_id: str,
     principal: PrincipalDep,
     request_id: RequestIdDep,
-) -> ApiResponse[ProjectBriefResponse]:
-    """Project Brief stub. MUST include sections.device_sensor_summary for M2."""
+) -> ApiResponse[PlcProjectBrief]:
+    """Layered Project Brief — available as soon as structure snapshot exists."""
     _ = principal
-    job = _ready_job(job_id)
-    brief = plc.build_project_brief(job)
+    job = plc.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "PLC_JOB_NOT_FOUND", "message": "PLC job not found"},
+        )
     return ApiResponse(
         ok=True,
-        data=ProjectBriefResponse.model_validate(brief),
+        data=PlcProjectBrief.model_validate(plc.build_project_brief(job)),
         request_id=request_id,
     )
 
@@ -328,12 +332,12 @@ async def chat_plc_job(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "PLC_JOB_NOT_FOUND", "message": "PLC job not found"},
         )
-    if job.get("status") != "ready":
+    if job.get("status") != "ready" and not job.get("brief_ready"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "PLC_JOB_NOT_READY",
-                "message": f"Job status is {job.get('status')}, expected ready",
+                "message": f"Job status is {job.get('status')}, expected ready or brief_ready",
             },
         )
 

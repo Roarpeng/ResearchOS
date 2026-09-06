@@ -30,6 +30,12 @@ from gateway.app.services.plc.chat_intents import (
     _wants_signal_trace,
     _wants_understand_logic,
 )
+from gateway.app.services.plc.handover import (
+    format_hitl_adjust_answer,
+    wants_handover_hardware,
+    wants_handover_hitl,
+    wants_handover_run_logic,
+)
 from gateway.app.services.plc.writeback_views import (
     _format_confirm_writeback_chat,
     _format_optimize_scl_chat,
@@ -149,6 +155,50 @@ def answer_block_chat(
             lines.append(f"可试独立块：{', '.join(f'`{n}`' for n in names)}")
         lines.append("也可点击知识图谱节点；多实例成员会按图谱边（USES / INSTANCE_OF / 接口变量）作答。")
         return "\n".join(lines)
+
+    if wants_handover_hitl(msg) and not _wants_confirm_writeback(msg) and not _wants_optimize_scl(msg):
+        from gateway.app.services.plc.brief import build_project_brief
+        from gateway.app.services.plc.citations import citations_for_block
+
+        _ = build_project_brief(job)
+        job["_last_citations"] = citations_for_block(job, focus) if focus else []
+        return format_hitl_adjust_answer(job, focus=focus or None)
+    if wants_handover_hardware(msg) and not focus:
+        from gateway.app.services.plc.brief import format_hardware_brief_answer
+        from gateway.app.services.plc.citations import citations_for_block, gap_citation
+
+        text = format_hardware_brief_answer(job)
+        cites = []
+        for d in (job.get("hardware") or [])[:6]:
+            if isinstance(d, dict) and d.get("name"):
+                cites.append(
+                    {
+                        "block": str(d["name"]),
+                        "locator": str(d.get("address") or "hardware"),
+                        "snippet": str(d.get("comment") or d.get("device_type") or ""),
+                        "source_status": "indexed",
+                        "evidence": "hardware",
+                    }
+                )
+        if not cites:
+            cites = [gap_citation("hardware")]
+        job["_last_citations"] = cites
+        return text
+    if wants_handover_run_logic(msg) and not focus:
+        from gateway.app.services.plc.brief import format_run_logic_brief_answer
+        from gateway.app.services.plc.citations import citations_for_block
+
+        main = None
+        for b in job.get("blocks") or []:
+            if isinstance(b, dict) and str(b.get("type") or "").upper() == "OB":
+                name = str(b.get("name") or "")
+                if name.startswith("OB1") or name.lower() in {"main", "ob1"} or b.get("number") == 1:
+                    main = name
+                    break
+                if main is None:
+                    main = name
+        job["_last_citations"] = citations_for_block(job, focus or main or "")
+        return format_run_logic_brief_answer(job)
 
     if _wants_confirm_writeback(msg):
         return _format_confirm_writeback_chat(
