@@ -1190,6 +1190,37 @@ body.col-resizing * {
   background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
 }
 
+button.plc-chip.is-jump,
+.io-jump-symbol,
+.io-jump-block {
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
+}
+
+button.plc-chip.is-jump:hover,
+.io-jump-symbol:hover,
+.io-jump-block:hover {
+  border-color: var(--accent);
+}
+
+.io-jump-symbol {
+  font-weight: 700;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.io-jump-block {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .plc-coverage.is-failed {
   border-color: #b91c1c;
   background: color-mix(in srgb, #b91c1c 8%, var(--surface));

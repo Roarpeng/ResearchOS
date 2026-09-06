@@ -1,11 +1,32 @@
 import type { PlcProjectBrief } from "../api";
+import type { CanvasJumpIntent } from "./canvas/jump";
 
 type ProjectBriefCardProps = {
   brief: PlcProjectBrief | null;
   compact?: boolean;
   onAsk?: (prompt: string) => void;
   onOpenFull?: () => void;
+  onJumpCanvas?: (intent: CanvasJumpIntent) => void;
 };
+
+function JumpChip({
+  label,
+  title,
+  onJump,
+}: {
+  label: string;
+  title?: string;
+  onJump?: () => void;
+}) {
+  if (!onJump) {
+    return <span className="plc-chip">{label}</span>;
+  }
+  return (
+    <button type="button" className="plc-chip is-jump" title={title || `定位到画布：${label}`} onClick={onJump}>
+      {label}
+    </button>
+  );
+}
 
 function countLine(counts: Record<string, number> | undefined): string {
   if (!counts) return "";
@@ -15,7 +36,7 @@ function countLine(counts: Record<string, number> | undefined): string {
     .join(" · ");
 }
 
-export function ProjectBriefCard({ brief, compact, onAsk, onOpenFull }: ProjectBriefCardProps) {
+export function ProjectBriefCard({ brief, compact, onAsk, onOpenFull, onJumpCanvas }: ProjectBriefCardProps) {
   if (!brief?.brief_ready && !brief?.purpose) {
     return (
       <div className="plc-brief" aria-label="工程简报">
@@ -44,16 +65,35 @@ export function ProjectBriefCard({ brief, compact, onAsk, onOpenFull }: ProjectB
         ) : null}
       </div>
       <div className="plc-brief-meta">
-        入口 {brief.main_ob || brief.main_entry || "未识别"} · {countLine(brief.block_counts_by_status)}
+        入口{" "}
+        {brief.main_ob || brief.main_entry ? (
+          <JumpChip
+            label={brief.main_ob || brief.main_entry || ""}
+            onJump={
+              onJumpCanvas
+                ? () => onJumpCanvas({ blockName: brief.main_ob || brief.main_entry || undefined })
+                : undefined
+            }
+          />
+        ) : (
+          "未识别"
+        )}{" "}
+        · {countLine(brief.block_counts_by_status)}
       </div>
       <div className="plc-brief-run">{brief.run_logic_entry}</div>
       {calls.length ? (
         <div className="plc-brief-calls">
           顶层调用：
           {calls.map((c) => (
-            <span key={`${c.callee}-${c.network || ""}`} className="plc-chip">
-              {c.callee}
-            </span>
+            <JumpChip
+              key={`${c.callee}-${c.network || ""}`}
+              label={c.callee || ""}
+              onJump={
+                onJumpCanvas && c.callee
+                  ? () => onJumpCanvas({ blockName: c.callee })
+                  : undefined
+              }
+            />
           ))}
         </div>
       ) : null}
@@ -65,9 +105,11 @@ export function ProjectBriefCard({ brief, compact, onAsk, onOpenFull }: ProjectB
               <div>
                 设备：
                 {devices.slice(0, 8).map((d) => (
-                  <span key={d.name} className="plc-chip">
-                    {d.name}
-                  </span>
+                  <JumpChip
+                    key={d.name}
+                    label={d.name}
+                    onJump={onJumpCanvas ? () => onJumpCanvas({ symbol: d.name }) : undefined}
+                  />
                 ))}
               </div>
             ) : (
@@ -77,9 +119,11 @@ export function ProjectBriefCard({ brief, compact, onAsk, onOpenFull }: ProjectB
               <div>
                 传感器：
                 {sensors.slice(0, 8).map((s) => (
-                  <span key={s.name} className="plc-chip">
-                    {s.name}
-                  </span>
+                  <JumpChip
+                    key={s.name}
+                    label={s.name}
+                    onJump={onJumpCanvas ? () => onJumpCanvas({ symbol: s.name }) : undefined}
+                  />
                 ))}
               </div>
             ) : (
@@ -90,9 +134,11 @@ export function ProjectBriefCard({ brief, compact, onAsk, onOpenFull }: ProjectB
             <div className="plc-brief-gaps">
               导出缺口：
               {gaps.map((g) => (
-                <span key={g.block} className="plc-chip">
-                  {g.block} · {g.status}
-                </span>
+                <JumpChip
+                  key={g.block}
+                  label={`${g.block} · ${g.status}`}
+                  onJump={onJumpCanvas ? () => onJumpCanvas({ blockName: g.block }) : undefined}
+                />
               ))}
             </div>
           ) : (

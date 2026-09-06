@@ -5,6 +5,7 @@ import {
   listPlcDeviceCards,
   type DeviceSensorCard,
 } from "../api";
+import type { CanvasJumpIntent } from "./canvas/jump";
 
 const STATUS_LABEL: Record<string, string> = {
   cited: "已引用注释",
@@ -35,10 +36,12 @@ export function DeviceSensorCardView({
   card,
   busy,
   onAnnotate,
+  onJumpCanvas,
 }: {
   card: DeviceSensorCard;
   busy?: boolean;
   onAnnotate?: (text: string) => Promise<void> | void;
+  onJumpCanvas?: (intent: CanvasJumpIntent) => void;
 }) {
   const [note, setNote] = useState(card.annotation?.text || "");
   useEffect(() => {
@@ -50,7 +53,18 @@ export function DeviceSensorCardView({
     <article className="io-card" aria-label={`设备卡片 ${card.symbol_name}`}>
       <header className="io-card-head">
         <div>
-          <strong>{card.symbol_name}</strong>
+          {onJumpCanvas ? (
+            <button
+              type="button"
+              className="io-jump-symbol"
+              title={`定位到画布：${card.symbol_name}`}
+              onClick={() => onJumpCanvas({ symbol: card.symbol_name })}
+            >
+              {card.symbol_name}
+            </button>
+          ) : (
+            <strong>{card.symbol_name}</strong>
+          )}
           <span className="io-card-meta">
             {[card.io_type, card.address, card.data_type, card.tag_table]
               .filter(Boolean)
@@ -80,7 +94,19 @@ export function DeviceSensorCardView({
           <ul>
             {users.map((u, i) => (
               <li key={`${u.block}-${u.access}-${u.network_id}-${i}`}>
-                <code>{u.block}</code> {u.access}
+                {onJumpCanvas ? (
+                  <button
+                    type="button"
+                    className="io-jump-block"
+                    title={`定位到画布：${u.block}`}
+                    onClick={() => onJumpCanvas({ blockName: u.block })}
+                  >
+                    {u.block}
+                  </button>
+                ) : (
+                  <code>{u.block}</code>
+                )}{" "}
+                {u.access}
                 {u.network_title ? ` · ${u.network_title}` : u.network_id ? ` · ${u.network_id}` : ""}
               </li>
             ))}
@@ -133,9 +159,11 @@ export function DeviceSensorCardView({
 export function DeviceSensorInspect({
   jobId,
   symbol,
+  onJumpCanvas,
 }: {
   jobId: string;
   symbol: string;
+  onJumpCanvas?: (intent: CanvasJumpIntent) => void;
 }) {
   const [card, setCard] = useState<DeviceSensorCard | null>(null);
   const [error, setError] = useState("");
@@ -171,6 +199,7 @@ export function DeviceSensorInspect({
     <DeviceSensorCardView
       card={card}
       busy={busy}
+      onJumpCanvas={onJumpCanvas}
       onAnnotate={async (text) => {
         const { kind, name } = parseCardId(card.id);
         setBusy(true);
@@ -197,9 +226,11 @@ type DeviceCardListCounts = {
 export function DeviceSensorPanel({
   jobId,
   focusSymbol,
+  onJumpCanvas,
 }: {
   jobId: string | null;
   focusSymbol?: string | null;
+  onJumpCanvas?: (intent: CanvasJumpIntent) => void;
 }) {
   const [cards, setCards] = useState<DeviceSensorCard[]>([]);
   const [counts, setCounts] = useState<DeviceCardListCounts>({});
@@ -309,6 +340,7 @@ export function DeviceSensorPanel({
             <DeviceSensorCardView
               card={selected}
               busy={busy}
+              onJumpCanvas={onJumpCanvas}
               onAnnotate={async (text) => {
                 if (!jobId) return;
                 const { kind, name } = parseCardId(selected.id);

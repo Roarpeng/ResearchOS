@@ -10,6 +10,7 @@ import KnowledgeCanvas, {
   type WritebackChipHint,
 } from "../KnowledgeCanvas";
 import { NodeWorkbench, type NodeWorkbenchTab } from "../plc/canvas/NodeWorkbench";
+import type { CanvasJumpIntent } from "../plc/canvas/jump";
 import { PlcCoverageStrip } from "../plc/CoverageStrip";
 import { DeviceSensorInspect, DeviceSensorPanel } from "../plc/DeviceSensorPanel";
 import type { PlcCanvasTab } from "../plc/usePlcWorkspace";
@@ -48,6 +49,7 @@ type ResearchWorkspaceProps = {
   onWorkbenchTabChange: (tab: NodeWorkbenchTab) => void;
   onWritebackHint: (blockName: string) => WritebackChipHint;
   onAskHandover?: (prompt: string) => void;
+  onJumpCanvas?: (intent: CanvasJumpIntent) => void;
 };
 
 function logicGraphFromJob(job: PlcJobDetail | null) {
@@ -105,6 +107,7 @@ export function ResearchWorkspace({
   onWorkbenchTabChange,
   onWritebackHint,
   onAskHandover,
+  onJumpCanvas,
 }: ResearchWorkspaceProps) {
   const scopedBlockName =
     chatScope && chatScope.kind !== "plc_tag" ? chatScope.blockName : undefined;
@@ -208,6 +211,7 @@ export function ResearchWorkspace({
                 ? chatScope.label
                 : undefined
             }
+            onJumpCanvas={onJumpCanvas}
           />
         ) : canvasTab === "canvas" ? (
           <>
@@ -217,6 +221,7 @@ export function ResearchWorkspace({
                 compact
                 onAsk={onAskHandover}
                 onOpenFull={() => onTabChange("brief")}
+                onJumpCanvas={onJumpCanvas}
               />
             ) : null}
             <PlcCoverageStrip
@@ -228,7 +233,11 @@ export function ResearchWorkspace({
             plcJob?.status === "ready" &&
             chatScope?.kind === "plc_tag" &&
             !chatScope.nodeId.startsWith("plc_tt_") ? (
-              <DeviceSensorInspect jobId={plcJobId} symbol={chatScope.label} />
+              <DeviceSensorInspect
+                jobId={plcJobId}
+                symbol={chatScope.label}
+                onJumpCanvas={onJumpCanvas}
+              />
             ) : null}
             <div className={`kg-stage${workbenchOpen ? " with-workbench" : ""}`}>
               <KnowledgeCanvas
@@ -275,7 +284,11 @@ export function ResearchWorkspace({
         ) : canvasTab === "timeline" ? (
           <Timeline events={events} />
         ) : canvasTab === "brief" ? (
-          <ProjectBriefCard brief={projectBrief || null} onAsk={onAskHandover} />
+          <ProjectBriefCard
+            brief={projectBrief || null}
+            onAsk={onAskHandover}
+            onJumpCanvas={onJumpCanvas}
+          />
         ) : (
           <CitationRail citations={citations} />
         )}
