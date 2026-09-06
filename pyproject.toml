@@ -68,6 +68,7 @@ researchos-mcp-plc = "tools.plc.server:main"
 researchos-mcp-vault = "tools.vault.server:main"
 researchos-mcp-scholar = "tools.scholar.server:main"
 researchos-mcp-plot = "tools.plot.server:main"
+researchos-manuscript = "scientific.manuscript.pipeline:main"
 researchos-tia-cli = "agents.plc.tia_cli:main"
 
 [build-system]
