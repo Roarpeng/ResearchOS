@@ -65,8 +65,11 @@ def analyze_tia_exports(
     with timed_step(timings, "fold_serialize_ms"):
         folded = fold_project(project)
     from agents.plc.tia.coverage import build_coverage_report
+    from agents.plc.tia.structure import build_structure_inventory, structure_summary
 
     coverage = build_coverage_report(project, scl_sources, timings=timings)
+    structure = build_structure_inventory(project, knowledge_graph=kg)
+    coverage["structure"] = structure_summary(structure)
     result: dict[str, Any] = {
         "project": project,
         "folded_logic": folded,
@@ -75,6 +78,7 @@ def analyze_tia_exports(
         "report": report,
         "conversion_report": conversion,
         "coverage": coverage,
+        "structure": structure,
         "timings": timings,
     }
     if publish_graph:

@@ -440,6 +440,8 @@ class PlcProject:
     opcua_nodes: list[str] = field(default_factory=list)
     project_texts: dict[str, str] = field(default_factory=dict)
     export_manifest: dict[str, Any] = field(default_factory=dict)
+    export_journal: list[dict[str, Any]] = field(default_factory=list)
+    parse_gaps: list[dict[str, Any]] = field(default_factory=list)
 
     def add_block(self, block: Block) -> None:
         self.blocks[block.name] = block

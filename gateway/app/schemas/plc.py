@@ -113,6 +113,10 @@ class PlcJobDetail(PlcJobSummary):
         description="Ingest stage wall-clock timings in milliseconds",
     )
     coverage: dict[str, Any] = Field(default_factory=dict)
+    structure: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Trusted structure inventory: units + layers + counts",
+    )
 
 
 class PlcProposeChangeRequest(BaseModel):
@@ -130,6 +134,15 @@ class PlcOptimizeRequest(BaseModel):
     message: str = Field(
         default="优化工程逻辑并准备反写",
         max_length=4000,
+    )
+
+
+class PlcStructureRetryRequest(BaseModel):
+    """Re-run Openness/structure export for failed or pending units."""
+
+    names: list[str] = Field(
+        default_factory=list,
+        description="Optional unit names to emphasize; empty retries the full inventory",
     )
 
 

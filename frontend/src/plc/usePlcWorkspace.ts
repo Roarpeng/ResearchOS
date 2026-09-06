@@ -15,6 +15,7 @@ import {
   fetchTask,
   listResearchTasks,
   optimizePlcJob,
+  retryPlcStructure,
   postChatTurn,
   writebackPlcJob,
   resumeTask,
@@ -654,6 +655,49 @@ export function usePlcWorkspace() {
     });
   }
 
+  async function onRetryStructure(names?: string[]) {
+    if (!plcJobId || busy) return;
+    setBusy(true);
+    try {
+      await retryPlcStructure(plcJobId, names || []);
+      setStatus("queued");
+      pushMsg(
+        "system",
+        names?.length
+          ? `正在重试结构导出：${names.slice(0, 8).join(", ")}${names.length > 8 ? "…" : ""}`
+          : "正在重试全部结构导出（Openness / XML 清单）",
+      );
+      const detail = await waitForPlcJob(plcJobId, {
+        intervalMs: 1500,
+        onProgress: (d) => {
+          setPlcJob(d);
+          setStatus(formatPlcProgress(d));
+        },
+      });
+      setPlcJob(detail);
+      if (detail.status === "ready") {
+        applyCanvasFromPlcJob(detail);
+        const failed = Number(detail.structure?.counts?.failed || 0);
+        const skipped = Number(detail.structure?.counts?.skipped || 0);
+        const pending = Number(detail.structure?.counts?.pending || 0);
+        pushMsg(
+          "assistant",
+          failed || skipped || pending
+            ? `结构重试完成：failed=${failed} skipped=${skipped} pending=${pending}。清单中的缺口不会被静默省略。`
+            : "结构重试完成：清单完整。",
+        );
+        setStatus("ready");
+      } else if (detail.status === "failed") {
+        setStatus("failed");
+        pushMsg("system", detail.error || "结构重试失败");
+      }
+    } catch (err) {
+      pushMsg("system", err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onOptimizePropose() {
     if (!plcJobId || busy) return;
     setBusy(true);
@@ -819,6 +863,7 @@ export function usePlcWorkspace() {
     onFocusNode,
     onAskInChat,
     onOptimizePropose,
+    onRetryStructure,
     onScopePrompt,
     onResume,
     onSend,

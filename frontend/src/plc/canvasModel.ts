@@ -39,7 +39,10 @@ export function normalizeCanvas(raw: unknown): KnowledgeCanvasData {
 // Convert a PLC job into a bounded knowledge galaxy while preserving block/tag identity.
 export function plcCanvasFromJob(detail: PlcJobDetail): KnowledgeCanvasData | null {
   const blocks = detail.blocks || [];
-  if (!blocks.length && !(detail.logic_graph?.nodes || []).length) return null;
+  const structureUnits = detail.structure?.units || [];
+  if (!blocks.length && !(detail.logic_graph?.nodes || []).length && !structureUnits.length) {
+    return null;
+  }
   const projectId = `plc_proj_${detail.id}`;
   const nodes: KnowledgeNode[] = [
     {
@@ -52,10 +55,21 @@ export function plcCanvasFromJob(detail: PlcJobDetail): KnowledgeCanvasData | nu
       source: { type: "plc", plc_job_id: detail.id, project: detail.project_name },
     },
   ];
-  blocks.slice(0, 120).forEach((b) => {
+  const known = new Set(nodes.map((n) => n.label));
+  const incompleteBlocks = blocks.filter((b) => {
+    const st = String(b.status || "exported");
+    return st === "failed" || st === "skipped" || st === "pending";
+  });
+  const exportedBlocks = blocks.filter((b) => !incompleteBlocks.includes(b));
+  const canvasCap = 120;
+  const exportedRoom = Math.max(0, canvasCap - incompleteBlocks.length);
+  const shownBlocks = [...incompleteBlocks, ...exportedBlocks.slice(0, exportedRoom)];
+  const hiddenExported = Math.max(0, exportedBlocks.length - exportedRoom);
+  shownBlocks.forEach((b) => {
     const btype = String(b.type || "Block").toUpperCase();
     const inst = String(b.instance_of || "").trim();
     const nestDepth = Number(b.nest_depth || 0);
+    const exportStatus = String(b.status || "exported");
     const kind =
       btype === "OB"
         ? "plc_ob"
@@ -67,6 +81,8 @@ export function plcCanvasFromJob(detail: PlcJobDetail): KnowledgeCanvasData | nu
               ? "plc_db"
               : "plc_block";
     const bits = [btype];
+    if (exportStatus && exportStatus !== "exported") bits.push(exportStatus);
+    if (b.status_reason) bits.push(String(b.status_reason));
     if (b.language) bits.push(String(b.language));
     if (b.networks != null) bits.push(`${b.networks} 网络`);
     if (inst) bits.push(`实例←${inst}`);
@@ -92,10 +108,60 @@ export function plcCanvasFromJob(detail: PlcJobDetail): KnowledgeCanvasData | nu
         nest_depth: nestDepth > 0 ? nestDepth : undefined,
         entity_kind: inst ? "instance" : "block",
         project: detail.project_name,
+        export_status: exportStatus,
       },
     });
+    known.add(b.name);
   });
-  const known = new Set(nodes.map((n) => n.label));
+  if (hiddenExported > 0) {
+    nodes.push({
+      id: `plc_overflow_${detail.id}`,
+      label: `+${hiddenExported} 已导出未上画布`,
+      summary: "已导出单元因画布上限未绘制；失败/跳过单元不会被静默省略",
+      kind: "plc_block",
+      x: 0,
+      y: 0,
+      source: {
+        type: "plc",
+        plc_job_id: detail.id,
+        project: detail.project_name,
+        export_status: "exported",
+      },
+    });
+  }
+  for (const unit of structureUnits) {
+    const name = String(unit.name || "").trim();
+    if (!name || known.has(name)) continue;
+    if (unit.kind !== "device" && unit.kind !== "block" && unit.kind !== "db" && unit.kind !== "udt") {
+      continue;
+    }
+    known.add(name);
+    const st = String(unit.status || "pending");
+    const kind =
+      unit.kind === "device"
+        ? "plc_device"
+        : unit.kind === "udt"
+          ? "plc_udt"
+          : unit.kind === "db"
+            ? "plc_db"
+            : "plc_block";
+    nodes.push({
+      id: `plc_u_${detail.id}_${name}`,
+      label: name,
+      summary: [st, unit.reason, unit.detail].filter(Boolean).join(" · ") || st,
+      kind,
+      x: 0,
+      y: 0,
+      source: {
+        type: "plc",
+        plc_job_id: detail.id,
+        block_name: unit.kind === "device" ? undefined : name,
+        block_type: unit.type,
+        project: detail.project_name,
+        export_status: st,
+      },
+    });
+  }
   for (const n of detail.knowledge_graph?.nodes || []) {
     if (String(n.type || "") !== "Block") continue;
     const props = (n.props || {}) as Record<string, unknown>;

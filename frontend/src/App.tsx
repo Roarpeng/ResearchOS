@@ -42,6 +42,7 @@ export default function App() {
     onFocusNode,
     onAskInChat,
     onOptimizePropose,
+    onRetryStructure,
     onScopePrompt,
     onResume,
     onSend,
@@ -181,6 +182,7 @@ export default function App() {
           onDeepDive={onDeepDive}
           onSelectNode={applyChatScope}
           onOptimizePropose={onOptimizePropose}
+          onRetryStructure={onRetryStructure}
           onSclPreview={sclPreviewFor}
           onTabChange={setCanvasTab}
           onWritebackHint={writebackHintFor}

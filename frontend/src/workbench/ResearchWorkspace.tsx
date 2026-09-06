@@ -29,6 +29,7 @@ type ResearchWorkspaceProps = {
   onDeepDive: (node: KnowledgeNode, question: string) => Promise<void> | void;
   onSelectNode: (node: KnowledgeNode | null) => void;
   onOptimizePropose: () => Promise<void> | void;
+  onRetryStructure?: (names?: string[]) => Promise<void> | void;
   onSclPreview: (blockName: string) => Array<{ block?: string }>;
   onTabChange: (tab: PlcCanvasTab) => void;
   onWritebackHint: (blockName: string) => WritebackChipHint;
@@ -73,6 +74,7 @@ export function ResearchWorkspace({
   onDeepDive,
   onSelectNode,
   onOptimizePropose,
+  onRetryStructure,
   onSclPreview,
   onTabChange,
   onWritebackHint,
@@ -148,7 +150,11 @@ export function ResearchWorkspace({
       <div className="canvas-body canvas-kg">
         {canvasTab === "canvas" ? (
           <>
-            <PlcCoverageStrip detail={plcJob} />
+            <PlcCoverageStrip
+              detail={plcJob}
+              busy={busy}
+              onRetryStructure={onRetryStructure}
+            />
             <KnowledgeCanvas
               data={canvas}
               logicGraph={logicGraphFromJob(plcJob)}

@@ -45,6 +45,7 @@ def create_job_record(
         "report": "",
         "graph_publish": None,
         "blocks": [],
+        "structure": {},
         "chat": [],
         "engineer_understanding": None,
         "export_dir": None,

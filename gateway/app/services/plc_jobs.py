@@ -80,6 +80,7 @@ from gateway.app.services.plc.ingest import (
     _annotate_block_nest_depth,
     _block_list,
     _collect_source_xmls,
+    retry_structure_export,
     run_ingest_job,
 )
 from gateway.app.services.plc.job_store import (
@@ -205,6 +206,7 @@ __all__ = [
     "refresh_logic_graph",
     "resolve_allowed_path",
     "re",
+    "retry_structure_export",
     "run_ingest_job",
     "save_upload",
     "tempfile",

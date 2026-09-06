@@ -82,6 +82,24 @@ class ExportJournalExtractor:
             self.reset()
             return
         if not obj.get("ok"):
+            with self._lock:
+                self.project.export_journal.append(obj)
+                name = str(obj.get("name") or "").strip()
+                err = str(obj.get("error") or "export failed")
+                if name:
+                    self.project.extraction_notes.append(
+                        f"openness export failed: {name}: {err}"
+                    )
+                    self.project.parse_gaps.append(
+                        {
+                            "name": name,
+                            "kind": "block",
+                            "type": str(obj.get("type") or ""),
+                            "status": "failed",
+                            "reason": "openness_error",
+                            "detail": err,
+                        }
+                    )
             return
         raw = obj.get("path")
         if not raw:

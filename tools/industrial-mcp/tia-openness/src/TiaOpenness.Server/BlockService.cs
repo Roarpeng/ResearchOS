@@ -751,14 +751,18 @@ public sealed class BlockService
             var exportSw = System.Diagnostics.Stopwatch.StartNew();
             var exported = 0;
             var failures = new List<string>();
+            var skipped = new List<ExportSkip>();
+            var listedUnits = new List<object>();
             var knowHowCount = listed.Blocks.Count(b => b.KnowHowProtected);
             // Serial Export on one Portal (COM/STA). Order OB → FB/FC → DB so Python
             // can start parsing program blocks while DBs are still exporting.
+            // Every listed block is recorded with an explicit status — never omitted.
             var ordered = listed.Blocks
                 .Where(info => info.Type is "OB" or "FB" or "FC" or "DB")
                 .OrderBy(info => ExportRank(info.Type))
                 .ThenBy(info => info.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            var exportedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var info in ordered)
             {
                 var relative = string.IsNullOrWhiteSpace(info.Path)
@@ -768,18 +772,70 @@ public sealed class BlockService
                 var dir = Path.GetDirectoryName(target);
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                 var one = ExportBlock(info.Name, target, info.Type);
+                exportedNames.Add(info.Name);
                 if (one.Ok)
                 {
                     exported++;
                     AppendExportJournal(journalPath, info, target, ok: true, error: null);
+                    listedUnits.Add(new
+                    {
+                        name = info.Name,
+                        type = info.Type,
+                        status = "exported",
+                        reason = "",
+                        detail = "",
+                        knowHow = info.KnowHowProtected,
+                    });
                 }
                 else
                 {
                     var err = one.Error?.Message ?? "export failed";
+                    var reason = OpennessExport.ClassifySkipReason(err);
+                    var status = reason is "know_how" or "no_export" or "no_import"
+                        or "password_protected" or "safety_login"
+                        ? "skipped"
+                        : "failed";
                     failures.Add($"{info.Name}:{err}");
+                    skipped.Add(new ExportSkip
+                    {
+                        Category = "blocks",
+                        Name = info.Name,
+                        Reason = reason,
+                        Detail = err,
+                    });
                     AppendExportJournal(journalPath, info, target, ok: false, error: err);
+                    listedUnits.Add(new
+                    {
+                        name = info.Name,
+                        type = info.Type,
+                        status,
+                        reason,
+                        detail = err,
+                        knowHow = info.KnowHowProtected,
+                    });
                 }
             }
+            foreach (var info in listed.Blocks)
+            {
+                if (exportedNames.Contains(info.Name)) continue;
+                skipped.Add(new ExportSkip
+                {
+                    Category = "blocks",
+                    Name = info.Name,
+                    Reason = "blocks_only_filter",
+                    Detail = $"listed as {info.Type}; blocks-only export walks OB/FB/FC/DB",
+                });
+                listedUnits.Add(new
+                {
+                    name = info.Name,
+                    type = info.Type,
+                    status = "skipped",
+                    reason = "blocks_only_filter",
+                    detail = $"listed as {info.Type}; not in OB/FB/FC/DB export walk",
+                    knowHow = info.KnowHowProtected,
+                });
+            }
+            WriteBlocksManifest(root, listed, listedUnits, skipped, exported, failures.Count);
             exportSw.Stop();
 
             var inconsistent = failures.Any(f =>
@@ -1280,6 +1336,45 @@ public sealed class BlockService
             }
         }
         return false;
+    }
+
+    private static void WriteBlocksManifest(
+        string root,
+        ListBlocksResult listed,
+        List<object> units,
+        List<ExportSkip> skipped,
+        int exported,
+        int failed)
+    {
+        try
+        {
+            var manifest = new
+            {
+                ok = exported > 0 || failed == 0,
+                mode = "blocks",
+                projectName = listed.PlcName,
+                counts = new Dictionary<string, ExportCategoryCount>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["blocks"] = new ExportCategoryCount
+                    {
+                        Exported = exported,
+                        Failed = failed,
+                        Skipped = skipped.Count,
+                    },
+                },
+                skipped,
+                listed = units,
+                layout = "Blocks/*.xml",
+            };
+            File.WriteAllText(
+                Path.Combine(root, "manifest.json"),
+                JsonSerializer.Serialize(manifest, JsonDefaults.Options),
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        catch
+        {
+            // Manifest is best-effort; journal + Python inventory still record units.
+        }
     }
 
     private static void AppendExportJournal(string journalPath, BlockInfo info, string xmlPath, bool ok, string? error)
